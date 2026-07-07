@@ -54,8 +54,8 @@ interface CacheEntry {
  *
  * Falls back to cwd if no marker is found.
  */
-function findWorkspaceRoot(): string {
-  const dir = process.cwd();
+function findWorkspaceRoot(cwd?: string): string {
+  const dir = cwd ?? process.cwd();
   const root = resolve("/");
 
   // Phase 1: bare repo 优先——先全路径扫一遍找 .bare（repo 根特有标记），
@@ -94,7 +94,7 @@ function findWorkspaceRoot(): string {
     probe = resolve(probe, "..");
   }
 
-  return process.cwd();
+  return dir;
 }
 
 // ── Constants ─────────────────────────────────────────────────
@@ -374,8 +374,9 @@ async function scanDirectory(dirPath: string, source: WorkflowSource): Promise<C
  */
 async function loadWorkflowsFromDirs(options?: {
   npmDirs?: string[];
+  cwd?: string;
 }): Promise<CachedWorkflowMeta[]> {
-  const workspaceRoot = findWorkspaceRoot();
+  const workspaceRoot = findWorkspaceRoot(options?.cwd);
   const projectDir = resolve(workspaceRoot, ".pi/workflows");
   const tmpDir = resolve(workspaceRoot, ".pi/workflows/.tmp");
 
@@ -450,8 +451,11 @@ export async function loadWorkflows(): Promise<CachedWorkflowMeta[]> {
 }
 
 /** 测试专用：注入 npmDirs 以隔离全局目录 */
-export async function loadWorkflowsForTest(npmDirs: string[]): Promise<CachedWorkflowMeta[]> {
-  return loadWorkflowsFromDirs({ npmDirs });
+export async function loadWorkflowsForTest(
+  npmDirs: string[],
+  cwd?: string,
+): Promise<CachedWorkflowMeta[]> {
+  return loadWorkflowsFromDirs({ npmDirs, cwd });
 }
 
 /**

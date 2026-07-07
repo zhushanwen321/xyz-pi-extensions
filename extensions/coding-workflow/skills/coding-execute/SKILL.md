@@ -168,9 +168,21 @@ workflow run execute-full-workflow --args '{
   "baseRef": "main",            // 可选，git diff 基线
   "tier": "lite",               // 可选，lite | mid
   "model": "<provider/model>",  // 可选，agent 模型覆写
-  "maxWorktrees": 5              // 可选，worktree 并发上限
+  "maxWorktrees": 5,             // 可选，worktree 并发上限
+  "tokens": 2000000,             // 可选，token budget（覆盖 tier 默认值）
+  "time": 1800000                // 可选，时间 budget（ms）
 }'
 ```
+
+**Budget 配置**：
+
+| tier | 默认 token budget | 默认时间 budget | 说明 |
+|------|-------------------|-----------------|------|
+| `lite` | 2,000,000 (2M) | 30 分钟 | 小功能，cache read 占比高 |
+| `mid` | 20,000,000 (20M) | 60 分钟 | 中等功能，更多 agent 调用 |
+| `full` | 50,000,000 (50M) | 120 分钟 | 大功能，预留 |
+
+可通过 `tokens` 参数覆盖默认值（如需更多 budget）。
 
 ⚠️ **workspaceRoot 必须传项目根**（不是当前 cwd）。workflow 据此在 `{workspaceRoot}/.cw-wt/`
 建 worktree，并把 workspacePath 注入每个 agent 的 cw 调用（防 worktree cwd 打开错误 _cw.db）。
@@ -180,6 +192,12 @@ workflow run execute-full-workflow --args '{
 ```json
 {
   "phase": "complete",
+  "budget": {
+    "tier": "lite",
+    "configured_tokens": 2000000,
+    "configured_time_ms": 1800000,
+    "note": "实际 token 消耗由 workflow 引擎追踪，可通过 workflow status 查看"
+  },
   "dev": {
     "aborted": false,
     "all_ok": true,
@@ -234,6 +252,8 @@ workflow 的 prompt 模板已注入 cw 调用指令。以下为 agent 调 cw 的
   - 若 `review.total_must_fix>0` → 已读 review-merged.md [HIGH-CONFIDENCE] 段，必修项已回阶段 A 修复后重跑 workflow
 - [ ] cw 状态机 dev gate 通过（workflow 内 agent 渐进式调 cw(dev)，主 agent 可调 cw 读 topic 确认 nextAction.waves 全 committed=true）
 - [ ] cw 状态机 test gate 通过（workflow 内 agent 渐进式调 cw(test)，主 agent 可调 cw 读 topic 确认 nextAction.testCases 全 passed=true）
+- [ ] **代码覆盖核对**：implementer 产出的代码已逐条核对 plan.md 第 2 章「技术改动点」表的每一行——每个文件的每个改动点都已落地（不只主路径，含 fallback / 边界处理 / 异常分支）。plan 列了但代码没实现的 = 未完成，回 workflow 重跑。漏一行 = 验收时才暴露，代价远高于现在逐条核对
+- [ ] **约束核对**：改动符合 AGENTS.md / CLAUDE.md 的硬性约束（如 pi 扩展安装红线「npm install 只进全局目录」、禁止 any、行数上限、资源自包含）。违反 = 未完成，不能靠 review 兜底——review 抓的是代码质量，不是约束合规
 
 阶段 C 收尾：
 - [ ] **执行收尾机器门已跑且 PASS**（机器核对 test-results.json 覆盖 plan 全部用例：mock 层全 pass、real 层 pass 或 user-skipped 带凭证）
@@ -241,6 +261,52 @@ workflow 的 prompt 模板已注入 cw 调用指令。以下为 agent 调 cw 的
 - [ ] workflow return 的 `worktrees.cleanup_failures=[]`（worktree 全部清理成功）
 - [ ] todo 已清空
 - [ ] **CW nextAction 已指向 retrospect**（status=tested，cw test gate 通过后 CW 返回 nextAction.action="retrospect"）
+
+## 故障排除
+
+### budget_limited（预算耗尽）
+
+**症状**：workflow return 的 `phase="complete"` 但 `reason="budget_limited"`，部分 phase 未执行。
+
+**原因**：token budget 不足。cache read 计入 token 消耗，实际消耗远超预期。
+
+**解决方案**：
+1. 检查 workflow return 的 `budget.configured_tokens` 是否合理
+2. 调用 workflow 时传入更大的 `tokens` 参数：
+   ```
+   workflow run execute-full-workflow --args '{
+     "topicId": "...",
+     "tier": "lite",
+     "tokens": 5000000  // 5M tokens
+   }'
+   ```
+3. 或切换到更高 tier（`mid` 默认 20M tokens）
+
+**预算参考**：
+
+| 场景 | 建议 token budget | 说明 |
+|------|-------------------|------|
+| 简单 lite（1-2 wave） | 2M | 默认值，适合小功能 |
+| 复杂 lite（3+ wave） | 5M | 多 wave 实现 + 测试 |
+| mid 功能 | 20M | 默认值，更多 agent 调用 |
+| 复杂 mid | 50M | 大量代码改动 + 测试 |
+
+### time_limited（时间耗尽）
+
+**症状**：workflow return 的 `phase="complete"` 但 `reason="time_limited"`。
+
+**原因**：wall-clock 时间超限（默认 lite 30min，mid 60min）。
+
+**解决方案**：
+1. 检查是否有 agent 超时（单个 agent 默认 30min）
+2. 调用 workflow 时传入更大的 `time` 参数：
+   ```
+   workflow run execute-full-workflow --args '{
+     "topicId": "...",
+     "tier": "lite",
+     "time": 3600000  // 60分钟
+   }'
+   ```
 
 ## 标记说明
 

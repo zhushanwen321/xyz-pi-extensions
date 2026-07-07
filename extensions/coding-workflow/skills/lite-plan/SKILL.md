@@ -416,6 +416,14 @@ subagent(action:'start', startParam:{
 - **小功能不触发**：1-2 改动点、1 Wave 的极简功能，机器检查 + 步骤 6 单路自检已够，禁读重建编排开销 > 收益。
 - **E2E 不重建**：E2E 受执行栈强约束，重建误报多。禁读重建只针对单测。E2E 走机器检查（执行方式非抽象）+ 单路自检。
 
+## 步骤 6 前置：强制预检门
+
+**[MANDATORY] 调 `cw(action=plan)` 之前，主 agent 必须逐条朗读下方 Self-Check 清单并明确回答每一条「是」。**
+
+任一条答「否」→ **不得调 cw(plan)**，先修 plan.md。CW gate 的 machine check 是兜底（杀结构硬伤），不是第一道防线——靠 machine check 拦截自检应发现的问题 = 浪费 cw gate 调用轮次（实测：本次 topic plan gate 反复 fail 3 轮才过，每轮都是自检清单里已有但 AI 跳过的条目）。
+
+自检不是可选步骤。跳过自检直接调 cw(plan) 然后修 machine check 报错 = 工作流空转。
+
 ## Self-Check
 
 **[MANDATORY] 全部满足才算 plan 完成。**
@@ -445,6 +453,7 @@ Wave 拆分：
 - [ ] 每处代码改动已评估现有测试如何随之改（不只新增，还有适配修改）
 - [ ] 覆盖率 gate 写明命令（按语言×框架表）+ 增量算法 + 阈值
 - [ ] **若触发步骤 4b**（改动点 ≥3 / 涉及过滤·查询·匹配·状态机）：ensemble 漏用例建议已去重对照后合并入单测清单；未触发则确认属于明确小功能（1-2 改动点）单路反向自检已做
+- [ ] **requiresScreenshot 与 executor 一致**：real 层 + vitest executor → requiresScreenshot=false（vitest 产出 test-results.json 即为凭证，无需截图）；real 层 + manual executor → requiresScreenshot=false（manual 验证用文字描述 actual，无截图）；仅 real 层 + browser/CDP executor → requiresScreenshot=true。矛盾组合（如 real+manual+requiresScreenshot=true）会导致 CW test gate 在 screenshot 校验阶段直接判 failed，actual 永远写不进去——这是已知事故场景
 
 格式：
 - [ ] 含 `## 实现步骤` 标题（plan extension 桥接依赖）

@@ -361,8 +361,8 @@ function checkE2eTestLayer(report: CheckReport, mdPath: string): void {
       break;
     }
   }
-  // 收集数据行的测试层值
-  const dataLayers: string[] = [];
+  // 收集数据行的测试层值（同时存 caseId，报错时能定位具体用例）
+  const dataEntries: Array<{ id: string; layer: string }> = [];
   const missing: string[] = [];
   for (const line of section.split(/\r?\n/)) {
     const s = line.trim();
@@ -377,44 +377,49 @@ function checkE2eTestLayer(report: CheckReport, mdPath: string): void {
     } else {
       const val = cells[layerCol]!.toLowerCase().trim();
       if (val === "mock" || val === "real") {
-        dataLayers.push(val);
+        dataEntries.push({ id: first, layer: val });
       } else {
         missing.push(first);
       }
     }
   }
-  if (dataLayers.length === 0 && missing.length === 0) {
+  if (dataEntries.length === 0 && missing.length === 0) {
     report.addSkip("E2E 测试层", "E2E 章节无可解析用例行");
     return;
   }
   if (layerCol === null && missing.length > 0) {
     report.addFail(
       "E2E 测试层",
-      `E2E 表无「测试层」列（${missing.length} 条未标）——见 test-case-schema.md 核心原则四`,
+      `E2E 表无「测试层」列，${missing.length} 条未标 mock/real: ${JSON.stringify(missing.slice(0, 5))}——见 test-case-schema.md 核心原则四`,
     );
     return;
   }
   if (missing.length > 0) {
-    report.addFail("E2E 测试层", `${missing.length} 条未标 mock/real: ${JSON.stringify(missing.slice(0, 3))}`);
+    report.addFail("E2E 测试层", `${missing.length} 条未标 mock/real: ${JSON.stringify(missing.slice(0, 5))}`);
     return;
   }
-  const hasMock = dataLayers.includes("mock");
-  const hasReal = dataLayers.includes("real");
+  const layers = dataEntries.map((e) => e.layer);
+  const hasMock = layers.includes("mock");
+  const hasReal = layers.includes("real");
   if (!(hasMock && hasReal)) {
     const lack: string[] = [];
     if (!hasMock) lack.push("mock");
     if (!hasReal) lack.push("real");
-    const uniqLayers = [...new Set(dataLayers)];
+    const mockIds = dataEntries.filter((e) => e.layer === "mock").map((e) => e.id);
+    const realIds = dataEntries.filter((e) => e.layer === "real").map((e) => e.id);
+    const detail: string[] = [];
+    if (mockIds.length) detail.push(`mock=[${mockIds.join(",")}]`);
+    if (realIds.length) detail.push(`real=[${realIds.join(",")}]`);
     report.addFail(
       "E2E 测试层",
-      `缺 ${lack.join("/")} 层用例（现有 ${JSON.stringify(uniqLayers)}）；real 无环境应标 [需集成环境] 不可省略`,
+      `缺 ${lack.join("/")} 层用例（现有 ${detail.join("; ") || "无"}）；real 无环境应标 [需集成环境] 不可省略`,
     );
   } else {
-    const mockCount = dataLayers.filter((l) => l === "mock").length;
-    const realCount = dataLayers.filter((l) => l === "real").length;
+    const mockCount = layers.filter((l) => l === "mock").length;
+    const realCount = layers.filter((l) => l === "real").length;
     report.addPass(
       "E2E 测试层",
-      `${dataLayers.length} 条均标层，mock=${mockCount} real=${realCount}`,
+      `${layers.length} 条均标层，mock=${mockCount} real=${realCount}`,
     );
   }
 }
