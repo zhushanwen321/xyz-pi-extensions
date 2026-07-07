@@ -19,26 +19,32 @@
 ┌─────────────────────────────────────────────────────────────┐
 │ execute-full-workflow.js（Worker 线程，纯执行器）             │
 │                                                              │
-│  Phase 0: worktree-setup                                     │
-│    read plan.json → 算 worktree 数 → git worktree add        │
+│  Phase 0: worktree-setup（仅 dev pool）                      │
+│    read plan.json → 算 dev pool 数 → git worktree add        │
+│    test/review worktree 延后到 Phase 1.5（指向聚合分支）       │
 │                                                              │
-│  Phase 1: dev waves（二维数组，每 wave 1 implementer agent） │
+│  Phase 1: dev waves（每 sub-wave 在 pool worktree 建新分支） │
 │    for wave in devWaves:                                     │
-│      parallel(wave.map(c => agent({cwd: c.wt, ...})))        │
-│    收集 commitHash[]                                         │
+│      for subWave:                                            │
+│        parallel(subWave.map(c => agent({cwd: c.wt, ...})))   │
+│        每轮 newSubWaveBranch（从 BASE_REF 建独立分支，         │
+│          避免复用旧分支导致 commit 被 reset 覆盖）             │
+│    收集 sub-wave 分支名 devSubWaveBranches[]                 │
+│                                                              │
+│  Phase 1.5: dev 聚合（CRITICAL #1+#3 修复）                  │
+│    建 aggregateBranch（从 BASE_REF）+ 聚合 worktree            │
+│    for subBranch in devSubWaveBranches:                      │
+│      git merge --no-ff subBranch（冲突记 merge_failures）     │
+│    建 test/review worktree 指向 aggregateBranch               │
 │                                                              │
 │  Phase 2: test + review（每 case 1 agent + 2 reviewer）     │
-│    parallel([                                                │
-│      ...testWaves.flatMap(w => w.map(c => agent({cwd:wt,...}))),│
-│      agent({cwd: reviewWt, ...review-correctness}),         │
-│      agent({cwd: reviewWt, ...review-quality}),             │
-│    ])                                                        │
+│    parallel([...testCalls, ...reviewCalls])                 │
 │    收集 testResults[] + reviewMustFix                        │
 │                                                              │
-│  Phase 3: worktree-cleanup（finally）                        │
+│  Phase 3: worktree-cleanup（finally，return 在 try 外）      │
 │    git worktree remove <each>                                │
 │                                                              │
-│  return { commits, testResults, reviewMustFix, cleanupFail } │
+│  return { dev, test, review, worktrees, next_hint }          │
 └─────────────────────────────────────────────────────────────┘
 ```
 
@@ -319,33 +325,31 @@ workflow run execute-full-workflow --args '{
 }'
 ```
 
-### 3.2 Phase 0：worktree-setup
+### 3.2 Phase 0：worktree-setup（仅 dev pool；test/review 延后）
 
 **算法**：
 ```
 read plan.json → waves + testCases
-算 worktree 需求：
-  - dev: 按 parallelGroup 分组，每组一个 worktree（同组并行 implementer 共享？不——同组不同 wave 改不同文件，仍需各自 worktree 防 index 冲突）
-  
-  实际：每个 dev wave 一个 worktree（wave 内并行 implementer 改不同文件，可共享？不行——同 wave 并行的 implementer 各自 commit，共享 worktree 会 index 冲突）
-  
-  最终：每个 dev wave 的每个并行 case 一个 worktree（与 ADR-029 决策 2 一致）
-  - test: 一个 test worktree
-  - review: 一个 review worktree
+算 dev pool 需求：min(maxParallelInWave, MAX_WORKTREES - RESERVED_WORKTREES)
+  每个 pool worktree 一初始分支（cw-{slug}-dev-poolN-{stamp}）从 BASE_REF 起
+  ⚠️ test/review worktree 不在此建——延后到 Phase 1.5（指向聚合分支）。
+     原因：若 Phase 0 建在 BASE_REF，需 checkout/reset 切到聚合分支，易踩
+     「already checked out」/脏状态。延后建更简洁，testWt/reviewWt 天然含全 dev 改动。
 
-建 worktree（spawn git worktree add）：
-  for each needed wt:
-    branch = "cw/{slug}-{role}-{n}"  // role: dev-w1 / test / review
-    path = "{workspaceRoot}/.cw-wt/{branch}"
-    spawn git -C {workspaceRoot} worktree add {path} -b {branch} {baseRef}
-    记录 {role, branch, path}
-  
+建 dev pool worktree（spawn git worktree add）
 失败处理：throw + 记录已建清单（Phase 3 cleanup）
 ```
 
-> **worktree 命名规范**：`{workspaceRoot}/.cw-wt/cw-{slug}-{role}-{n}`。`.cw-wt/` 加 .gitignore。
+> **worktree 命名规范**：`{workspaceRoot}/.cw-wt/cw-{role}-{stamp}`。`.cw-wt/` 加 .gitignore。
+> **并发上限**：MAX_WORKTREES=5，RESERVED_WORKTREES=2（预留给 Phase 1.5 的 test+review worktree）。
+> dev pool 上限 = min(maxParallelInWave, 5-2) = min(maxParallelInWave, 3)。
 
-### 3.3 Phase 1：dev waves（渐进式调 cw）
+### 3.3 Phase 1：dev waves（每 sub-wave 建新分支，渐进式调 cw）
+
+> **CRITICAL #3 修复**：pool worktree 不复用同一分支。每轮 sub-wave 在 pool worktree 里
+> `git checkout -b <新分支> BASE_REF` 建独立分支（newSubWaveBranch），这样每轮的 commit 落在
+> 独立分支上，不会被下轮的「清残留」覆盖。所有 sub-wave 分支名收集到 devSubWaveBranches[]，
+> 供 Phase 1.5 聚合 merge。
 
 **二维数组构造**（复用 wave-model.md 的 dev wave 调度）：
 ```
@@ -387,8 +391,39 @@ for (const wave of devWaves) {
     return earlyReturn;
   }
 }
-// 不需收集 allCommits——每步已调 cw，状态机已有
+// 不需收集 allCommits——每步已调 cw，状态机已有。但收集 devSubWaveBranches 供 Phase 1.5。
 ```
+
+### 3.3.5 Phase 1.5：dev 聚合（CRITICAL #1+#3 修复）
+
+**背景**：
+- CRITICAL #1：原设计 test/review worktree 建在 BASE_REF，无 merge 步骤 → 测旧码/审空 diff。
+- CRITICAL #3：原 resetWorktree(wt) reset --hard BASE_REF 把 pool worktree 的分支 ref 移
+  到 BASE_REF，丢弃上一轮 commit（已在 Phase 1 用 newSubWaveBranch 根治）。
+
+**算法**（所有 dev wave 完成后，即使 aborted 也汇聚已完成的）：
+```
+1. 建聚合分支 + 聚合 worktree（从 BASE_REF）
+   git worktree add {aggregateWt} -b cw-{slug}-dev-aggregate-{stamp} {BASE_REF}
+2. 按 sub-wave 顺序 merge 每个分支（保持拓扑序）
+   for subBranch in devSubWaveBranches:
+     git -C {aggregateWt} merge --no-ff --no-edit subBranch
+     冲突 → git merge --abort + 记 devMergeFailures（不 throw）
+3. merge_clean = (devMergeFailures.length === 0)
+4. 建 test/review worktree 指向 aggregateBranch
+   merge_clean → 建 testWt + reviewWt
+   !merge_clean → 仅建 reviewWt（跳过 test，测部分代码不如不测）
+```
+
+**merge 冲突策略**：dev 分支间可能改同一文件（wave 间有依赖但文件级可能冲突）。冲突不 throw，
+记入 `dev.merge_failures` 让主 agent 决策（回 plan 重拆 wave / ask_user 降级）。冲突后该
+分支不 merge，但后续分支仍尝试（已 merge 的部分进聚合）。test 跳过、review 仍跑。
+
+**为何延后建 test/review worktree 而非 reset**：worktree 已 checkout 着自己的分支，
+checkout 别的 ref 需 `git -C {wt} checkout {aggregateBranch}`，但若另一 worktree 持有该
+分支会报「already checked out」；且 reset --hard 会污染。延后建（Phase 0 不建，Phase 1.5
+从 aggregateBranch `git worktree add -b {role-branch} {aggregateBranch}`）更简洁，testWt/
+reviewWt 天然含全部已 merge 的 dev 改动，无需 reset/checkout。
 
 > **关键**：workflow 不收集 commitHash 了。每个 implementer 完成后自己调 cw(dev)，cw 状态机实时更新。workflow return 时 cw 已是 dev gatePassed 终态。
 
@@ -443,25 +478,43 @@ for (const wt of worktrees) {
 // cleanup 失败不 throw，记录到 return
 ```
 
-### 3.6 Return 契约（修订：不含 commits/testResults，已在 cw）
+### 3.6 Return 契约（修订：含 merge_failures；return 在 try 外，CRITICAL #4 修复）
 
 ```javascript
+// ⚠️ CRITICAL #4：return 在 try/catch/finally 外，cleanupFailures 已被 finally 填充。
+let result;
+try {
+  // ... Phase 0/1/1.5/2 ...
+  result = { phase: "complete", ... };
+} catch (err) {
+  result = { phase: "failed", error: err.message, ... };
+} finally {
+  // cleanup 总是跑，填充 cleanupFailures
+  for (const wt of worktrees) { ... removeWorktree(wt) ... }
+}
+// return 在 try/finally 外，cleanupFailures 已填充
+result.worktrees = { built, cleaned, cleanup_failures };
+return result;
+
+// return 结构（向后兼容新增字段，不改已有语义）：
 return {
   phase: "complete",
   // 不含 commits / testResults——每个 agent 完成后已渐进式调 cw，状态机已有
-  cwStatus: {                          // workflow 末尾读 cw 确认终态
-    devGatePassed: boolean,            // 主 agent 据此判断是否需回 dev
-    testGatePassed: boolean,
-    testProgress: [{id, status}, ...], // cw(test) 的渐进结果
+  dev: {
+    aborted: boolean,
+    all_ok: boolean,                  // !aborted && failures.length===0
+    failures: [...],                  // infra 失败（implementer 未 commit/未调 cw）
+    merge_failures: [...],            // 【新增】Phase 1.5 dev 聚合 merge 冲突记录
+    merge_clean: boolean,             // 【新增】merge_failures.length===0
   },
-  reviewMustFix: {                     // 主 agent 决策是否回 dev 修
-    mergedFile: ".../review-merged.md",
-    totalMustFix: N,
-    overlap: "high" | "medium" | "low",
+  test: { aborted, all_ok, failures },
+  review: {
+    merged_file, overlap, total_must_fix, total_should_fix,
+    correctness, quality, failures, clean,
   },
-  worktrees: { built: N, cleaned: M, cleanupFailures: [...] },
-  failures: { dev: [...], test: [...], review: [...] },  // 未调 cw 的失败 agent
-  nextHint: "...",                     // 主 agent 据此决策（ask_user / 回 dev / complete）
+  worktrees: { built, cleaned, cleanup_failures },  // cleanup_failures 由 finally 填充
+  next_hint: "...",                   // 主 agent 据此决策
+  message: "...",
 };
 ```
 
