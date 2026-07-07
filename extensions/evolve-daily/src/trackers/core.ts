@@ -504,7 +504,9 @@ export function createTracker<TMeta>(
   function reconstructState(ctx: ExtensionContext): void {
     let entries: SessionEntry[];
     try {
-      entries = ctx.sessionManager.getEntries();
+      // 用 getBranch() 只取当前 leaf → root 路径上的 entry，避免读到其他分支
+      // 的快照（fork/navigate 到不含 skill start 的分支时，不应恢复该 skill）
+      entries = ctx.sessionManager.getBranch();
     } catch (e) {
       if (isStaleContextError(e)) {
         console.warn(
@@ -554,19 +556,16 @@ export function createTracker<TMeta>(
   }
 
   // ── Event: session_start / session_tree ────────────
+  // 只恢复内存 state，不主动注入提示。fork/navigate 完成时零注入，
+  // 等用户下次发消息时由 before_agent_start handler 自然注入。
+  // 否则非 streaming 下 sendUserMessage(steer) 会立即触发新 turn，
+  // 导致 fork 完那一刻就跳出 skill-state 提示。
 
   const handleSessionRestore = async (
     _event: unknown,
     ctx: ExtensionContext,
   ): Promise<void> => {
     reconstructState(ctx);
-    const activeItems = state.items.filter((item) => isActive(item));
-    if (activeItems.length > 0) {
-      await pi.sendUserMessage(
-        config.steering.onContextRestore(activeItems),
-        { deliverAs: "steer" },
-      );
-    }
   };
   pi.on("session_start", handleSessionRestore);
   pi.on("session_tree", handleSessionRestore);
@@ -646,7 +645,11 @@ export function createTracker<TMeta>(
   // ── Event: before_agent_start ──────────────────────
 
   pi.on("before_agent_start", async () => {
-    const activeItems = state.items.filter((item) => isActive(item));
+    // 只提示 loaded/error，不提示 abandoned。abandoned 是系统超时放弃，
+    // 反复提示是噪音；item 仍保留在 state 里，agent 可通过 list/update 收尾。
+    const activeItems = state.items.filter(
+      (item) => isResumableStatus(item.status) && item.status !== "abandoned",
+    );
     if (activeItems.length === 0) return undefined;
 
     return {
