@@ -214,11 +214,13 @@ describe("GateRunner.runCheck dispatch", () => {
 describe("GitValidator.validate", () => {
   /**
    * 装配 execFileSync mock：按 git 子命令分发。
-   * missing/notAncestor/empty 控制三项校验各自是否 throw（业务 fail）。
+   * missing/empty 控制两项校验各自是否 throw（业务 fail）。
+   *
+   * ADR-029 robustness #1（2026-07）：merge-base --is-ancestor HEAD 已移除
+   * （worktree 隔离下误杀合法 dev commit），inRepo 合并入 exists（cat-file）。
    */
   function mockGit(opts: {
     catFileThrows?: boolean;
-    mergeBaseThrows?: boolean;
     diffTreeOutput?: string;
     enoent?: boolean;
     /** m-5: rev-parse --is-inside-work-tree 是否 throw（非 git 仓库场景） */
@@ -236,10 +238,6 @@ describe("GitValidator.validate", () => {
         if (opts.catFileThrows) throw gitExitError(128);
         return "";
       }
-      if (sub === "merge-base") {
-        if (opts.mergeBaseThrows) throw gitExitError(1);
-        return "";
-      }
       if (sub === "diff-tree") {
         return opts.diffTreeOutput ?? "";
       }
@@ -247,7 +245,7 @@ describe("GitValidator.validate", () => {
     });
   }
 
-  it("合法 commit（三项全过）→ valid:true", () => {
+  it("合法 commit（两项全过）→ valid:true", () => {
     mockGit({ diffTreeOutput: " 1 file changed, 2 insertions(+)\n" });
     const v = new GitValidator("/tmp/ws").validate("abc1234");
     expect(v.exists).toBe(true);
@@ -257,20 +255,13 @@ describe("GitValidator.validate", () => {
     expect(v.reason).toBeUndefined();
   });
 
-  it("T2.15 — commit 不存在（cat-file 非零退出）→ exists:false, valid:false，不 throw", () => {
+  it("T2.15 — commit 不存在（cat-file 非零退出）→ exists:false, inRepo:false, valid:false，不 throw", () => {
     mockGit({ catFileThrows: true, diffTreeOutput: " 1 file changed\n" });
     const v = new GitValidator("/tmp/ws").validate("deadbee");
     expect(v.exists).toBe(false);
+    expect(v.inRepo).toBe(false); // ADR-029 robustness #1：inRepo = exists
     expect(v.valid).toBe(false);
     expect(v.reason).toMatch(/cat-file/);
-  });
-
-  it("commit 不属仓库（merge-base 非零）→ inRepo:false, valid:false", () => {
-    mockGit({ mergeBaseThrows: true, diffTreeOutput: " 1 file changed\n" });
-    const v = new GitValidator("/tmp/ws").validate("abc1234");
-    expect(v.inRepo).toBe(false);
-    expect(v.valid).toBe(false);
-    expect(v.reason).toMatch(/merge-base/);
   });
 
   it("空 commit（diff-tree 空输出，--allow-empty）→ nonEmpty:false, valid:false", () => {

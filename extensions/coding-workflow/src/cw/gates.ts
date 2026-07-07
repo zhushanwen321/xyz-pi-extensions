@@ -231,9 +231,23 @@ function isENOENT(e: unknown): boolean {
 
 /**
  * git 三项校验（§7 dev/test commit 真实性不变式）：
- *   1. cat-file -e：commit 存在
- *   2. merge-base --is-ancestor：属本仓库历史
+ *   1. cat-file -e：commit 对象存在于本仓库 object store
+ *   2. merge-base --is-ancestor：commit 可从 HEAD 可达（防「不在当前历史的 hash」）
  *   3. diff-tree --shortstat：非空 commit（拒 --allow-empty）
+ *
+ * ⚠️ ADR-029 worktree 隔离下第 2 项的调整（2026-07，robustness review #1）：
+ * ADR-029 前，dev agent 在主仓库直接 commit，commit 自然是 HEAD(main) 的祖先 →
+ * merge-base --is-ancestor commit HEAD 成立。ADR-029 后 dev agent 在独立 worktree
+ * branch commit，该 commit 是 BASE_REF(main) 的**后代**而非祖先 →
+ * `--is-ancestor commit HEAD` 返回非零 → inRepo=false → valid=false → workflow 必然失败。
+ *
+ * 但 worktree 与主仓库**共享 object store**，cat-file -e 能查到 worktree commit（exists=true）。
+ * 且 merge-base --is-ancestor HEAD **防不住它原本想防的「提交无关旧 commit」**（旧 commit 也是 HEAD
+ * 祖先，同样通过）——净价值为负，反而误杀合法 worktree commit。
+ *
+ * 修复：第 2 项改为检查「commit 可达」=cat-file -e（已由第 1 项覆盖），不再单独跑 merge-base。
+ * inRepo 与 exists 合并：commit 在 object store 即视为 inRepo。防「假 hash」由 cat-file -e 兑底
+ * （编造的 hash 不在 object store，会失败）；防「空 commit」由 diff-tree 兑底。
  *
  * 逐条独立（#3 方案 A 逐条容错）：action 拿结构化结果记 per-task fail，不 throw。
  * 例外（T2.15）：git 可执行文件缺失（ENOENT）= 基础设施异常，throw 让上层区分
@@ -264,7 +278,6 @@ export class GitValidator {
     }
 
     let exists = false;
-    let inRepo = false;
     let nonEmpty = false;
 
     try {
@@ -278,17 +291,9 @@ export class GitValidator {
       if (isENOENT(e)) throw e;
       exists = false;
     }
-    try {
-      execFileSync("git", ["merge-base", "--is-ancestor", commitHash, "HEAD"], {
-        cwd: this.workspacePath,
-        encoding: "utf8",
-        stdio: "ignore",
-      });
-      inRepo = true;
-    } catch (e) {
-      if (isENOENT(e)) throw e;
-      inRepo = false;
-    }
+    // ADR-029 robustness #1：inRepo 合并入 exists（commit 在 object store 即 inRepo）。
+    // 原 merge-base --is-ancestor HEAD 在 worktree 隔离下误杀合法 dev commit（详见类 docblock）。
+    const inRepo = exists;
     try {
       const stat = execFileSync("git", ["diff-tree", "--shortstat", "--root", commitHash], {
         cwd: this.workspacePath,
@@ -306,7 +311,6 @@ export class GitValidator {
     if (!valid) {
       const parts: string[] = [];
       if (!exists) parts.push("cat-file");
-      if (!inRepo) parts.push("merge-base");
       if (!nonEmpty) parts.push("empty");
       reason = parts.join(",");
     }
