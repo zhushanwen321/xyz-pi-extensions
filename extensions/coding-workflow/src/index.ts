@@ -202,7 +202,26 @@ export function registerCodingWorkflowTool(pi: ExtensionAPI): void {
       // topicDir（交付物目录）仍在项目内 .xyz-harness/{slug}/——各 action handler loadTopic
       // 后用 topic.topicDir 构造 GateContext（ROOT-01 修复仍生效：交付物在项目内可读可写，
       // 但 _cw.db 状态库不再污染项目目录）。
-      const workspacePath = rawParams.workspacePath ?? process.cwd();
+      //
+      // ADR-029 dataflow D1 防护（2026-07）：worktree cwd 检测兜底。
+      // workflow 内 agent 的 cwd 是 worktree 路径（如 .../.cw-wt/cw-dev-pool0-xxx）。
+      // 若 agent 漏传 workspacePath，process.cwd() fallback 会 encodeCwd(worktree路径)
+      // → 打开一个空的独立 _cw.db，topic not found 且数据被隔离到错误 db。
+      // 检测 worktree 父目录约定（.cw-wt/），拒绝用 process.cwd() fallback，
+      // 强制 agent 显式传 workspacePath 或设 CW_WORKSPACE_ROOT env。
+      const fallbackCwd = process.cwd();
+      const isWorktreeCwd = fallbackCwd.includes("/.cw-wt/") || fallbackCwd.includes("\\.cw-wt\\");
+      let workspacePath = rawParams.workspacePath ?? process.env.CW_WORKSPACE_ROOT;
+      if (!workspacePath) {
+        if (isWorktreeCwd) {
+          throw new Error(
+            "worktree cwd detected (" + fallbackCwd + ") but workspacePath not provided. " +
+            "workflow agent 必须传 workspacePath=项目根，或 spawn 时设 CW_WORKSPACE_ROOT env。" +
+            "拒绝用 process.cwd() fallback（会打开错误的 _cw.db，数据被隔离）。",
+          );
+        }
+        workspacePath = fallbackCwd;
+      }
       const deps: ActionDeps = {
         store: new CwStore(resolveCwDbPath(workspacePath)),
         git: new GitValidator(workspacePath),

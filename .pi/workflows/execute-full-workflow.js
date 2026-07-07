@@ -582,16 +582,24 @@ for (let i = 0; i < testWaves2d.length; i++) {
 }
 
 // review 独立并行跑（所有 test waves 完成后，或无 testCases 时）
-phase("Review");
-log("并行跑 2 路 reviewer（correctness + quality）...");
-const [rcRaw, rqRaw] = await parallel([
-  { prompt: buildReviewPrompt("correctness", reviewWt), schema: REVIEW_SCHEMA, model: MODEL, cwd: reviewWt, description: "review-correctness", timeoutMs: DEFAULT_AGENT_TIMEOUT_MS },
-  { prompt: buildReviewPrompt("quality", reviewWt), schema: REVIEW_SCHEMA, model: MODEL, cwd: reviewWt, description: "review-quality", timeoutMs: DEFAULT_AGENT_TIMEOUT_MS },
-]);
-reviewCorrectness = parseResult(rcRaw);
-reviewQuality = parseResult(rqRaw);
-if (!reviewCorrectness) reviewFailures.push("review-correctness");
-if (!reviewQuality) reviewFailures.push("review-quality");
+// dataflow D3 防护：merge 冲突时 reviewWt 只含部分 dev 改动，review 会审部分代码——
+// 与 test 同策略（「审部分代码不如不审」），跳过 review，让主 agent 先修 merge 冲突重跑。
+if (!devMergeClean) {
+  phase("Review-skipped");
+  log("⚠ dev 聚合有 merge 冲突（" + devMergeFailures.length + " 分支未 merge），跳过 review（审部分代码不如不审）。主 agent 修 merge 后重跑 workflow。");
+  // reviewCorrectness/reviewQuality 保持 null，reviewFailures 不 push（跳过非失败）
+} else {
+  phase("Review");
+  log("并行跑 2 路 reviewer（correctness + quality）...");
+  const [rcRaw, rqRaw] = await parallel([
+    { prompt: buildReviewPrompt("correctness", reviewWt), schema: REVIEW_SCHEMA, model: MODEL, cwd: reviewWt, description: "review-correctness", timeoutMs: DEFAULT_AGENT_TIMEOUT_MS },
+    { prompt: buildReviewPrompt("quality", reviewWt), schema: REVIEW_SCHEMA, model: MODEL, cwd: reviewWt, description: "review-quality", timeoutMs: DEFAULT_AGENT_TIMEOUT_MS },
+  ]);
+  reviewCorrectness = parseResult(rcRaw);
+  reviewQuality = parseResult(rqRaw);
+  if (!reviewCorrectness) reviewFailures.push("review-correctness");
+  if (!reviewQuality) reviewFailures.push("review-quality");
+}
 
 // ── Review 聚合（2 路去重合并）────────────────────────────────────
 
