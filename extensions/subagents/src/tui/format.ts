@@ -434,7 +434,9 @@ export function truncLine(text: string, maxWidth: number): string {
         // 截断:重应用 active 样式 + 省略号 + reset。
         // reset 不可省——否则行尾颜色渗透到 padToVisible 的填充空格、乃至下一帧行，
         // 视觉上表现为颜色重影（被截断的着色延伸到行尾之外）。
-        return result + activeStyles.join("") + "…\x1b[0m";
+        // 但纯文本输入（activeStyles 为空）不发 reset——\x1b[0m 是全局重置，
+        // 会清除 theme.bg 施加的外层背景色（背景框内省略号后失去背景的根因）。
+        return result + activeStyles.join("") + "…" + (activeStyles.length ? "\x1b[0m" : "");
       }
 
       result += grapheme;
@@ -444,7 +446,7 @@ export function truncLine(text: string, maxWidth: number): string {
   }
 
   // 理论上 visibleWidth 检查已提前返回,此行兜底
-  return result + activeStyles.join("") + "…\x1b[0m";
+  return result + activeStyles.join("") + "…" + (activeStyles.length ? "\x1b[0m" : "");
 }
 
 /**

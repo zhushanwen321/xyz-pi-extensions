@@ -8,11 +8,11 @@
 //     与 tool block 的 toolSuccessBg 视觉区分），调本 renderer 渲染内容
 //   - triggerTurn:true → 唤醒父 agent 下一 turn，让 LLM 看到「X 完成」
 //
-// 渲染内容（紧凑单行/双行）：
-//   ✓ agent · model — 摘要首行 (id)
-//   ✗ agent · model — Error: 错误首行 (id)
-//   ■ agent · model — cancelled (id)
-// （model 缺失时省略 · model 段，向后兼容旧 record）
+// 渲染内容（紧凑单行/双行，紫色背景 + 圆角边框）：
+//   ╭──────────────────────────────────────────────────╮
+//   │ ✓ agent · model — background subagent finished   │
+//   │   {结果首行 / Error 首行}                          │
+//   ╰──────────────────────────────────────────────────╯
 //
 // 注意：renderer 自己用 Box(customMessageBg) 施加紫色背景。Pi 的
 // CustomMessageComponent 对 customRenderer 返回的组件是「裸 addChild」——
@@ -20,15 +20,23 @@
 // 故返回裸 Text 会丢失紫色背景，必须显式 Box 包裹。
 
 import type { Component } from "@earendil-works/pi-tui";
-import { Box, Text } from "@earendil-works/pi-tui";
+import { visibleWidth } from "@earendil-works/pi-tui";
 import type { Theme } from "@mariozechner/pi-coding-agent";
 
-import { firstLine, statusGlyph, type ThemeLike,truncLine } from "./format.ts";
+import { firstLine, shortId, statusGlyph, type ThemeLike, truncLine } from "./format.ts";
 
 /** agent 名最大显示宽度。 */
 const AGENT_MAX_WIDTH = 40;
 /** 完成块正文最大显示宽度。 */
 const BODY_MAX_WIDTH = 80;
+/** model 名最大显示宽度（避免 provider/model 路径过长撑爆 head 行）。 */
+const MODEL_MAX_WIDTH = 30;
+/** 边框内左右 padding（│ 后、│ 前各 1 空格）。 */
+const INNER_PAD = 1;
+/** 边框左右 padding 总宽（两侧 INNER_PAD）。 */
+const INNER_PAD_TOTAL = 2;
+/** 边框左右字符占用的列数（│ 和 │ 各 1 列）。 */
+const BORDER_CHARS = 2;
 
 /**
  * 渲染 background 完成通知。
@@ -36,7 +44,7 @@ const BODY_MAX_WIDTH = 80;
  * 契约（Pi MessageRenderer，core/extensions/types.ts:1060）：
  *   (message: CustomMessage, options: { expanded }, theme: Theme) => Component | undefined
  *
- *   display:true 时 Pi 调本方法，返回 Box(customMessageBg) 渲染紫色块。
+ *   display:true 时 Pi 调本方法，返回 BorderedBgBox（紫色背景 + 圆角边框）。
  *   details 异常 → 返回 undefined 走 Pi 默认渲染（兜底）。
  *
  *   details 两种形态：
@@ -53,47 +61,110 @@ export function renderBgNotifyMessage(
   // 批量分支：多条合并，各自渲染一行
   const batch = extractBatch(message.details);
   if (batch) {
-    const lines = batch.map((r) => renderRecordLines(r, t).join("\n"));
-    return wrapInBgBox(lines.join("\n"), t);
+    const lines = batch.flatMap((r) => renderRecordLines(r, t));
+    return new BorderedBgBox(lines, t);
   }
 
   // 单条分支
   const record = extractBgNotifyRecord(message.details);
   if (!record) return undefined;
-  return wrapInBgBox(renderRecordLines(record, t).join("\n"), t);
+  return new BorderedBgBox(renderRecordLines(record, t), t);
 }
 
+// ============================================================
+// 边框 + 背景组件
+// ============================================================
+
 /**
- * 包进紫色背景 Box（customMessageBg），与 Pi 原生 CustomMessage 视觉一致。
+ * 紫色背景（customMessageBg）+ 圆角边框（customMessageLabel 色）的自定义组件。
  *
- * 为何 renderer 要自己施加背景：Pi 的 CustomMessageComponent.rebuild() 对
- * customRenderer 返回的组件是「裸 addChild」（component truthy → addChild + return，
- * 跳过 box）。只有 renderer 返回 undefined（走 default 渲染）时才套 customMessageBg
- * box。故返回裸 Text 会丢失紫色背景——这里显式 Box(customMessageBg) 补回。
+ * 为何不用 Box 组件：Box 只做 padding + 背景，不画 Unicode 边框字符。
+ * 本组件在 render(width) 时动态画 `╭─╮ │ ╰─╯` 边框，内部行施加紫色背景。
  *
- * Box(1,1,bgFn)：paddingX/Y=1 留白，bgFn 对每行（含上下 padding 空行）施加背景。
- * 安全性：theme.fg 用 \x1b[39m、bg 用 \x1b[49m、bold 用 chalk \x1b[22m——
- * 均为精确 reset，不互相抹杀，前景着色不会破坏紫色背景。
+ * ANSI 安全：内容行可能含 `\x1b[0m`（来自 truncLine 截断或 chalk），
+ * 它是全局重置会清除背景色（背景框内省略号后失去背景的根因）。
+ * 本组件在施加背景前，把行内 `\x1b[0m` 替换为 `\x1b[39m\x1b[22m`
+ * （只重置前景色 + 粗体，不碰背景 `\x1b[49m`），确保背景不断裂。
  */
-function wrapInBgBox(content: string, t: ThemeLike): Box {
-  const box = new Box(1, 1, (text: string) => t.bg("customMessageBg", text));
-  box.addChild(new Text(content, 0, 0));
-  return box;
+class BorderedBgBox implements Component {
+  private lines: string[];
+  private t: ThemeLike;
+  private cache: { width: number; lines: string[] } | undefined;
+
+  constructor(lines: string[], t: ThemeLike) {
+    this.lines = lines;
+    this.t = t;
+  }
+
+  invalidate(): void {
+    this.cache = undefined;
+  }
+
+  render(width: number): string[] {
+    if (this.cache && this.cache.width === width) return this.cache.lines;
+
+    const t = this.t;
+    // 边框占 BORDER_CHARS 列（左右各 1 个 │），内部 padding 各 INNER_PAD 空格
+    const innerWidth = Math.max(1, width - BORDER_CHARS - INNER_PAD_TOTAL);
+    const borderColor = "customMessageLabel";
+    const horizLen = Math.max(0, width - BORDER_CHARS);
+
+    const result: string[] = [];
+
+    // 顶边框：╭─...─╮
+    result.push(
+      t.fg(borderColor, "╭" + "─".repeat(horizLen) + "╮"),
+    );
+
+    // 内容行：│ {bg(内容)} │
+    for (const line of this.lines) {
+      const truncated = truncLine(line, innerWidth);
+      const bgSafe = sanitizeAnsiForBg(truncated);
+      const padded = padToVisible(bgSafe, innerWidth);
+      const content = t.bg("customMessageBg", " ".repeat(INNER_PAD) + padded + " ".repeat(INNER_PAD));
+      result.push(t.fg(borderColor, "│") + content + t.fg(borderColor, "│"));
+    }
+
+    // 底边框：╰─...─╯
+    result.push(
+      t.fg(borderColor, "╰" + "─".repeat(horizLen) + "╯"),
+    );
+
+    this.cache = { width, lines: result };
+    return result;
+  }
 }
 
 /**
- * 渲染单条 record 为多行文本。
+ * 把行内 `\x1b[0m`（全局重置）替换为 `\x1b[39m\x1b[22m`（只重置前景色 + 粗体）。
+ *
+ * `\x1b[0m` 会清除背景色（`\x1b[49m` 语义），在紫色背景框内导致省略号后失去背景。
+ * 内容行只用前景色和粗体（fg/bold），不引入背景色，所以重置前景 + 粗体足够。
+ */
+function sanitizeAnsiForBg(text: string): string {
+  return text.replace(/\x1b\[0?m/g, "\x1b[39m\x1b[22m");
+}
+
+/** 把文本 pad 到指定可见宽度（不重新引入 ANSI，假设输入已着色）。 */
+function padToVisible(text: string, width: number): string {
+  const w = visibleWidth(text);
+  if (w >= width) return text;
+  return text + " ".repeat(width - w);
+}
+
+// ============================================================
+// 内容行生成
+// ============================================================
+
+/**
+ * 渲染单条 record 为多行文本（纯视觉文本，不含边框/背景——由 BorderedBgBox 包裹）。
  *
  * 格式（两行）：
- *   第 1 行（标题）：✓/✗/■ glyph + agent + 状态描述 + id
- *     - done:      `✓ default — background subagent finished - bg-3-...`
- *     - failed:    `✗ default — background subagent failed - bg-3-...`
- *     - cancelled: `■ default — background subagent cancelled - bg-3-...`
+ *   第 1 行（标题）：✓/✗/■ glyph + agent + model + 状态描述 + shortId
+ *     - done:      `✓ default — background subagent finished - bg-3`
+ *     - failed:    `✗ default — background subagent failed - bg-3`
+ *     - cancelled: `■ default — background subagent cancelled - bg-3`
  *   第 2 行（正文）：结果首行 / Error 首行 / cancelled 无第二行
- *
- * 旧格式把结果和 id 挤在一行（`✓ default — 结果首行 (id)`），无法一眼看出
- * 「这是个 background 完成通知」。拆两行后第 1 行明确标识状态 + id，第 2 行
- * 专门展示内容，长内容不被 id 挤压。
  */
 function renderRecordLines(
   record: { id: string; status: "done" | "failed" | "cancelled"; agent: string; model?: string; result?: string; error?: string; patchFile?: string },
@@ -103,9 +174,12 @@ function renderRecordLines(
   const icon = glyph.icon ?? "•";
   const agent = truncLine(record.agent, AGENT_MAX_WIDTH);
   // model 段：agent 后、状态描述前，accent 色。空则省略（向后兼容旧 record）。
-  const modelPart = record.model ? ` ${t.fg("dim", "·")} ${t.fg("accent", record.model)}` : "";
+  const modelPart = record.model
+    ? ` ${t.fg("dim", "·")} ${t.fg("accent", truncLine(record.model, MODEL_MAX_WIDTH))}`
+    : "";
   const verb = record.status === "done" ? "finished" : record.status === "failed" ? "failed" : "cancelled";
-  const head = `${t.fg(glyph.color, icon)} ${t.bold(agent)}${modelPart}${t.fg("dim", ` — background subagent ${verb} - ${record.id}`)}`;
+  const idShort = shortId(record.id);
+  const head = `${t.fg(glyph.color, icon)} ${t.bold(agent)}${modelPart}${t.fg("dim", ` — background subagent ${verb} - ${idShort}`)}`;
 
   switch (record.status) {
     case "done": {

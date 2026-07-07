@@ -205,19 +205,23 @@ describe("truncLine", () => {
 
   it("truncates with ellipsis when exceeding width", () => {
     const result = truncLine("hello world", 8);
-    expect(result.endsWith("…\x1b[0m")).toBe(true);
-    // visible width should be 8 (7 chars + ellipsis); \x1b[0m is zero-width reset
+    // 纯文本截断不发 \x1b[0m（全局重置会破坏外层背景色）
+    expect(result.endsWith("…")).toBe(true);
+    expect(result).not.toContain("\x1b[0m");
+    // visible width should be 8 (7 chars + ellipsis)
   });
 
   it("handles CJK characters (2 columns each)", () => {
     // 你好世界 = 8 visible columns; truncate to 5 → 2 chars (4 cols) + …
     const result = truncLine("你好世界", 5);
-    expect(result.endsWith("…\x1b[0m")).toBe(true);
+    expect(result.endsWith("…")).toBe(true);
+    expect(result).not.toContain("\x1b[0m");
   });
 
   it("handles emoji correctly", () => {
     const result = truncLine("😀😁😂🤣😃", 3);
-    expect(result.endsWith("…\x1b[0m")).toBe(true);
+    expect(result.endsWith("…")).toBe(true);
+    expect(result).not.toContain("\x1b[0m");
   });
 
   it("reapplies active ANSI styles before ellipsis (no background break)", () => {
@@ -234,7 +238,8 @@ describe("truncLine", () => {
     // text with reset in the middle → after reset, no style re-applied
     const input = "\x1b[31mab\x1b[0mcdefghijk";
     const result = truncLine(input, 6);
-    expect(result.endsWith("…\x1b[0m")).toBe(true);
+    // reset 后 activeStyles 为空 → 截断不发 \x1b[0m
+    expect(result.endsWith("…")).toBe(true);
   });
 
   it("flattens newlines to spaces (single-line rendering safety)", () => {
