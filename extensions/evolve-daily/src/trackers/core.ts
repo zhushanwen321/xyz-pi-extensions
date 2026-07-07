@@ -58,6 +58,17 @@ function isActive<TMeta>(item: TrackedItem<TMeta>): boolean {
   return !isTerminalStatus(item.status);
 }
 
+/**
+ * 是否应在 before_agent_start 的 context-restore 提示中出现。
+ *
+ * 只提示 loaded/error（agent 正在执行或遇到问题），不提示 abandoned
+ * （系统超时放弃，反复提示是噪音；item 仍保留在 state 里供 list/update 收尾）。
+ * 终态（completed/recorded/cancelled）自然被排除。
+ */
+export function isPromptable<TMeta>(item: TrackedItem<TMeta>): boolean {
+  return isResumableStatus(item.status) && item.status !== "abandoned";
+}
+
 /** 将超过 abandonThreshold 的非终态 item 标记为 abandoned，返回是否有变更 */
 export function markStaleItemsAbandoned<TMeta>(
   state: TrackerRuntimeState<TMeta>,
@@ -645,11 +656,9 @@ export function createTracker<TMeta>(
   // ── Event: before_agent_start ──────────────────────
 
   pi.on("before_agent_start", async () => {
-    // 只提示 loaded/error，不提示 abandoned。abandoned 是系统超时放弃，
-    // 反复提示是噪音；item 仍保留在 state 里，agent 可通过 list/update 收尾。
-    const activeItems = state.items.filter(
-      (item) => isResumableStatus(item.status) && item.status !== "abandoned",
-    );
+    // 只提示 loaded/error（isPromptable），不提示 abandoned（系统超时放弃，
+    // 反复提示是噪音；item 仍保留在 state 里供 list/update 收尾）
+    const activeItems = state.items.filter((item) => isPromptable(item));
     if (activeItems.length === 0) return undefined;
 
     return {

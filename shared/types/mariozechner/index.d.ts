@@ -52,7 +52,7 @@ declare module "@mariozechner/pi-coding-agent" {
 		getSessionDir(): string;
 		getCwd(): string;
 		getEntries(): SessionEntry[];
-		getBranch(): any[];
+		getBranch(): SessionEntry[];
 		getLeafId(): string | null;
 		getLeafEntry(): SessionEntry | undefined;
 		getEntry(id: string): SessionEntry | undefined;

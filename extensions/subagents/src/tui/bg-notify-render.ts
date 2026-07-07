@@ -14,16 +14,22 @@
 //   │   {结果首行 / Error 首行}                          │
 //   ╰──────────────────────────────────────────────────╯
 //
-// 注意：renderer 自己用 Box(customMessageBg) 施加紫色背景。Pi 的
+// 注意：renderer 自己施加紫色背景（customMessageBg）。Pi 的
 // CustomMessageComponent 对 customRenderer 返回的组件是「裸 addChild」——
 // 只有 renderer 返回 undefined（走 default 渲染）时才套 customMessageBg box。
 // 故返回裸 Text 会丢失紫色背景，必须显式 Box 包裹。
 
 import type { Component } from "@earendil-works/pi-tui";
-import { visibleWidth } from "@earendil-works/pi-tui";
 import type { Theme } from "@mariozechner/pi-coding-agent";
 
-import { firstLine, shortId, statusGlyph, type ThemeLike, truncLine } from "./format.ts";
+import {
+  firstLine,
+  padToVisible,
+  shortId,
+  statusGlyph,
+  type ThemeLike,
+  truncLine,
+} from "./format.ts";
 
 /** agent 名最大显示宽度。 */
 const AGENT_MAX_WIDTH = 40;
@@ -37,6 +43,23 @@ const INNER_PAD = 1;
 const INNER_PAD_TOTAL = 2;
 /** 边框左右字符占用的列数（│ 和 │ 各 1 列）。 */
 const BORDER_CHARS = 2;
+/** 能画出完整边框的最小宽度（│ │ 各 1 + 至少 1 内容列）。 */
+const MIN_BORDER_WIDTH = BORDER_CHARS + INNER_PAD_TOTAL + 1;
+
+/**
+ * background 完成通知的 record 形态（从 message.details 提取）。
+ * notifier.ts 构造，本文件防御性解析。
+ */
+interface BgNotifyRecord {
+  id: string;
+  status: "done" | "failed" | "cancelled";
+  agent: string;
+  model?: string;
+  result?: string;
+  error?: string;
+  /** [MF#1] fork+worktree background 完成通知携带的 patch 文件路径。 */
+  patchFile?: string;
+}
 
 /**
  * 渲染 background 完成通知。
@@ -83,10 +106,12 @@ export function renderBgNotifyMessage(
  *
  * ANSI 安全：内容行可能含 `\x1b[0m`（来自 truncLine 截断或 chalk），
  * 它是全局重置会清除背景色（背景框内省略号后失去背景的根因）。
- * 本组件在施加背景前，把行内 `\x1b[0m` 替换为 `\x1b[39m\x1b[22m`
- * （只重置前景色 + 粗体，不碰背景 `\x1b[49m`），确保背景不断裂。
+ * 本组件在施加背景前，把行内全局 reset 替换为只重置前景/粗体/斜体/下划线
+ * 的精确 reset（不含背景 `\x1b[49m`），确保背景不断裂。
+ *
+ * 导出以便其他 message renderer 复用边框样式。
  */
-class BorderedBgBox implements Component {
+export class BorderedBgBox implements Component {
   private lines: string[];
   private t: ThemeLike;
   private cache: { width: number; lines: string[] } | undefined;
@@ -104,10 +129,26 @@ class BorderedBgBox implements Component {
     if (this.cache && this.cache.width === width) return this.cache.lines;
 
     const t = this.t;
-    // 边框占 BORDER_CHARS 列（左右各 1 个 │），内部 padding 各 INNER_PAD 空格
-    const innerWidth = Math.max(1, width - BORDER_CHARS - INNER_PAD_TOTAL);
     const borderColor = "customMessageLabel";
-    const horizLen = Math.max(0, width - BORDER_CHARS);
+
+    // 窄宽度退化：放不下边框时，去掉边框只保留背景内容（不撑破对齐）
+    if (width < MIN_BORDER_WIDTH) {
+      const innerWidth = Math.max(1, width);
+      const result: string[] = [];
+      for (const line of this.lines) {
+        const truncated = truncLine(line, innerWidth);
+        const bgSafe = sanitizeAnsiForBg(truncated);
+        const padded = padToVisible(bgSafe, innerWidth);
+        result.push(t.bg("customMessageBg", padded));
+      }
+      this.cache = { width, lines: result };
+      return result;
+    }
+
+    // 正常宽度：画完整边框
+    // 边框占 BORDER_CHARS 列（左右各 1 个 │），内部 padding 各 INNER_PAD 空格
+    const innerWidth = width - BORDER_CHARS - INNER_PAD_TOTAL;
+    const horizLen = width - BORDER_CHARS;
 
     const result: string[] = [];
 
@@ -136,20 +177,17 @@ class BorderedBgBox implements Component {
 }
 
 /**
- * 把行内 `\x1b[0m`（全局重置）替换为 `\x1b[39m\x1b[22m`（只重置前景色 + 粗体）。
+ * 把行内的全局 ANSI reset 替换为不破坏背景色的精确 reset。
  *
- * `\x1b[0m` 会清除背景色（`\x1b[49m` 语义），在紫色背景框内导致省略号后失去背景。
- * 内容行只用前景色和粗体（fg/bold），不引入背景色，所以重置前景 + 粗体足够。
+ * `\x1b[0m`（含 `\x1b[0;Nm` 组合形式、`\x1b[m` 省略形式）会清除背景色
+ * （`\x1b[49m` 语义），在紫色背景框内导致省略号后失去背景。
+ *
+ * 替换为 `\x1b[39m\x1b[22m\x1b[23m\x1b[24m`——分别重置前景色、粗体、斜体、
+ * 下划线。这覆盖了内容行可能用到的所有前景 SGR 类别，且不含背景 reset。
  */
 function sanitizeAnsiForBg(text: string): string {
-  return text.replace(/\x1b\[0?m/g, "\x1b[39m\x1b[22m");
-}
-
-/** 把文本 pad 到指定可见宽度（不重新引入 ANSI，假设输入已着色）。 */
-function padToVisible(text: string, width: number): string {
-  const w = visibleWidth(text);
-  if (w >= width) return text;
-  return text + " ".repeat(width - w);
+  // 匹配全局 reset：\x1b[0m / \x1b[m / \x1b[0;Nm / \x1b[0;N;Mm 等以 0 开头的 SGR
+  return text.replace(/\x1b\[0*(?:;[\d;]*)*m/g, "\x1b[39m\x1b[22m\x1b[23m\x1b[24m");
 }
 
 // ============================================================
@@ -161,15 +199,12 @@ function padToVisible(text: string, width: number): string {
  *
  * 格式（两行）：
  *   第 1 行（标题）：✓/✗/■ glyph + agent + model + 状态描述 + shortId
- *     - done:      `✓ default — background subagent finished - bg-3`
- *     - failed:    `✗ default — background subagent failed - bg-3`
- *     - cancelled: `■ default — background subagent cancelled - bg-3`
+ *     - done:      `✓ default — background subagent finished - bg-f6f731-10`
+ *     - failed:    `✗ default — background subagent failed - bg-f6f731-10`
+ *     - cancelled: `■ default — background subagent cancelled - bg-f6f731-10`
  *   第 2 行（正文）：结果首行 / Error 首行 / cancelled 无第二行
  */
-function renderRecordLines(
-  record: { id: string; status: "done" | "failed" | "cancelled"; agent: string; model?: string; result?: string; error?: string; patchFile?: string },
-  t: ThemeLike,
-): string[] {
+function renderRecordLines(record: BgNotifyRecord, t: ThemeLike): string[] {
   const glyph = statusGlyph(record.status);
   const icon = glyph.icon ?? "•";
   const agent = truncLine(record.agent, AGENT_MAX_WIDTH);
@@ -206,13 +241,11 @@ function renderRecordLines(
  * 从 message.details 防御性提取批量 record。
  * 形态：{ batch: true, items: BgNotifyRecord[] }。结构不全返回 undefined。
  */
-function extractBatch(
-  details: unknown,
-): { id: string; status: "done" | "failed" | "cancelled"; agent: string; model?: string; result?: string; error?: string; patchFile?: string }[] | undefined {
+function extractBatch(details: unknown): BgNotifyRecord[] | undefined {
   if (typeof details !== "object" || details === null) return undefined;
   const d = details as Record<string, unknown>;
   if (d.batch !== true || !Array.isArray(d.items)) return undefined;
-  const records: { id: string; status: "done" | "failed" | "cancelled"; agent: string; model?: string; result?: string; error?: string; patchFile?: string }[] = [];
+  const records: BgNotifyRecord[] = [];
   for (const item of d.items) {
     const r = extractBgNotifyRecord(item);
     if (r) records.push(r);
@@ -224,9 +257,7 @@ function extractBatch(
  * 从 message.details 防御性提取 BgNotifyRecord。
  * 结构不全（缺 status / agent）返回 undefined。
  */
-function extractBgNotifyRecord(
-  details: unknown,
-): { id: string; status: "done" | "failed" | "cancelled"; agent: string; model?: string; result?: string; error?: string; patchFile?: string } | undefined {
+function extractBgNotifyRecord(details: unknown): BgNotifyRecord | undefined {
   if (typeof details !== "object" || details === null) return undefined;
   const d = details as Record<string, unknown>;
   const status = d.status;

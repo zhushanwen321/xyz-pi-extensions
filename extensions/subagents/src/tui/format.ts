@@ -87,19 +87,26 @@ export function formatElapsedSeconds(seconds: number): string {
   return `${h}h${m}m`;
 }
 
+/** sync id 的段数（run-${seq}）。≤ 此值原样返回。 */
+const SHORT_ID_SYNC_SEGMENTS = 2;
+/** background id 取前 N 段（bg/${tag}/${seq}）。 */
+const SHORT_ID_BG_SEGMENTS = 3;
+
 /**
  * 从完整 record id 提取短编号用于列表展示.
  *
- * id 格式:
- *   - sync:       `run-${seq}`       (如 run-1) → 原样
- *   - background: `bg-${seq}-${ts}`  (如 bg-1-1719500000000) → 去掉时间戳得 bg-1
+ * id 格式（subagent-service.ts:422 生成）:
+ *   - sync:       `run-${seq}`                  (如 run-1) → 原样（2 段）
+ *   - background: `bg-${tag}-${seq}-${ts}`      (如 bg-f6f731-10-1719500000000)
+ *                 → 取前 3 段得 bg-f6f731-10（丢弃冗长时间戳）
  *
- * 取前两段(`prefix-seq`)即可覆盖两种格式:sync 原样,background 丢弃冗长时间戳.
+ * 按段数分支：sync（2 段）原样返回；background（≥3 段）取前 3 段（bg/tag/seq）。
  * seq 进程内递增唯一,作为「编号」足够区分;完整 id(含时间戳)在右列预览给出供精确引用.
  */
-const SHORT_ID_SEGMENTS = 2;
 export function shortId(id: string): string {
-  return id.split("-").slice(0, SHORT_ID_SEGMENTS).join("-");
+  const segments = id.split("-");
+  if (segments.length <= SHORT_ID_SYNC_SEGMENTS) return id;
+  return segments.slice(0, SHORT_ID_BG_SEGMENTS).join("-");
 }
 
 /**

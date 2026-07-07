@@ -312,8 +312,9 @@ describe("shortId", () => {
     expect(shortId("run-42")).toBe("run-42");
   });
 
-  it("strips timestamp from background id (bg-N-<ts> → bg-N)", () => {
-    expect(shortId("bg-1-1719500000000")).toBe("bg-1");
-    expect(shortId("bg-99-1719500123456")).toBe("bg-99");
+  it("strips timestamp from background id (bg-tag-seq-<ts> → bg-tag-seq)", () => {
+    // 真实格式：bg-${6位hex tag}-${seq}-${Date.now()}（subagent-service.ts:422）
+    expect(shortId("bg-f6f731-10-1719500000000")).toBe("bg-f6f731-10");
+    expect(shortId("bg-abc123-99-1719500123456")).toBe("bg-abc123-99");
   });
 });

@@ -63,16 +63,16 @@ describe("renderBgNotifyMessage", () => {
     expect(joined).toContain("All green");
   });
 
-  it("id 用 shortId 截断（bg-1-timestamp → bg-1）", () => {
+  it("id 用 shortId 截断（bg-tag-seq-ts → bg-tag-seq）", () => {
     const { theme } = makeTheme();
     const comp = renderBgNotifyMessage(
-      { details: { status: "done", agent: "w", id: "bg-3-1719500000000", result: "ok" } },
+      { details: { status: "done", agent: "w", id: "bg-f6f731-10-1719500000000", result: "ok" } },
       { expanded: false },
       theme,
     );
     const joined = comp!.render(80).join("\n");
-    // shortId 取前两段
-    expect(joined).toContain("bg-3");
+    // shortId 对 background id 取前 3 段（bg/tag/seq）
+    expect(joined).toContain("bg-f6f731-10");
     // 完整时间戳不应出现
     expect(joined).not.toContain("1719500000000");
   });
@@ -177,24 +177,80 @@ describe("renderBgNotifyMessage", () => {
 
   // ── ANSI 背景 safety ──
 
-  it("内容行截断产生的 \\x1b[0m 被替换为不破坏背景的重置码", () => {
-    // mock theme 产生真实 ANSI，让 truncLine 在着色文本上截断产生 \x1b[0m
+  it("着色行截断的 \\x1b[0m 被替换为精确 reset（不破坏背景）", () => {
+    // mock theme 产生真实 ANSI（fg 用 italic \x1b[3m..\x1b[23m，bold 用 \x1b[1m..\x1b[22m）
     const theme = {
       fg: (_tag: string, text: string) => `\x1b[3m${text}\x1b[23m`,
       bold: (text: string) => `\x1b[1m${text}\x1b[22m`,
       bg: (_color: string, text: string) => `\x1b[48;5;95m${text}\x1b[49m`,
     } as Theme;
-    const longResult = "x".repeat(200);
+    // 关键：用窄 width + 长 agent 名，让 head 行在 truncLine 内被真正截断
+    // head 行含 ANSI（fg 包裹），截断时 activeStyles 非空 → 会产生 \x1b[0m
+    const longAgent = "a".repeat(60);
     const comp = renderBgNotifyMessage(
-      { details: { status: "done", agent: "w", id: "bg-1", result: longResult } },
+      { details: { status: "done", agent: longAgent, id: "bg-1", result: "ok" } },
       { expanded: false },
       theme,
     );
-    const lines = comp!.render(60);
+    const lines = comp!.render(30);
     // 内容行（非边框）不应含 \x1b[0m（会破坏背景）
     const contentLines = lines.slice(1, -1);
+    expect(contentLines.length).toBeGreaterThan(0);
     for (const line of contentLines) {
       expect(line).not.toContain("\x1b[0m");
+    }
+    // 正向验证：sanitizeAnsiForBg 把 \x1b[0m 替换成了精确 reset（\x1b[39m）
+    // 如果截断真的发生了，内容行应含 \x1b[39m（sanitize 的替换产物）
+    const hasSanitized = contentLines.some((l) => l.includes("\x1b[39m"));
+    expect(hasSanitized).toBe(true);
+  });
+
+  // ── 窄宽度退化 ──
+
+  it("极窄宽度（width < 5）退化：无边框，不崩溃，有背景", () => {
+    const { theme, bgColors } = makeTheme();
+    const comp = renderBgNotifyMessage(
+      { details: { status: "done", agent: "w", id: "bg-1", result: "ok" } },
+      { expanded: false },
+      theme,
+    );
+    // width=3 < MIN_BORDER_WIDTH(5)，应退化为无边框模式
+    const lines = comp!.render(3);
+    expect(lines.length).toBeGreaterThan(0);
+    // 不应有边框字符（退化模式）
+    for (const line of lines) {
+      expect(line).not.toContain("╭");
+      expect(line).not.toContain("│");
+    }
+    // 仍施加背景
+    expect(bgColors).toContain("customMessageBg");
+  });
+
+  it("批量场景边框完整：所有中间行含 │", () => {
+    const { theme } = makeTheme();
+    const comp = renderBgNotifyMessage(
+      {
+        details: {
+          batch: true,
+          items: [
+            { status: "done", agent: "alpha", id: "1", result: "r1" },
+            { status: "failed", agent: "beta", id: "2", error: "e2" },
+            { status: "cancelled", agent: "gamma", id: "3" },
+          ],
+        },
+      },
+      { expanded: false },
+      theme,
+    );
+    const lines = comp!.render(80);
+    // 顶底边框
+    expect(lines[0]).toContain("╭");
+    expect(lines[0]).toContain("╮");
+    expect(lines[lines.length - 1]).toContain("╰");
+    expect(lines[lines.length - 1]).toContain("╯");
+    // 所有中间行都应有左右 │
+    for (let i = 1; i < lines.length - 1; i++) {
+      expect(lines[i]).toContain("│");
     }
   });
 });
