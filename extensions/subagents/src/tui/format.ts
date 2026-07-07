@@ -87,19 +87,26 @@ export function formatElapsedSeconds(seconds: number): string {
   return `${h}h${m}m`;
 }
 
+/** sync id 的段数（run-${seq}）。≤ 此值原样返回。 */
+const SHORT_ID_SYNC_SEGMENTS = 2;
+/** background id 取前 N 段（bg/${tag}/${seq}）。 */
+const SHORT_ID_BG_SEGMENTS = 3;
+
 /**
  * 从完整 record id 提取短编号用于列表展示.
  *
- * id 格式:
- *   - sync:       `run-${seq}`       (如 run-1) → 原样
- *   - background: `bg-${seq}-${ts}`  (如 bg-1-1719500000000) → 去掉时间戳得 bg-1
+ * id 格式（subagent-service.ts:422 生成）:
+ *   - sync:       `run-${seq}`                  (如 run-1) → 原样（2 段）
+ *   - background: `bg-${tag}-${seq}-${ts}`      (如 bg-f6f731-10-1719500000000)
+ *                 → 取前 3 段得 bg-f6f731-10（丢弃冗长时间戳）
  *
- * 取前两段(`prefix-seq`)即可覆盖两种格式:sync 原样,background 丢弃冗长时间戳.
+ * 按段数分支：sync（2 段）原样返回；background（≥3 段）取前 3 段（bg/tag/seq）。
  * seq 进程内递增唯一,作为「编号」足够区分;完整 id(含时间戳)在右列预览给出供精确引用.
  */
-const SHORT_ID_SEGMENTS = 2;
 export function shortId(id: string): string {
-  return id.split("-").slice(0, SHORT_ID_SEGMENTS).join("-");
+  const segments = id.split("-");
+  if (segments.length <= SHORT_ID_SYNC_SEGMENTS) return id;
+  return segments.slice(0, SHORT_ID_BG_SEGMENTS).join("-");
 }
 
 /**
@@ -434,7 +441,9 @@ export function truncLine(text: string, maxWidth: number): string {
         // 截断:重应用 active 样式 + 省略号 + reset。
         // reset 不可省——否则行尾颜色渗透到 padToVisible 的填充空格、乃至下一帧行，
         // 视觉上表现为颜色重影（被截断的着色延伸到行尾之外）。
-        return result + activeStyles.join("") + "…\x1b[0m";
+        // 但纯文本输入（activeStyles 为空）不发 reset——\x1b[0m 是全局重置，
+        // 会清除 theme.bg 施加的外层背景色（背景框内省略号后失去背景的根因）。
+        return result + activeStyles.join("") + "…" + (activeStyles.length ? "\x1b[0m" : "");
       }
 
       result += grapheme;
@@ -444,7 +453,7 @@ export function truncLine(text: string, maxWidth: number): string {
   }
 
   // 理论上 visibleWidth 检查已提前返回,此行兜底
-  return result + activeStyles.join("") + "…\x1b[0m";
+  return result + activeStyles.join("") + "…" + (activeStyles.length ? "\x1b[0m" : "");
 }
 
 /**
