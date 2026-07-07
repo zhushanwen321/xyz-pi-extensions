@@ -176,7 +176,7 @@ export function buildWorkerScript(userScript: string): string {
     '    const _knownFields = new Set(["prompt", "description", "schema", "model", "scene", "label", "task", "agent", "phase", "skill", "timeoutMs", "cwd"]);',
     '    const _unknownFields = Object.keys(opts).filter((k) => !_knownFields.has(k));',
     '    if (_unknownFields.length > 0) {',
-    '      _pushWorkerLog("warn", ["[workflow] agent() received unknown fields: " + _unknownFields.join(", ") + ". Known fields: prompt, description, schema, model, scene, label, task, agent, phase, skill, timeoutMs"]);',
+    '      _pushWorkerLog("warn", ["[workflow] agent() received unknown fields: " + _unknownFields.join(", ") + ". Known fields: prompt, description, schema, model, scene, label, task, agent, phase, skill, timeoutMs, cwd"]);',
     '    }',
     '',
     '    const callId = _callIdCounter;',

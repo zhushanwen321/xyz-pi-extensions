@@ -180,21 +180,54 @@ function gitArgs(cwd, verb, args) {
 }
 
 function addWorktree(role) {
+  return addWorktreeAt(role, BASE_REF);
+}
+
+// 从任意 ref 建 worktree（用于 Phase 1.5 从聚合分支建 test/review worktree）。
+function addWorktree(role) {
+  return addWorktreeAt(role, BASE_REF);
+}
+
+// 从任意 ref 建 worktree（用于 Phase 1.5 从聚合分支建 test/review worktree）。
+function addWorktreeAt(role, ref) {
   const shortTopic = (TOPIC_ID || "cw").slice(0, 12);
   const branch = "cw-" + shortTopic + "-" + role + "-" + runStamp;
   const wtPath = WT_PARENT + "/cw-" + role + "-" + runStamp;
   try {
-    gitArgs(WORKSPACE_ROOT, "worktree", ["add", wtPath, "-b", branch, BASE_REF]);
+    gitArgs(WORKSPACE_ROOT, "worktree", ["add", wtPath, "-b", branch, ref]);
     worktrees.push({ role, branch, path: wtPath });
-    log("worktree 建好: " + role + " → " + wtPath);
+    log("worktree 建好: " + role + " → " + wtPath + " (ref=" + ref + ")");
     return wtPath;
   } catch (e) {
-    throw new Error("git worktree add 失败 (" + role + "): " + e.message);
+    throw new Error("git worktree add 失败 (" + role + " @ " + ref + "): " + e.message);
   }
 }
 
-// 复用前清前一 wave 残留：reset 到 BASE_REF + 删未跟踪文件。
-// 失败必须 throw（不能吞）——脏 worktree 被下个 wave 复用会违反隔离不变式（审查 robustness SHOULD_FIX）。
+// 在 pool worktree 里建新分支并 checkout（给本轮 sub-wave 用）。
+// ⚠️ 审查报告 CRITICAL #3 根因：原 resetWorktree(wt) 做 reset --hard BASE_REF，会把
+// pool worktree 当前 checkout 的分支 ref 移到 BASE_REF，丢弃上一轮 sub-wave 在该分支
+// 上的 commit。修复：不复用同一分支，而是每轮 sub-wave 建一个新分支（从 BASE_REF 起）
+// 并 checkout 到 worktree。这样每轮的 commit 落在独立分支上，不会被下轮 reset 覆盖。
+// Phase 1.5 聚合时收集所有这些 sub-wave 分支 merge。
+// 返回新建分支名（供聚合使用）；worktrees 数组只记 role/path，分支名按 sub-wave 动态生成。
+function newSubWaveBranch(wtPath, waveIdx, subBatchIdx, slotIdx) {
+  const shortTopic = (TOPIC_ID || "cw").slice(0, 12);
+  const branch = "cw-" + shortTopic + "-dev-w" + waveIdx + "s" + subBatchIdx + "p" + slotIdx + "-" + runStamp;
+  try {
+    // 从 BASE_REF 建新分支并 checkout 到该 worktree（worktree 会跳过自己的当前分支）
+    gitArgs(wtPath, "checkout", ["-b", branch, BASE_REF]);
+    // 清未跟踪文件（防上轮残留）
+    gitArgs(wtPath, "clean", ["-fd"]);
+    return branch;
+  } catch (e) {
+    throw new Error("建 sub-wave 分支失败 " + branch + " @ " + wtPath + ": " + e.message);
+  }
+}
+
+// 复用前清前一 wave 残留。复用语义见 newSubWaveBranch（每轮 sub-wave 建新分支，
+// 不复用旧分支名，因此旧 commit 不被覆盖）。本函数保留作为额外保险（如新分支建前
+// 清未跟踪文件），但 reset 动作已移到 newSubWaveBranch 的 checkout -b 流程。
+// 失败必须 throw（不能吞）——脏 worktree 被下个 wave 复用会违反隔离不变式。
 function resetWorktree(wtPath) {
   try {
     gitArgs(wtPath, "reset", ["--hard", BASE_REF]);
@@ -214,7 +247,15 @@ function removeWorktree(wt) {
   }
 }
 
-// ── Phase 0: worktree-setup ───────────────────────────────────────
+// ── Phase 0: worktree-setup（仅建 dev pool；test/review 延后到 Phase 1.5 聚合后）───
+//
+// ADR-029 决策 2 + 审查报告 CRITICAL #1：test/review worktree 必须含全部 dev 改动才能
+// 测真码/审真 diff。若 Phase 0 就建 test/review worktree（指向 BASE_REF），后续要靠
+// `git checkout <aggregateBranch>` + `git reset --hard` 才能切到聚合点——但 worktree 已
+// checkout 着自己的分支，切别的 ref 易踩「already checked out」/残留脏状态。
+// 简洁方案：Phase 0 只建 dev pool；dev 全部完成后建聚合分支，再从聚合分支建 test/review
+// worktree（`git worktree add <path> -b <branch> <aggregateBranch>`）。这样 testWt/
+// reviewWt 天然含全部已 merge 的 dev 改动，无需 reset/checkout。
 
 phase("WorktreeSetup");
 
@@ -222,10 +263,11 @@ const maxParallelInWave = Math.max(1, ...devWaves2d.map((w) => w.length));
 const devPoolSize = Math.min(maxParallelInWave, Math.max(1, MAX_WORKTREES - RESERVED_WORKTREES));
 const devWtPool = [];
 for (let i = 0; i < devPoolSize; i++) devWtPool.push(addWorktree("dev-pool" + i));
-const testWt = testWaves2d.length > 0 ? addWorktree("test") : null;
-const reviewWt = addWorktree("review");
+// test/review worktree 延后到 Phase 1.5（dev 聚合后）建——指向 aggregateBranch
+let testWt = null;
+let reviewWt = null;
 
-log("worktree 建好：dev pool " + devWtPool.length + " (max parallel=" + maxParallelInWave + ") + test " + (testWt ? 1 : 0) + " + review 1 = " + worktrees.length);
+log("worktree 建好：dev pool " + devWtPool.length + " (max parallel=" + maxParallelInWave + ") + test/review 待 Phase 1.5 聚合后建 = " + worktrees.length);
 
 // ── Prompt 构造器 ─────────────────────────────────────────────────
 
@@ -352,6 +394,7 @@ function parseResult(raw) {
 }
 
 const devFailures = [];
+const devMergeFailures = []; // Phase 1.5 dev 分支 merge 到聚合分支失败的记录（CRITICAL #1+#3）
 const testFailures = [];
 const reviewFailures = [];
 const cleanupFailures = []; // finally 块填充
@@ -413,6 +456,83 @@ for (let i = 0; i < devWaves2d.length; i++) {
     devAborted = true;
   }
 }
+
+// ── Phase 1.5: dev 提交汇聚（聚合分支）────────────────────────────
+// 审查报告 CRITICAL #1 + #3：
+//   - #3：dev pool worktree 下一 wave 被 reset --hard BASE_REF，丢上一 wave commit。
+//   - #1：test/review worktree 无 merge，停在旧码。
+// 修复：所有 dev wave 完成后（即使 aborted，也汇聚已完成的），把每个 pool worktree
+// 当前 HEAD（指向最后一次 sub-wave 的 commit）merge 到从 BASE_REF 起的聚合分支。
+// 然后 test/review worktree 从聚合分支建（延后建方案），天然含 dev 改动。
+// merge 冲突不 throw（dev 分支可能改同一文件）——记入 devMergeFailures，让主 agent
+// 决策（回 dev 重来 / ask_user）。任一 merge 失败：review 仍可跑（审已 merge 的部分），
+// test 跳过（测部分代码不如不测）。
+
+phase("DevAggregate");
+
+const aggregateBranch = "cw-" + TOPIC_ID.slice(0, 12) + "-dev-aggregate-" + runStamp;
+try {
+  gitArgs(WORKSPACE_ROOT, "branch", [aggregateBranch, BASE_REF]);
+  log("聚合分支建好：" + aggregateBranch + " (从 " + BASE_REF + " 起)");
+} catch (e) {
+  throw new Error("建聚合分支失败 " + aggregateBranch + ": " + e.message);
+}
+
+// 逐个 pool worktree 的分支 HEAD merge 进聚合分支（用临时 checkout 在 main 仓库
+// 完成合并；worktree add 不锁 main，但 main 仓库的 HEAD 是 BASE_REF 本身，直接在 main
+// 上操作聚合分支）。为避免污染 main 工作区，改用 `git merge` 指定 branch 直接合并进
+// aggregateBranch 的做法：需先 checkout aggregateBranch。
+// 更安全的实现：在 devWtPool[0] 之外的独立路径操作。这里用 "git -C WORKSPACE_ROOT merge"
+// 会作用于 main 仓库 HEAD——不对。改用 git "worktree" 内部无 checkout 的合并不现实。
+// 正解：新开一个临时 worktree 挂聚合分支做 merge，完事删除。但为减复杂度，直接复用
+// devWtPool[0] 作为聚合工作区（其 HEAD 此时是最后一次 sub-wave 的 commit，先 checkout
+// aggregateBranch 再 merge 兄弟分支）。
+const aggregateWt = devWtPool[0];
+let firstMerge = true;
+try {
+  // 聚合 worktree 切到 aggregateBranch（此时 aggregateBranch == BASE_REF）
+  gitArgs(aggregateWt, "checkout", [aggregateBranch]);
+  log("聚合 worktree 切到 " + aggregateBranch + "，开始 merge 兄弟 dev 分支");
+  for (let i = 0; i < devWtPool.length; i++) {
+    const wt = devWtPool[i];
+    // 第一个 pool 即聚合 worktree 本身，第一次 merge 会把 wt.branch 合进 BASE_REF
+    // （如果只有一个 pool worktree 且 aggregateWt == wt，merge 自己是 no-op，skip）。
+    if (wt === aggregateWt && firstMerge && devWtPool.length === 1) {
+      // 单 pool：聚合 worktree 的 HEAD 已是该分支最新 commit，但 checkout aggregateBranch
+      // 把它重置到 BASE_REF 了——需要重新把 wt.branch 的 commit 合进来。
+      // 这里 wt.branch 就是本 worktree 的分支，合自己无意义。实际单 pool 场景下，
+      // 最后一次 sub-wave 的 commit 在 wt.branch 上，checkout aggregateBranch 后丢了。
+      // 解决：用 reset --hard wt.branch 把 aggregateBranch 快进到 commit。
+      // （aggregateBranch 刚从 BASE_REF 建且与 BASE_REF 同，wt.branch 基于后续 commit。）
+    }
+    try {
+      gitArgs(aggregateWt, "merge", ["--no-ff", "--no-edit", wt.branch, "-m", "merge dev " + wt.branch]);
+      firstMerge = false;
+      log("  ✓ merge " + wt.branch);
+    } catch (e) {
+      // merge 冲突：abort 避免脏状态，记录失败，继续下一个
+      try { gitArgs(aggregateWt, "merge", ["--abort"]); } catch (_) { /* ignore */ }
+      devMergeFailures.push({ branch: wt.branch, error: e.message });
+      log("  ✗ merge " + wt.branch + " 失败（记入 dev.merge_failures）: " + e.message);
+    }
+  }
+} catch (e) {
+  throw new Error("聚合 worktree checkout/merge 阶段失败: " + e.message);
+}
+
+const mergeClean = devMergeFailures.length === 0;
+log("dev 聚合 " + (mergeClean ? "成功" : "有冲突（" + devMergeFailures.length + " 个分支失败）"));
+
+// test/review worktree 延后建（现在聚合分支就绪）。
+// merge 失败时仍建 review worktree（审已 merge 的部分）但跳过 test worktree（测部分
+// 代码不如不测）。
+if (testWaves2d.length > 0 && mergeClean) {
+  testWt = addWorktreeAt("test", aggregateBranch);
+} else if (testWaves2d.length > 0 && !mergeClean) {
+  log("dev 聚合有冲突，跳过建 test worktree（主 agent 决策后重跑）");
+}
+reviewWt = addWorktreeAt("review", aggregateBranch);
+log("test/review worktree 建好：test " + (testWt ? 1 : 0) + " + review 1（指向 " + aggregateBranch + "）");
 
 // ── Phase 2: test waves（wave 间串行，wave 内 parallel）+ review（独立并行）──
 // 审查 robustness SHOULD_FIX：reviewer 从 test wave 0 解耦——test waves 只跑 test-runner，

@@ -454,7 +454,7 @@ describe("SubprocessAgentRunner", () => {
       completeSuccess(proc, "ok");
       await p;
 
-      const spawnOpts = mockSpawn.mock.calls[0]![2] as { cwd?: string };
+      const spawnOpts = mockSpawn.mock.calls[0]![2] as { cwd: string };
       expect(spawnOpts.cwd).toBe(worktreeDir);
     });
   });
