@@ -2,8 +2,8 @@
 // 运行命令：npx vitest run src/__tests__/config-loader.test.ts
 
 import { mkdirSync, mkdtempSync, rmSync,writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { homedir, tmpdir } from "node:os";
+import { join, resolve } from "node:path";
 
 import { afterEach,beforeEach, describe, expect, it } from "vitest";
 
@@ -11,6 +11,7 @@ import {
   getWorkflow,
   invalidateCache,
   loadWorkflows,
+  loadWorkflowsForTest,
 } from "../infra/config-loader";
 
 // ── Helpers ──────────────────────────────────────────────────
@@ -39,6 +40,38 @@ function writeScript(dir: string, name: string, content: string): string {
   const path = join(dir, `${name}.js`);
   writeFileSync(path, content, "utf-8");
   return path;
+}
+
+// ═══════════════════════════════════════════════════════════════
+// Tests
+// ═══════════════════════════════════════════════════════════════
+
+// ── npm package manifest helpers ─────────────────────────────
+
+function writePackageJson(dir: string, content: Record<string, unknown>): void {
+  writeFileSync(join(dir, "package.json"), JSON.stringify(content, null, 2), "utf-8");
+}
+
+function makeNpmPackage(
+  pkgName: string,
+  piField: Record<string, unknown>,
+  scriptFiles?: Array<{ name: string; content: string }>,
+): string {
+  const pkgDir = join(tmpRoot, "node_modules", pkgName);
+  mkdirSync(pkgDir, { recursive: true });
+  writePackageJson(pkgDir, { name: pkgName, pi: piField });
+
+  if (scriptFiles) {
+    for (const { name, content } of scriptFiles) {
+      const filePath = join(pkgDir, name);
+      // Ensure parent directories exist for nested paths
+      const parentDir = filePath.substring(0, filePath.lastIndexOf("/"));
+      mkdirSync(parentDir, { recursive: true });
+      writeFileSync(filePath, content, "utf-8");
+    }
+  }
+
+  return pkgDir;
 }
 
 // ═══════════════════════════════════════════════════════════════
@@ -179,9 +212,184 @@ module.exports = { meta };`,
       expect(workflows).toHaveLength(1);
       expect(workflows[0].name).toBe("esm-workflow");
     });
+
+ // ── npm package manifest discovery ──────────────────────────
+
+    describe("npm package manifest discovery", () => {
+      it("U1: discovers workflow from npm package with pi.workflows manifest", async () => {
+        makeNpmPackage("@zhushanwen/pi-example", {
+          workflows: ["./workflows/greet.js"],
+        }, [
+          {
+            name: "workflows/greet.js",
+            content: `const meta = { name: 'npm-greet', description: 'NPM workflow', phases: ['hello'] };`,
+          },
+        ]);
+
+        const workflows = await loadWorkflowsForTest([join(tmpRoot, "node_modules")]);
+        expect(workflows).toHaveLength(1);
+        expect(workflows[0].name).toBe("npm-greet");
+        expect(workflows[0].description).toBe("NPM workflow");
+        expect(workflows[0].available).toBe(true);
+      });
+
+      it("U2: resolves relative paths from manifest to absolute paths", async () => {
+        makeNpmPackage("@zhushanwen/pi-example", {
+          workflows: ["./workflows/build.js"],
+        }, [
+          {
+            name: "workflows/build.js",
+            content: `const meta = { name: 'build', description: 'Build workflow', phases: ['compile'] };`,
+          },
+        ]);
+
+        const workflows = await loadWorkflowsForTest([join(tmpRoot, "node_modules")]);
+        expect(workflows).toHaveLength(1);
+ // Normalize paths to handle macOS /private/var symlink
+        expect(workflows[0].path).toContain("/node_modules/@zhushanwen/pi-example/workflows/build.js");
+      });
+
+      it("U3: npm package workflows have correct source 'saved'", async () => {
+        makeNpmPackage("@zhushanwen/pi-example", {
+          workflows: ["./test.js"],
+        }, [
+          {
+            name: "test.js",
+            content: `const meta = { name: 'npm-test', description: '', phases: [] };`,
+          },
+        ]);
+
+        const workflows = await loadWorkflowsForTest([join(tmpRoot, "node_modules")]);
+        expect(workflows).toHaveLength(1);
+        expect(workflows[0].source).toBe("saved");
+      });
+
+      it("U4: handles scoped packages (@scope/pkg)", async () => {
+        makeNpmPackage("@zhushanwen/pi-workflows", {
+          workflows: ["./deploy.js"],
+        }, [
+          {
+            name: "deploy.js",
+            content: `const meta = { name: 'deploy', description: 'Deploy workflow', phases: ['build', 'push'] };`,
+          },
+        ]);
+
+        const workflows = await loadWorkflowsForTest([join(tmpRoot, "node_modules")]);
+        expect(workflows).toHaveLength(1);
+        expect(workflows[0].name).toBe("deploy");
+        expect(workflows[0].phases).toEqual(["build", "push"]);
+      });
+
+      it("U5: npm package workflows have priority over user-level workflows", async () => {
+        // Create user-level workflow
+        const userDir = join(tmpRoot, ".pi", "agent", "workflows");
+        mkdirSync(userDir, { recursive: true });
+        writeScript(
+          userDir,
+          "same-name",
+          `const meta = { name: 'same-name', description: 'User version', phases: ['user'] };`,
+        );
+
+        // Create npm package workflow with same name
+        makeNpmPackage("@zhushanwen/pi-example", {
+          workflows: ["./same-name.js"],
+        }, [
+          {
+            name: "same-name.js",
+            content: `const meta = { name: 'same-name', description: 'NPM version', phases: ['npm'] };`,
+          },
+        ]);
+
+        const workflows = await loadWorkflowsForTest([join(tmpRoot, "node_modules")]);
+        expect(workflows).toHaveLength(1);
+        expect(workflows[0].name).toBe("same-name");
+        expect(workflows[0].description).toBe("NPM version");
+      });
+
+      it("E1: ignores npm packages without pi.workflows and without workflows/ dir", async () => {
+        // Package without pi.workflows and without workflows/ directory → truly ignored
+        makeNpmPackage("@zhushanwen/pi-no-workflows", {
+          extensions: ["./index.ts"],
+        }, []);
+
+        const workflows = await loadWorkflowsForTest([join(tmpRoot, "node_modules")]);
+        expect(workflows).toHaveLength(0);
+      });
+
+      it("U2-fallback: discovers workflows from workflows/ dir when no pi.workflows manifest", async () => {
+        // plan.md U2: npm 包无 pi.workflows 但有 workflows/ 目录 → fallback 到硬编码目录扫描
+        makeNpmPackage("@zhushanwen/pi-fallback-pkg", {
+          extensions: ["./index.ts"],
+        }, [
+          {
+            name: "workflows/fallback-script.js",
+            content: `const meta = { name: 'fallback-wf', description: 'found via dir scan', phases: [] };`,
+          },
+        ]);
+
+        const workflows = await loadWorkflowsForTest([join(tmpRoot, "node_modules")]);
+        const fb = workflows.find((w) => w.name === "fallback-wf");
+        expect(fb).toBeDefined();
+        expect(fb!.available).toBe(true);
+      });
+
+      it("E2: ignores npm packages with missing workflow script files", async () => {
+        makeNpmPackage("@zhushanwen/pi-broken", {
+          workflows: ["./workflows/missing.js"],
+        }, []);
+
+        const workflows = await loadWorkflowsForTest([join(tmpRoot, "node_modules")]);
+        expect(workflows).toHaveLength(0);
+      });
+
+      it("E4: handles malformed pi.workflows manifest gracefully", async () => {
+        // pi.workflows is not an array
+        makeNpmPackage("@zhushanwen/pi-bad-manifest", {
+          workflows: "not-an-array",
+        });
+
+        const workflows = await loadWorkflowsForTest([join(tmpRoot, "node_modules")]);
+        expect(workflows).toHaveLength(0);
+      });
+    });
   });
 
- // ── getWorkflow ───────────────────────────────────────────
+  // ── E3: real-layer 端到端（真实全局 npm 目录发现）──
+  // 与 mock 测试不同：创建 fixture 到 ~/.pi/agent/npm/node_modules，调生产 loadWorkflows()，测后清理
+  describe("E3 real: discovers workflow from real global npm directory", () => {
+    const GLOBAL_NPM = resolve(homedir(), ".pi", "agent", "npm", "node_modules", "@zhushanwen", "pi-workflow-fixture");
+
+    afterEach(() => {
+      rmSync(GLOBAL_NPM, { recursive: true, force: true });
+      invalidateCache();
+    });
+
+    it("discovers workflow declared via pi.workflows in real global npm dir", async () => {
+      mkdirSync(join(GLOBAL_NPM, "workflows"), { recursive: true });
+      writeFileSync(
+        join(GLOBAL_NPM, "package.json"),
+        JSON.stringify({
+          name: "@zhushanwen/pi-workflow-fixture",
+          version: "0.0.0-fixture",
+          type: "module",
+          pi: { workflows: ["./workflows/fixture-demo.js"] },
+        }),
+        "utf-8",
+      );
+      writeFileSync(
+        join(GLOBAL_NPM, "workflows", "fixture-demo.js"),
+        `const meta = { name: 'fixture-demo', description: 'E3 real fixture', phases: [{ title: 'Demo' }] };`,
+        "utf-8",
+      );
+      invalidateCache();
+
+      const workflows = await loadWorkflows();
+      const fixture = workflows.find((w) => w.name === "fixture-demo");
+      expect(fixture).toBeDefined();
+      expect(fixture!.source).toBe("saved");
+      expect(fixture!.available).toBe(true);
+    });
+  });
 
   describe("getWorkflow()", () => {
     it("returns undefined for non-existent workflow", async () => {
