@@ -54,6 +54,12 @@ export const TRANSITIONS: Partial<Record<CwAction, TransitionRule>> = {
     requirePhaseComplete: "test",
   },
   closeout: { expectedStatuses: ["retrospected"], nextStatus: "closed" },
+  replan: {
+    // 改进项 3 append-only replan：plan 后/dev 中追加 wave/testCase，v1 仅 lite
+    expectedStatuses: ["planned", "developed"],
+    nextStatus: "planned",
+    progressive: true,
+  },
 };
 
 // ── 三重 guard ───────────────────────────────────────────────
@@ -371,6 +377,24 @@ export function buildNextAction(action: CwAction, topic: CwTopic): NextAction {
       return {
         guidance:
           "topic 已关闭（closed）。本次编码流程结束，所有交付物已归档，_cw.db 进入终态。",
+      };
+    }
+    case "replan": {
+      // 兜底：replan handler 自构造 nextAction（含 replanSummary），不走 buildNextAction。
+      // 若意外走到，按 dev/test gatePassed 分流。
+      if (!computeGatePassed("dev", topic)) {
+        return {
+          action: "dev",
+          skill: "coding-execute",
+          guidance: "replan 完成。下一步：调 cw(dev) 提交新 wave commit。",
+          waves: waveProgress(topic),
+        };
+      }
+      return {
+        action: "test",
+        skill: "coding-execute",
+        guidance: "replan 完成。dev gate 通过，下一步：调 cw(test) 跑测试。",
+        testCases: testCaseProgress(topic),
       };
     }
   }

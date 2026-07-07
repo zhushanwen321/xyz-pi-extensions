@@ -56,7 +56,7 @@ describe("coding-workflow SDK contract [MANDATORY]", () => {
     expect(typeof captured!.execute).toBe("function");
   });
 
-  it("parameters schema includes action enum with 8 values", () => {
+  it("parameters schema includes action enum with 9 values", () => {
     let capturedSchema: { properties?: Record<string, unknown> } | undefined;
     const pi = mockExtensionApi({
       registerTool: (tool: { parameters: { properties?: Record<string, unknown> } }) => {
@@ -66,7 +66,7 @@ describe("coding-workflow SDK contract [MANDATORY]", () => {
     registerCodingWorkflowTool(pi);
     const actionProp = capturedSchema!.properties!.action as { enum?: string[] };
     expect(actionProp.enum).toEqual([
-      "create", "plan", "clarify", "detail", "dev", "test", "retrospect", "closeout",
+      "create", "plan", "clarify", "detail", "dev", "test", "retrospect", "closeout", "replan",
     ]);
   });
 

@@ -36,7 +36,8 @@ export type CwAction =
   | "dev"
   | "test"
   | "retrospect"
-  | "closeout";
+  | "closeout"
+  | "replan";
 
 // ── judgeByExpected 密封判定（内化自 test-orchestrator/state.ts） ──
 

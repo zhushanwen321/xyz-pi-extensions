@@ -20,6 +20,7 @@ import { type CreateParams,handleCreate } from "./cw/actions/create.js";
 import { type DetailParams,handleDetail } from "./cw/actions/detail.js";
 import { type DevParams,handleDev } from "./cw/actions/dev.js";
 import { handlePlan, type PlanParams } from "./cw/actions/plan.js";
+import { handleReplan, type ReplanParams } from "./cw/actions/replan.js";
 import { handleRetrospect, type RetrospectParams } from "./cw/actions/retrospect.js";
 import { handleTest, type TestParams } from "./cw/actions/test.js";
 import { GateRunner, GitValidator } from "./cw/gates.js";
@@ -45,7 +46,7 @@ import type { ActionDeps, ActionResult } from "./cw/types.js";
 // cases 引用 TestCaseSubmissionSchema（caseId 必填 + lite/mid 分支字段 optional）。
 const CwParamsSchema = Type.Object({
   action: StringEnum([
-    "create", "plan", "clarify", "detail", "dev", "test", "retrospect", "closeout",
+    "create", "plan", "clarify", "detail", "dev", "test", "retrospect", "closeout", "replan",
   ] as const),
   // 通用定位
   topicId: Type.Optional(Type.String()),
@@ -72,7 +73,7 @@ const CwParamsSchema = Type.Object({
 });
 
 export type CwParams = {
-  action: "create" | "plan" | "clarify" | "detail" | "dev" | "test" | "retrospect" | "closeout";
+  action: "create" | "plan" | "clarify" | "detail" | "dev" | "test" | "retrospect" | "closeout" | "replan";
   topicId?: string;
   slug?: string;
   tier?: "lite" | "mid";
@@ -110,6 +111,8 @@ export function dispatch(params: CwParams, deps: ActionDeps): ActionResult {
       return handleRetrospect(params as RetrospectParams, deps);
     case "closeout":
       return handleCloseout(params as CloseoutParams, deps);
+    case "replan":
+      return handleReplan(params as ReplanParams, deps);
     default:
       throw new Error(`unknown action: ${(params as { action?: string }).action}`);
   }
