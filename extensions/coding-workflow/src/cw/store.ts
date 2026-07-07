@@ -540,6 +540,26 @@ export class CwStore {
       .run(...binds);
   }
 
+  // ── replan DAO（append-only replan，改进项 3）──────────────
+  // replaceUncommittedWaves：保留已 committed 的 wave（committed IS NOT NULL），
+  // 删除未 committed 的残留 + INSERT 新 plan.json 的未 committed wave。
+  // 用于 replan handler 事务内同步 plan.json 到 DB。
+  replaceUncommittedWaves(topicId: string, waves: WaveSeed[]): void {
+    this.db
+      .prepare(`DELETE FROM wave WHERE topic_id = ? AND committed IS NULL`)
+      .run(topicId);
+    this.insertWaves(topicId, waves);
+  }
+
+  // replaceUnpassedTestCases：保留已 passed 的 testCase（status='passed'），
+  // 删除非 passed 的 + INSERT 新 plan.json 的非 passed case。
+  replaceUnpassedTestCases(topicId: string, cases: TestCaseSeed[]): void {
+    this.db
+      .prepare(`DELETE FROM test_case WHERE topic_id = ? AND status != 'passed'`)
+      .run(topicId);
+    this.insertTestCases(topicId, cases);
+  }
+
   // ── gate_history DAO ───────────────────────────────────────
 
   appendGateHistory(topicId: string, entry: GateHistorySeed): void {
