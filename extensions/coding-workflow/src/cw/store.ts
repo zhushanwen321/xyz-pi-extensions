@@ -56,6 +56,20 @@ import type {
 
 export const SCHEMA_VERSION = 4;
 
+/**
+ * 各 schema 版本的语义边界（migrate 用）。每个版本对应一次结构变更：
+ *   V2: topic 加 topicDir（ROOT-01）；V3: testCase 加 requiresScreenshot（P0）；
+ *   V4: testCase 加 dependsOn + parallelGroup（ADR-029 决策 4）。
+ */
+const SCHEMA_V = {
+  topicDirAdded: 2,
+  requiresScreenshotAdded: 3,
+  dependsOnAdded: 4,
+} as const;
+
+/** JSON 序列化缩进（2 spaces，可读性 + 紧凑性平衡）。 */
+const JSON_INDENT = 2;
+
 // ── JSON 文件结构（4 集合，对应原 4 表） ──────────────────────
 
 /**
@@ -215,17 +229,19 @@ export class CwStore {
   private migrate(data: CwJsonFile): void {
     const from = data.schemaVersion;
 
-    if (data.schemaVersion < 2) {
+    // 各版本迁移边界：V2 补 topicDir、V3 补 requiresScreenshot、V4 补 dependsOn。
+    // 版本号对应原 sqlite 的 PRAGMA user_version（见文件头注释）。
+    if (data.schemaVersion < SCHEMA_V.topicDirAdded) {
       for (const t of data.topics) {
         if (t.topicDir === undefined) t.topicDir = "";
       }
     }
-    if (data.schemaVersion < 3) {
+    if (data.schemaVersion < SCHEMA_V.requiresScreenshotAdded) {
       for (const tc of data.testCases) {
         if (tc.requiresScreenshot === undefined) tc.requiresScreenshot = false;
       }
     }
-    if (data.schemaVersion < 4) {
+    if (data.schemaVersion < SCHEMA_V.dependsOnAdded) {
       for (const tc of data.testCases) {
         if (tc.dependsOn === undefined) tc.dependsOn = [];
         // parallelGroup 缺失保持 undefined（与原 sqlite NULL → undefined 一致）
@@ -252,7 +268,7 @@ export class CwStore {
    * 任一阶段 crash，磁盘上要么旧文件完整要么新文件完整。
    */
   private flushToDisk(): void {
-    const json = JSON.stringify(this.fileData, null, 2);
+    const json = JSON.stringify(this.fileData, null, JSON_INDENT);
     const tmpPath = this.dbPath + ".tmp";
 
     // 1. 写临时文件
@@ -322,8 +338,9 @@ export class CwStore {
     if (!this.lockHeld) return;
     try {
       unlinkSync(this.lockPath);
-    } catch {
-      // best-effort：锁文件可能已被 stale lock 机制清理
+    } catch (e) {
+      // best-effort：锁文件可能已被 stale lock 机制清理（并发持有者 break）
+      void e;
     }
     this.lockHeld = false;
   }
@@ -362,8 +379,9 @@ export class CwStore {
   private breakStaleLock(): void {
     try {
       unlinkSync(this.lockPath);
-    } catch {
-      // best-effort
+    } catch (e) {
+      // best-effort：锁文件已被释放或并发 break
+      void e;
     }
   }
 

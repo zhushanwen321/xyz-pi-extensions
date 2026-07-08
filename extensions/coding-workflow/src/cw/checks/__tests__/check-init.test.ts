@@ -20,7 +20,7 @@ const tmpDirs: string[] = [];
 afterEach(() => {
   while (tmpDirs.length > 0) {
     const d = tmpDirs.pop()!;
-    try { rmSync(d, { recursive: true, force: true }); } catch { /* best-effort */ }
+    try { rmSync(d, { recursive: true, force: true }); } catch (e) { void e; /* best-effort */ }
   }
 });
 

@@ -8,7 +8,7 @@
  *   - 类型检查器子进程：用 vi.hoisted + vi.mock 配置 ENOENT（SKIP）/pass，不真跑 tsc
  */
 
-import { mkdirSync, mkdtempSync, writeFileSync, rmSync, existsSync, readFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync,rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -24,14 +24,10 @@ const typecheckMode = vi.hoisted(() => ({ mode: "skip" as "skip" | "pass" | "fai
 vi.mock("node:child_process", () => ({
   execFileSync: () => {
     if (typecheckMode.mode === "skip") {
-      const e = new Error("spawn tsc ENOENT");
-      (e as { code?: string }).code = "ENOENT";
-      throw e;
+      throw Object.assign(new Error("spawn tsc ENOENT"), { code: "ENOENT" });
     }
     if (typecheckMode.mode === "fail") {
-      const e = new Error("type error");
-      (e as { stderr?: string }).stderr = "TS1234: bad type";
-      throw e;
+      throw Object.assign(new Error("type error"), { stderr: "TS1234: bad type" });
     }
     return "";
   },
@@ -43,7 +39,7 @@ afterEach(() => {
   typecheckMode.mode = "skip"; // 重置为默认（SKIP）
   while (tmpDirs.length > 0) {
     const d = tmpDirs.pop()!;
-    try { rmSync(d, { recursive: true, force: true }); } catch { /* best-effort */ }
+    try { rmSync(d, { recursive: true, force: true }); } catch (e) { void e; /* best-effort */ }
   }
 });
 

@@ -27,7 +27,7 @@ vi.mock("node:child_process", () => ({
   execFileSync: mocks.execFileSync,
 }));
 
-import { GateRunner, GATE_REGISTRY, type GateContext, GitValidator, lookupGateTier, runGate } from "../gates.js";
+import { GATE_REGISTRY, type GateContext, GateRunner, GitValidator, lookupGateTier, runGate } from "../gates.js";
 import type { CwTopic } from "../types.js";
 
 // ── fixtures ─────────────────────────────────────────────────
@@ -203,6 +203,8 @@ describe("GateRunner.runCheck dispatch", () => {
   it("check 函数 crash（throw）→ infraError 兜底", () => {
     // check_clarity 已实现；传 null topicDir 让 join(null, ...) throw → dispatch catch 兜底。
     // 这模拟 check 函数内部意外异常（文件系统错、解析错等）。
+    // 故意传 null 让 join(null, ...) throw——测 crash 兜底路径，类型违规是测试意图
+    // eslint-disable-next-line taste/no-unsafe-cast -- 测试专用：故意传错类型触发异常
     const out = runner.runCheck("check_clarity.py", null as unknown as string);
     expect(out.passed).toBe(false);
     expect(out.infraError).toMatch(/crashed|crash/i);

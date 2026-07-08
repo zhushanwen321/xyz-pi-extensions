@@ -6,7 +6,7 @@
  * 让 resolveProjectRoot 能正确推算 project_root。
  */
 
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync, existsSync } from "node:fs";
+import { existsSync,mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -21,7 +21,7 @@ const SLUG = "add-search-feature";
 afterEach(() => {
   while (tmpDirs.length > 0) {
     const d = tmpDirs.pop()!;
-    try { rmSync(d, { recursive: true, force: true }); } catch { /* best-effort */ }
+    try { rmSync(d, { recursive: true, force: true }); } catch (e) { void e; /* best-effort */ }
   }
 });
 

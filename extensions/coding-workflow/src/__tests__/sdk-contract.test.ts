@@ -23,12 +23,19 @@ import codingWorkflowExtension, { registerCodingWorkflowTool } from "../index.js
  */
 function mockExtensionApi(overrides: Record<string, unknown> = {}): ExtensionAPI {
   const noop = (): void => { /* test mock */ };
-  return new Proxy<ExtensionAPI>(overrides as unknown as ExtensionAPI, {
-    get(target, prop: string | symbol): unknown {
-      if (prop in target) return target[prop as keyof ExtensionAPI];
-      return noop;
+  // Proxy mock：target 是 Record<string, unknown>，与 ExtensionAPI 结构不兼容。
+  // Proxy 的 get trap 在运行时把缺失方法短路为 noop，类型层面无法表达。
+  // 双重断言不可避免——见 taste/no-unsafe-cast 规则「确认源类型与目标类型确实不兼容」豁免。
+  return new Proxy<ExtensionAPI>(
+    // eslint-disable-next-line taste/no-unsafe-cast -- Proxy mock，运行时 get trap 保证结构安全
+    overrides as unknown as ExtensionAPI,
+    {
+      get(target, prop: string | symbol): unknown {
+        if (prop in target) return target[prop as keyof ExtensionAPI];
+        return noop;
+      },
     },
-  });
+  );
 }
 
 describe("coding-workflow SDK contract [MANDATORY]", () => {
@@ -64,7 +71,8 @@ describe("coding-workflow SDK contract [MANDATORY]", () => {
       },
     });
     registerCodingWorkflowTool(pi);
-    const actionProp = capturedSchema!.properties!.action as { enum?: string[] };
+    // capturedSchema.properties.action 是 typebox 编译产物，enum 字段存 StringEnum 值
+    const actionProp = capturedSchema!.properties!.action as Record<string, unknown>;
     expect(actionProp.enum).toEqual([
       "create", "plan", "clarify", "detail", "dev", "test", "retrospect", "closeout", "replan",
     ]);

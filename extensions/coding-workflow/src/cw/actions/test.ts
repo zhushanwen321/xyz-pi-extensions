@@ -20,8 +20,8 @@ import {
   computeNextStatus,
   guard,
 } from "../state-machine.js";
-import { judgeByExpected } from "../types.js";
 import type { ActionDeps, ActionResult, Actual, CwTopic, TestCase } from "../types.js";
+import { judgeByExpected } from "../types.js";
 
 export interface TestCaseSubmission {
   caseId: string;

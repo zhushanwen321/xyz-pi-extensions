@@ -17,14 +17,14 @@
 import { join } from "node:path";
 
 import {
-  CheckReport,
   checkFileExists,
   checkFrontmatterVerdict,
   checkNoPlaceholders,
+  type CheckOutput,
+  CheckReport,
   checkRequiredSections,
   checkReviewVerdict,
   findAll,
-  type CheckOutput,
 } from "./shared.js";
 
 const DELIVERABLE = "requirements.md";

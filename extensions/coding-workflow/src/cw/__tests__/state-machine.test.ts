@@ -18,9 +18,7 @@
 
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
-import { CwStore } from "../store.js";
 import {
-  TRANSITIONS,
   buildNextAction,
   checkCacheConsistency,
   checkLinear,
@@ -28,7 +26,9 @@ import {
   computeGatePassed,
   computeNextStatus,
   guard,
+  TRANSITIONS,
 } from "../state-machine.js";
+import { CwStore } from "../store.js";
 import type {
   CwAction,
   CwTopic,

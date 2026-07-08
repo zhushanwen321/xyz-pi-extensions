@@ -13,10 +13,11 @@
 import { join } from "node:path";
 
 import {
-  CheckReport,
   checkFileExists,
   checkFrontmatterVerdict,
   checkNoPlaceholders,
+  type CheckOutput,
+  CheckReport,
   checkRequiredSections,
   checkReviewVerdict,
   extractBlockedBy,
@@ -24,7 +25,6 @@ import {
   extractPLevels,
   extractSection,
   readText,
-  type CheckOutput,
 } from "./shared.js";
 
 const DELIVERABLE = "issues.md";
@@ -58,7 +58,8 @@ export function runCheckIssues(topicDir: string): CheckOutput {
     const level = pLevels[issueNum];
     if (level === "P0" || level === "P1") {
       const solutionCount = (body.match(/方案\s*[A-Z]|####\s*方案/g) ?? []).length;
-      if (solutionCount < 2) {
+      const MIN_SOLUTIONS_FOR_P0P1 = 2; // P0/P1 issue 至少 2 方案对比
+      if (solutionCount < MIN_SOLUTIONS_FOR_P0P1) {
         insufficientSolutions.push(`#${issueNum}(${level}): 仅 ${solutionCount} 方案`);
       }
     }

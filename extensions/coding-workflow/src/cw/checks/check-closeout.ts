@@ -20,11 +20,11 @@ import { existsSync, readdirSync, statSync } from "node:fs";
 import { basename, join } from "node:path";
 
 import {
+  type CheckOutput,
   CheckReport,
   parseFrontmatter,
   readText,
   resolveProjectRoot,
-  type CheckOutput,
 } from "./shared.js";
 
 /** 可能的沉淀去向文档（ADR 单独处理，因其在子目录）。 */
@@ -35,8 +35,9 @@ function findDoc(projectRoot: string, name: string): string | null {
   for (const c of [join(projectRoot, name), join(projectRoot, "docs", name)]) {
     try {
       if (statSync(c).isFile()) return c;
-    } catch {
+    } catch (e) {
       /* not found */
+      void e;
     }
   }
   return null;
@@ -47,8 +48,9 @@ function findAdrDir(projectRoot: string): string | null {
   for (const c of [join(projectRoot, "docs", "adr"), join(projectRoot, "adr")]) {
     try {
       if (statSync(c).isDirectory()) return c;
-    } catch {
+    } catch (e) {
       /* not found */
+      void e;
     }
   }
   return null;

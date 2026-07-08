@@ -16,8 +16,8 @@
  */
 
 import { lookupGateTier } from "../gates.js";
-import { parseLitePlan } from "../plan-parser.js";
 import type { ParsedLitePlan } from "../plan-parser.js";
+import { parseLitePlan } from "../plan-parser.js";
 import {
   computeGatePassed,
   computeNextStatus,
@@ -26,6 +26,7 @@ import {
 import type {
   ActionDeps,
   ActionResult,
+  CwAction,
   TestCase,
   Wave,
 } from "../types.js";
@@ -245,7 +246,7 @@ export function handleReplan(params: ReplanParams, deps: ActionDeps): ActionResu
 
   // nextAction 分流：按 dev/test gatePassed 决定下一步
   const devGate = computeGatePassed("dev", finalTopic);
-  let nextActionName: string;
+  let nextActionName: CwAction;
   let nextGuidance: string;
   if (!devGate) {
     nextActionName = "dev";
@@ -267,7 +268,7 @@ export function handleReplan(params: ReplanParams, deps: ActionDeps): ActionResu
     gatePassed: finalTopic.gatePassed,
     gateTier,
     nextAction: {
-      action: nextActionName as never,
+      action: nextActionName,
       guidance: nextGuidance,
       waves: finalTopic.waves.map((w) => ({ id: w.id, committed: w.committed !== null })),
       testCases: finalTopic.testCases.map((c) => ({ id: c.id, status: c.status })),

@@ -21,10 +21,10 @@ import { existsSync, mkdirSync, statSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 
 import {
+  type CheckOutput,
   CheckReport,
   iterSourceFiles,
   readText,
-  type CheckOutput,
 } from "./shared.js";
 
 // ── 骨架判定（ASCII-only 占位符） ─────────────────────────────
@@ -317,8 +317,9 @@ function extractArchitectureModules(content: string): string[] {
     const line = raw.trim();
     if (!line.startsWith("|") || line.includes("---")) continue;
     const cells = line.split("|").map((c) => c.trim());
-    // cells[0] 空（首尾 |），cells[1] 第一列
-    if (cells.length >= 2) {
+    // cells[0] 空（首尾 |），cells[1] 第一列；表格至少 2 个 cell（首空 + 一列）
+    const MIN_TABLE_CELLS = 2;
+    if (cells.length >= MIN_TABLE_CELLS) {
       const name = cells[1];
       if (name && name !== "模块") names.push(name); // 跳表头
     }
@@ -378,8 +379,9 @@ function writeBootstrapReport(
     if (!existsSync(harnessDir)) mkdirSync(harnessDir, { recursive: true });
     const reportPath = join(harnessDir, "_bootstrap-check.md");
     writeFileSync(reportPath, renderBootstrapMarkdown(report, docRoot), "utf8");
-  } catch {
+  } catch (e) {
     // 诊断报告写入失败不阻断主流程（软 gate 语义）
+    void e;
   }
 }
 

@@ -13,17 +13,17 @@
 import { join } from "node:path";
 
 import {
-  CheckReport,
   checkFileExists,
   checkFrontmatterVerdict,
   checkNoPlaceholders,
+  type CheckOutput,
+  CheckReport,
   checkRequiredSections,
   checkReviewVerdict,
   extractSection,
   findAll,
   hasHeading,
   readText,
-  type CheckOutput,
 } from "./shared.js";
 
 const DELIVERABLE = "system-architecture.md";
@@ -115,7 +115,8 @@ function checkModelRelationDiagram(report: CheckReport, modelSection: string): v
   const modelRows = modelSection.match(/\|\s*\*\*([^*]+)\*\*\s*\|/g) ?? [];
   const modelCount = modelRows.length;
 
-  if (modelCount < 2) {
+  const MIN_MODELS_FOR_GRAPH = 2; // < 2 个模型（单模型/纯 DTO）画图为噪音
+  if (modelCount < MIN_MODELS_FOR_GRAPH) {
     report.addSkip("模型关联图", `模型数 ${modelCount} <= 1（单模型/纯 DTO，画图为噪音）`);
     return;
   }

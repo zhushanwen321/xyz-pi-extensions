@@ -26,9 +26,9 @@
 import { existsSync, readFileSync } from "node:fs";
 
 import {
+  type CheckOutput,
   CheckReport,
   extractSection,
-  type CheckOutput,
 } from "./shared.js";
 
 // mock 层唯一合法 status（单测/mock E2E 必须真跑通过）
@@ -38,6 +38,10 @@ const HEADER_RE = /用例\s*ID|用例id|用例\s*编号/i;
 // mid/full 格式的测试执行层 → real 映射。unit 是隔离层（mock），
 // integration/e2e/perf-chaos/perf/chaos 都涉及真实集成/环境（real）。
 const MID_LAYER_REAL = new Set(["integration", "e2e", "perf-chaos", "perf", "chaos"]);
+// FAIL 报错清单截断上限（避免 detail 过长刷屏）
+const ERR_LIST_MAX = 5;
+// 表格行至少需要的列数（id + 至少 1 个值列）
+const MIN_TABLE_COLS = 2;
 
 interface ResultItem {
   id?: unknown;
@@ -124,7 +128,7 @@ export function runCheckExecute(planPath: string, resultsPath?: string): CheckOu
   if (dupIds.length > 0) {
     report.addFail(
       "test-results 无重复 id",
-      `${dupIds.length} 个 id 重复: ${JSON.stringify([...new Set(dupIds)].sort().slice(0, 5))}` +
+      `${dupIds.length} 个 id 重复: ${JSON.stringify([...new Set(dupIds)].sort().slice(0, ERR_LIST_MAX))}` +
         `（test-runner 不应产出重复条目，会静默覆盖）`,
     );
   }
@@ -186,15 +190,15 @@ export function runCheckExecute(planPath: string, resultsPath?: string): CheckOu
 
   // 汇总判定
   if (mockMissing.length > 0) {
-    report.addFail("mock 层用例无结果（逃逸路径①）", `${mockMissing.length} 条缺执行结果: ${JSON.stringify(mockMissing.slice(0, 5))}`);
+    report.addFail("mock 层用例无结果（逃逸路径①）", `${mockMissing.length} 条缺执行结果: ${JSON.stringify(mockMissing.slice(0, ERR_LIST_MAX))}`);
   } else {
     report.addPass("mock 层用例全覆盖", `${mockPass} 条 pass`);
   }
   if (mockBad.length > 0) {
-    report.addFail("mock 层非 pass", `${mockBad.length} 条未通过: ${JSON.stringify(mockBad.slice(0, 5))}（mock 层必须真跑 pass）`);
+    report.addFail("mock 层非 pass", `${mockBad.length} 条未通过: ${JSON.stringify(mockBad.slice(0, ERR_LIST_MAX))}（mock 层必须真跑 pass）`);
   }
   if (realMissing.length > 0) {
-    report.addFail("real 层用例无结果（逃逸路径①）", `${realMissing.length} 条缺执行结果: ${JSON.stringify(realMissing.slice(0, 5))}`);
+    report.addFail("real 层用例无结果（逃逸路径①）", `${realMissing.length} 条缺执行结果: ${JSON.stringify(realMissing.slice(0, ERR_LIST_MAX))}`);
   } else {
     report.addPass("real 层用例全覆盖", `pass=${realPass} user-skipped=${realUserSkippedOk}`);
   }
@@ -207,7 +211,7 @@ export function runCheckExecute(planPath: string, resultsPath?: string): CheckOu
   ];
   for (const [bucket, name, advice] of failBuckets) {
     if (bucket.length > 0) {
-      report.addFail(name, `${bucket.length} 条: ${JSON.stringify(bucket.slice(0, 5))} — ${advice}`);
+      report.addFail(name, `${bucket.length} 条: ${JSON.stringify(bucket.slice(0, ERR_LIST_MAX))} — ${advice}`);
     }
   }
 
@@ -284,7 +288,7 @@ function parseE2eCases(mdPath: string): Record<string, string> {
     if (!s.startsWith("|")) continue;
     if (HEADER_RE.test(line)) continue;
     const cells = splitRow(line);
-    if (cells.length < 2) continue;
+    if (cells.length < MIN_TABLE_COLS) continue;
     const m = cells[0]!.match(/^(E\d+(?:-r)?)\b/);
     if (!m || !m[1]) continue;
     const caseId = m[1];
@@ -330,7 +334,7 @@ function parseMidManifest(mdPath: string): Record<string, string> {
     if (!s.startsWith("|")) continue;
     if (HEADER_RE.test(line)) continue;
     const cells = splitRow(line);
-    if (cells.length < 2) continue;
+    if (cells.length < MIN_TABLE_COLS) continue;
     const m = cells[0]!.match(/^T(\d+\.\d+)\b/);
     if (!m || !m[1]) continue;
     const caseId = "T" + m[1];
@@ -375,7 +379,7 @@ function loadResults(
   if (Array.isArray(data)) {
     items = data;
   } else if (data !== null && typeof data === "object" && "results" in data) {
-    const wrapped = (data as { results?: unknown }).results;
+    const wrapped = (data as Record<string, unknown>).results;
     items = Array.isArray(wrapped) ? wrapped : [];
   } else {
     items = [];

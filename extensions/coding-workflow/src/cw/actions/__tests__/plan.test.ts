@@ -109,7 +109,8 @@ describe("handlePlan", () => {
     const jsonString = JSON.stringify(makeLitePlan());
     expect(() =>
       handlePlan(
-        // 故意违反类型（模拟 LLM 运行时传错），用 unknown 中转避免 TS 拦截
+        // 故意违反类型（模拟 LLM 运行时传错）：planJson 期望 object，实际传 string
+        // eslint-disable-next-line taste/no-unsafe-cast -- 测试专用：故意传错类型测校验路径
         { action: "plan", topicId: created.topicId, planJson: jsonString as unknown as object },
         deps,
       ),

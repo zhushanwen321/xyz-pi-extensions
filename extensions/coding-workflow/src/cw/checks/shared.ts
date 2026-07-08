@@ -16,7 +16,7 @@
  *   - 失败硬阻断：toOutput 返回 passed:false，GateRunner 据此记 gate fail
  */
 
-import { existsSync, mkdirSync, readFileSync, readdirSync, statSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 
 // ── CheckOutput（与 gates.ts 的 CheckOutput 结构兼容，单一来源） ──
@@ -44,6 +44,11 @@ const SKIP = "⏭️ SKIP";
  */
 const PLACEHOLDER_RE =
   /\{\{[^}]+\}\}|\{[a-zA-Z_][a-zA-Z0-9_.\-]*\}|\b(TODO|TBD|FIXME|XXX)\b/g;
+
+/** 错误清单显示截断（避免单条报错过长淹没输出）。 */
+const ERROR_LIST_TRUNCATE = 5;
+/** 代码块围栏成对判定基数（``` 围栏成对出现，奇数 = 在代码块内）。 */
+const PAIR_BASE = 2;
 
 // ── CheckReport ──────────────────────────────────────────────
 
@@ -227,8 +232,9 @@ export function parseFrontmatter(mdPath: string): Record<string, string> {
     if (val.includes(" #")) {
       val = val.split(" #")[0]!.trim();
     }
-    // 去首尾同引号
-    if (val.length >= 2 && val[0] && val[0] === val[val.length - 1] && /^[\"']$/.test(val[0])) {
+    // 去首尾同引号（至少 2 字符才可能成对包裹）
+    const MIN_QUOTED_LEN = 2;
+    if (val.length >= MIN_QUOTED_LEN && val[0] && val[0] === val[val.length - 1] && /^[\"']$/.test(val[0])) {
       val = val.slice(1, -1);
     }
     result[key] = val;
@@ -365,7 +371,7 @@ export function checkNoPlaceholders(report: CheckReport, name: string, mdPath: s
   const matches = content.match(PLACEHOLDER_RE) ?? [];
   const real = matches.filter((m) => !isLegitPlaceholder(content, m));
   if (real.length > 0) {
-    report.addFail(name, `发现 ${real.length} 处占位符: ${JSON.stringify(real.slice(0, 5))}`);
+    report.addFail(name, `发现 ${real.length} 处占位符: ${JSON.stringify(real.slice(0, ERROR_LIST_TRUNCATE))}`);
   } else {
     report.addPass(name, "无未替换占位符");
   }
@@ -383,7 +389,8 @@ function isLegitPlaceholder(content: string, match: string): boolean {
     if (idx >= 0) {
       const before = content.slice(0, idx);
       const fenceCount = (before.match(/```/g) ?? []).length;
-      if (fenceCount % 2 === 1) return true; // 在代码块内
+      // 围栏成对出现：奇数个 = 在代码块内（合法 TODO 上下文）
+      if (fenceCount % PAIR_BASE === 1) return true;
     }
   }
   return false;
@@ -463,8 +470,9 @@ function walk(dir: string, out: string[], exts: readonly string[]): void {
       } else if (exts.some((e) => entry.name.endsWith(e))) {
         out.push(full);
       }
-    } catch {
-      // stat 失败（symlink 等），跳过
+    } catch (e) {
+      // stat 失败（symlink 等），跳过——遍历不因单个坏文件中断
+      void e;
     }
   }
 }

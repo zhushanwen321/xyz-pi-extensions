@@ -27,22 +27,36 @@ import { existsSync, statSync } from "node:fs";
 import { join, relative } from "node:path";
 
 import {
-  CheckReport,
   checkFileExists,
   checkFrontmatterVerdict,
   checkNoPlaceholders,
+  type CheckOutput,
+  CheckReport,
   checkRequiredSections,
   checkReviewVerdict,
   countLines,
   extractSection,
   iterSourceFiles,
   readText,
-  type CheckOutput,
 } from "./shared.js";
 
 const DELIVERABLE = "code-architecture.md";
 const SKELETON_DIR = "code-skeleton";
 const GOD_OBJECT_THRESHOLD = 600; // 骨架阶段阈值（实现期回到 400）
+
+/** 报错清单截断（避免单条报错过长淹没输出）。 */
+const ERR_LIST_MAX = 5;
+/** 行预览截断长度（报错时展示行前缀）。 */
+const LINE_PREVIEW_LEN = 40;
+/** 错误消息截断（skip 用短、fail 用长）。 */
+const ERR_MSG_SHORT = 60;
+const ERR_MSG_LONG = 120;
+/** 表格 cell 最小数量（| 首尾分割后至少 2 cell）。 */
+const MIN_TABLE_CELLS = 2;
+/** 标识符最小长度（过滤单字符噪音）。 */
+const MIN_IDENT_LEN = 2;
+/** grep pattern 最小长度（太短误报多）。 */
+const MIN_PATTERN_LEN = 2;
 
 // 骨架源文件扩展名——比 shared 默认多 .go / .java，让多语言项目可检
 const SKEL_EXTS = [".ts", ".tsx", ".py", ".rs", ".js", ".jsx", ".go", ".java"];
@@ -121,11 +135,11 @@ function checkTestMatrix(report: CheckReport, testMatrix: string): void {
       .filter((l) => l.trim().startsWith("|") && !l.includes("----") && (l.includes("代码测试") || l.includes("NFR")));
     const rowsWithoutId = nfrRows
       .filter((row) => !/T\d+\.\d+/.test(row))
-      .map((row) => row.trim().slice(0, 40));
+      .map((row) => row.trim().slice(0, LINE_PREVIEW_LEN));
     if (rowsWithoutId.length > 0) {
       report.addFail(
         "来源 B 用例 ID 映射",
-        `${rowsWithoutId.length} 行 NFR 映射缺用例 ID: ${JSON.stringify(rowsWithoutId.slice(0, 2))}`,
+        `${rowsWithoutId.length} 行 NFR 映射缺用例 ID: ${JSON.stringify(rowsWithoutId.slice(0, MIN_TABLE_CELLS))}`,
       );
     } else {
       report.addPass("来源 B 用例 ID 映射", "来源 B 行均映射到用例 ID");
@@ -213,7 +227,7 @@ function checkGodObject(report: CheckReport, skeletonPath: string, srcFiles: str
   if (overLimit.length > 0) {
     report.addFail(
       `god object（>${GOD_OBJECT_THRESHOLD} 行）`,
-      `${overLimit.length} 个文件超限: ${JSON.stringify(overLimit.slice(0, 3))}`,
+      `${overLimit.length} 个文件超限: ${JSON.stringify(overLimit.slice(0, ERR_LIST_MAX))}`,
     );
   } else {
     report.addPass(`god object（>${GOD_OBJECT_THRESHOLD} 行）`, `最大文件 ${maxLoc} 行`);
@@ -248,9 +262,9 @@ function checkTypecheck(report: CheckReport, skeletonPath: string): void {
       report.addPass(reportName, `${name} 通过`);
     } catch (e) {
       if (isENOENT(e)) {
-        report.addSkip(reportName, `${name} 不可用: ${errMsg(e).slice(0, 60)}`);
+        report.addSkip(reportName, `${name} 不可用: ${errMsg(e).slice(0, ERR_MSG_SHORT)}`);
       } else {
-        report.addFail(reportName, `${name} 失败: ${errMsg(e).slice(0, 120)}`);
+        report.addFail(reportName, `${name} 失败: ${errMsg(e).slice(0, ERR_MSG_LONG)}`);
       }
     }
   }
@@ -273,7 +287,7 @@ function checkArchGrepPatterns(report: CheckReport, archMd: string, skeletonPath
   for (const m of acLines) {
     const pat = m[1]!;
     const rawPath = m[2]!;
-    if (pat.endsWith("/") || pat.length <= 2) continue;
+    if (pat.endsWith("/") || pat.length <= MIN_PATTERN_LEN) continue;
     if (rawPath.endsWith("/")) continue; // 目录级作用域保留
     checked += 1;
     // 项目路径 → 骨架路径映射：剥掉 src-electron/{runtime,renderer,shared}/src/ 前缀
@@ -291,7 +305,7 @@ function checkArchGrepPatterns(report: CheckReport, archMd: string, skeletonPath
   if (violations.length > 0) {
     report.addFail(
       "②§11 架构规则（③）",
-      `${violations.slice(0, 3).join("; ")}（违反②架构决策的层级/依赖方向）`,
+      `${violations.slice(0, ERR_LIST_MAX).join("; ")}（违反②架构决策的层级/依赖方向）`,
     );
   } else if (checked > 0) {
     report.addPass(
@@ -337,7 +351,7 @@ function checkOrphanMethods(report: CheckReport, mdPath: string, skeletonPath: s
     const line = rawLine.trim();
     if (!line.startsWith("|") || line.includes("----")) continue;
     const cells = line.split("|").map((c) => c.trim());
-    if (cells.length < 2) continue;
+    if (cells.length < MIN_TABLE_CELLS) continue;
     // cells[0] 为空（| 开头），cells[1] 是第一列
     const firstCell = cells[1]!;
     const secondCell = cells[2] ?? "";
@@ -346,7 +360,7 @@ function checkOrphanMethods(report: CheckReport, mdPath: string, skeletonPath: s
     if (firstCell.startsWith("#")) continue;
     const candidates = [firstCell, secondCell].filter((c) => /^[A-Za-z_][A-Za-z0-9_]*$/.test(c));
     for (const c of candidates) {
-      if (c.length >= 2 && !["参数", "返回", "边界", "签名"].includes(c)) {
+      if (c.length >= MIN_IDENT_LEN && !["参数", "返回", "边界", "签名"].includes(c)) {
         methodNames.add(c);
       }
     }
@@ -367,7 +381,7 @@ function checkOrphanMethods(report: CheckReport, mdPath: string, skeletonPath: s
   if (missing.length > 0) {
     report.addFail(
       "orphan 方法（③f）",
-      `${missing.length} 个 §3 方法在骨架无定义: ${JSON.stringify(missing.slice(0, 5))}` +
+      `${missing.length} 个 §3 方法在骨架无定义: ${JSON.stringify(missing.slice(0, ERR_LIST_MAX))}` +
         `（设计写了骨架没落地，orphan）`,
     );
   } else {
@@ -426,10 +440,18 @@ function isENOENT(e: unknown): boolean {
   );
 }
 
+/** execFileSync 抛出的错误挂载 stderr 属性（Node ErrorExec 异常）。 */
+function getStderr(e: Error): string | undefined {
+  // e.stderr 是 Node 子进程异常挂载的属性，Error 类型声明里不存在
+  // 用 Reflect.get 安全读取（避免类型断言绕过 taste/no-unsafe-cast）
+  const stderr = Reflect.get(e, "stderr");
+  return typeof stderr === "string" ? stderr : undefined;
+}
+
 function errMsg(e: unknown): string {
   if (e instanceof Error) {
-    // execFileSync 的 stderr 通过 e.stderr 暴露
-    const stderr = (e as { stderr?: string }).stderr;
+    // execFileSync 的 stderr 通过 getStderr 安全读取
+    const stderr = getStderr(e);
     return stderr ? `${e.message}\n${stderr}` : e.message;
   }
   return String(e);

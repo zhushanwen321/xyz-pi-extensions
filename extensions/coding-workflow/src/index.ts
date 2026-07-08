@@ -113,8 +113,11 @@ export function dispatch(params: CwParams, deps: ActionDeps): ActionResult {
       return handleCloseout(params as CloseoutParams, deps);
     case "replan":
       return handleReplan(params as ReplanParams, deps);
-    default:
-      throw new Error(`unknown action: ${(params as { action?: string }).action}`);
+    default: {
+      // default 不可达（CwParams.action 是 StringEnum 有限值），防御性报错
+      const action = (params as Record<string, unknown>).action;
+      throw new Error(`unknown action: ${String(action)}`);
+    }
   }
 }
 

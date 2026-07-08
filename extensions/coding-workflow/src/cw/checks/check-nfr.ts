@@ -17,19 +17,21 @@ import { join } from "node:path";
 
 import { extractRealIssueIds } from "./check-issues.js";
 import {
-  CheckReport,
   checkFileExists,
   checkFrontmatterVerdict,
   checkNoPlaceholders,
+  type CheckOutput,
+  CheckReport,
   checkRequiredSections,
   checkReviewVerdict,
   extractSection,
   readText,
-  type CheckOutput,
 } from "./shared.js";
 
 const DELIVERABLE = "non-functional-design.md";
 const VALID_ACCEPTANCE = new Set(["代码测试", "骨架约束", "性能混沌", "运维项"]);
+/** 报错清单截断（避免单条报错过长）。 */
+const ERR_LIST_MAX = 5;
 
 export function runCheckNfr(topicDir: string): CheckOutput {
   const report = new CheckReport("nfr");
@@ -59,8 +61,9 @@ export function runCheckNfr(topicDir: string): CheckOutput {
       for (const row of tableRows) {
         const cells = row.split("|").slice(1, -1).map((c) => c.trim());
         // 找验收方式列（倒数第2列）
-        if (cells.length >= 2) {
-          const acceptance = cells[cells.length - 2] ?? "";
+        const MIN_NFR_TABLE_CELLS = 2;
+        if (cells.length >= MIN_NFR_TABLE_CELLS) {
+          const acceptance = cells[cells.length - MIN_NFR_TABLE_CELLS] ?? "";
           const matched = [...VALID_ACCEPTANCE].filter((v) => acceptance.includes(v));
           if (matched.length === 0) {
             invalidAcceptance.push(`'${acceptance}'`);
@@ -70,7 +73,7 @@ export function runCheckNfr(topicDir: string): CheckOutput {
       if (invalidAcceptance.length > 0) {
         report.addFail(
           "验收方式列合法",
-          `${invalidAcceptance.length} 行验收方式不合法: ${JSON.stringify(invalidAcceptance.slice(0, 3))}` +
+          `${invalidAcceptance.length} 行验收方式不合法: ${JSON.stringify(invalidAcceptance.slice(0, ERR_LIST_MAX))}` +
             `（应 ∈ ${JSON.stringify([...VALID_ACCEPTANCE])}）`,
         );
       } else {
@@ -115,15 +118,17 @@ export function runCheckNfr(topicDir: string): CheckOutput {
       continue;
     }
     // 兜底原过滤：「无 ❌」前缀（如"无 ❌ 项"）
+    // 「无 ❌」前缀检测窗口（向前看 3 字符容纳「无 ❌」及混合空白）
+    const PREFIX_WINDOW = 3;
     const idx = rawLine.indexOf("❌");
-    const before = rawLine.slice(Math.max(0, idx - 3), idx);
+    const before = rawLine.slice(Math.max(0, idx - PREFIX_WINDOW), idx);
     if (before.includes("无")) continue;
     realUnacceptable.push(rawLine.trim());
   }
   if (realUnacceptable.length > 0) {
     report.addFail(
       "无 ❌ 不可接受项",
-      `残留 ${realUnacceptable.length} 处 ❌（不可接受项应已回 Step 3 重选方案）: ${JSON.stringify(realUnacceptable.slice(0, 3))}`,
+      `残留 ${realUnacceptable.length} 处 ❌（不可接受项应已回 Step 3 重选方案）: ${JSON.stringify(realUnacceptable.slice(0, ERR_LIST_MAX))}`,
     );
   } else {
     report.addPass("无 ❌ 不可接受项", "无不可接受项残留");
@@ -189,7 +194,7 @@ function checkBackfeedPhantom(
   if (phantomRefs.length > 0) {
     report.addFail(
       "回灌③指针 PHANTOM",
-      `${phantomRefs.length} 处回灌指针指向不存在的 issue: ${JSON.stringify(phantomRefs.slice(0, 5))}（issues.md 无此编号）`,
+      `${phantomRefs.length} 处回灌指针指向不存在的 issue: ${JSON.stringify(phantomRefs.slice(0, ERR_LIST_MAX))}（issues.md 无此编号）`,
     );
   } else if (checked > 0) {
     report.addPass("回灌③指针 PHANTOM", `${checked} 处回灌③指针均指向真实存在的 issue`);

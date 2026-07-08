@@ -22,15 +22,28 @@
 import { basename, join } from "node:path";
 
 import {
-  CheckReport,
   checkFileExists,
   checkNoPlaceholders,
+  type CheckOutput,
+  CheckReport,
   extractSection,
   hasHeading,
-  type CheckOutput,
 } from "./shared.js";
 
 const DELIVERABLE = "plan.md";
+
+/** markdown 表格最小可解析列数（Wave 表: Wave|文件 = 2 列）。 */
+const MIN_TABLE_COLS = 2;
+/** 单测表最小可解析列数（ID|覆盖点|输入|预期 = 4 列）。 */
+const MIN_UNITTEST_COLS = 4;
+/** 覆盖率阈值下限（业务要求 ≥60%）。 */
+const COVERAGE_THRESHOLD_MIN = 60;
+/** 报错清单显示截断（避免单条报错过长）。 */
+const ERR_LIST_MAX = 5;
+/** 报错清单短截断（错误摘要更紧凑）。 */
+const ERR_LIST_SHORT = 3;
+/** 预期列截断长度（模糊词报错只展示前缀）。 */
+const VAGUE_PREVIEW_LEN = 30;
 
 // plan.md 6 必须章节（heading 正则片段，extract_section/has_heading 用）
 const REQUIRED_SECTIONS = [
@@ -126,7 +139,7 @@ function parseWaveTable(mdPath: string): WaveRow[] {
   for (const line of section.split(/\r?\n/)) {
     if (!line.trim().startsWith("|")) continue;
     const cells = line.split("|").map((c) => c.trim()).filter((c) => c !== "");
-    if (cells.length < 2) continue;
+    if (cells.length < MIN_TABLE_COLS) continue;
     const first = cells[0]!;
     // 跳过表头/分隔行
     if (/^-+:?$/.test(first) || first.toLowerCase() === "wave" || first === "---") {
@@ -176,7 +189,7 @@ function checkParallelSafety(report: CheckReport, mdPath: string): void {
   }
   const conflicts: string[] = [];
   for (const [g, members] of groups) {
-    if (members.length < 2) continue;
+    if (members.length < MIN_TABLE_COLS) continue;
     // 两两检查文件交集
     for (let i = 0; i < members.length; i++) {
       for (let j = i + 1; j < members.length; j++) {
@@ -192,7 +205,7 @@ function checkParallelSafety(report: CheckReport, mdPath: string): void {
   if (conflicts.length > 0) {
     report.addFail("并行组文件无交集", conflicts.join("; "));
   } else {
-    const multi = [...groups.values()].filter((m) => m.length >= 2).length;
+    const multi = [...groups.values()].filter((m) => m.length >= MIN_TABLE_COLS).length;
     report.addPass(
       "并行组文件无交集",
       multi > 0 ? `${multi} 个多成员组均无文件冲突` : "无多成员并行组",
@@ -229,7 +242,7 @@ function checkTestMachineJudgable(report: CheckReport, mdPath: string): void {
   for (const line of section.split(/\r?\n/)) {
     if (!line.trim().startsWith("|")) continue;
     const cells = line.split("|").map((c) => c.trim()).filter((c) => c !== "");
-    if (cells.length < 4) continue;
+    if (cells.length < MIN_UNITTEST_COLS) continue;
     if (/^W?\d+/.test(cells[0]!) || cells[0]!.toLowerCase().startsWith("u")) {
       // 跳过表头行
       const firstLower = cells[0]!.toLowerCase();
@@ -243,26 +256,29 @@ function checkTestMachineJudgable(report: CheckReport, mdPath: string): void {
     report.addFail("单测可机器判定", "单测章节无可解析用例行");
     return;
   }
-  // 检查输入列(通常 index 2)和预期列(通常 index 3)非空
+  // 单测表列索引：ID=0, 覆盖改动点=1, 输入=2, 预期=3（类型列在最后，长度可变）
+  const COL_INPUT = 2;
+  const COL_EXPECTED = 3;
+  // 检查输入列和预期列非空
   const vagueHits: string[] = [];
   const emptyHits: string[] = [];
   for (const cells of dataRows) {
     // 预期列最可能是倒数第 2 或第 3 列（类型列在最后）
-    const expectedCol = cells.length > 3 ? cells[3]! : cells[cells.length - 1]!;
-    const inputCol = cells.length > 2 ? cells[2]! : "";
+    const expectedCol = cells.length > COL_EXPECTED ? cells[COL_EXPECTED]! : cells[cells.length - 1]!;
+    const inputCol = cells.length > COL_INPUT ? cells[COL_INPUT]! : "";
     if (!inputCol || inputCol === "-") {
       emptyHits.push(cells[0]!);
     }
     if (VAGUE_WORDS.test(expectedCol)) {
-      vagueHits.push(`${cells[0]}: ${expectedCol.slice(0, 30)}`);
+      vagueHits.push(`${cells[0]}: ${expectedCol.slice(0, VAGUE_PREVIEW_LEN)}`);
     }
   }
   if (emptyHits.length > 0) {
-    report.addFail("单测输入非空", `${emptyHits.length} 条缺输入: ${JSON.stringify(emptyHits.slice(0, 3))}`);
+    report.addFail("单测输入非空", `${emptyHits.length} 条缺输入: ${JSON.stringify(emptyHits.slice(0, ERR_LIST_SHORT))}`);
   } else if (vagueHits.length > 0) {
     report.addFail(
       "单测可机器判定",
-      `${vagueHits.length} 条含模糊词（正常工作/应该返回...）: ${JSON.stringify(vagueHits.slice(0, 3))}`,
+      `${vagueHits.length} 条含模糊词（正常工作/应该返回...）: ${JSON.stringify(vagueHits.slice(0, ERR_LIST_SHORT))}`,
     );
   } else {
     report.addPass("单测可机器判定", `${dataRows.length} 条用例输入/预期均具体`);
@@ -282,13 +298,14 @@ function checkTestCoverageOfChanges(report: CheckReport, mdPath: string): void {
   for (const line of section.split(/\r?\n/)) {
     if (!line.trim().startsWith("|")) continue;
     const cells = line.split("|").map((c) => c.trim()).filter((c) => c !== "");
-    if (cells.length < 4) continue;
+    if (cells.length < MIN_UNITTEST_COLS) continue;
     const firstLower = cells[0]!.toLowerCase();
     if (firstLower === "用例id" || firstLower === "用例 id" || firstLower === "id" || firstLower === "u") {
       continue;
     }
     // 覆盖改动点列通常是第 2 列（index 1）
-    const coveredStr = cells.length > 1 ? cells[1]! : "";
+    const COL_COVERED = 1;
+    const coveredStr = cells.length > COL_COVERED ? cells[COL_COVERED]! : "";
     for (const cp of changePoints) {
       // basename 匹配（改动点 a/b/c.ts vs 覆盖列 c.ts:fn）
       const cpBase = basename(cp);
@@ -301,7 +318,7 @@ function checkTestCoverageOfChanges(report: CheckReport, mdPath: string): void {
   if (uncovered.length > 0) {
     report.addFail(
       "改动点单测覆盖",
-      `${uncovered.length}/${changePoints.length} 个改动点无对应单测: ${JSON.stringify(uncovered.slice(0, 3))}`,
+      `${uncovered.length}/${changePoints.length} 个改动点无对应单测: ${JSON.stringify(uncovered.slice(0, ERR_LIST_SHORT))}`,
     );
   } else {
     report.addPass("改动点单测覆盖", `${changePoints.length} 个改动点均有 ≥1 条单测`);
@@ -325,7 +342,7 @@ function checkCoverageGate(report: CheckReport, mdPath: string): void {
   const threshold = thresholdMatch ? Number(thresholdMatch[1]) : 0;
   const issues: string[] = [];
   if (!hasCmd) issues.push("缺具体覆盖率命令");
-  if (threshold < 60) issues.push(`阈值 ${threshold}% < 60%（下限）`);
+  if (threshold < COVERAGE_THRESHOLD_MIN) issues.push(`阈值 ${threshold}% < ${COVERAGE_THRESHOLD_MIN}%（下限）`);
   if (issues.length > 0) {
     report.addFail("覆盖率 gate", issues.join("; "));
   } else {
@@ -368,7 +385,7 @@ function checkE2eTestLayer(report: CheckReport, mdPath: string): void {
     const s = line.trim();
     if (!s.startsWith("|")) continue;
     const cells = s.split("|").map((c) => c.trim()).filter((c) => c !== "");
-    if (cells.length < 2) continue;
+    if (cells.length < MIN_TABLE_COLS) continue;
     const first = cells[0]!;
     if (headerRe.test(line)) continue; // 表头行
     if (!/^E\d/i.test(first)) continue; // 分隔行 / 非数据行
@@ -390,12 +407,12 @@ function checkE2eTestLayer(report: CheckReport, mdPath: string): void {
   if (layerCol === null && missing.length > 0) {
     report.addFail(
       "E2E 测试层",
-      `E2E 表无「测试层」列，${missing.length} 条未标 mock/real: ${JSON.stringify(missing.slice(0, 5))}——见 test-case-schema.md 核心原则四`,
+      `E2E 表无「测试层」列，${missing.length} 条未标 mock/real: ${JSON.stringify(missing.slice(0, ERR_LIST_MAX))}——见 test-case-schema.md 核心原则四`,
     );
     return;
   }
   if (missing.length > 0) {
-    report.addFail("E2E 测试层", `${missing.length} 条未标 mock/real: ${JSON.stringify(missing.slice(0, 5))}`);
+    report.addFail("E2E 测试层", `${missing.length} 条未标 mock/real: ${JSON.stringify(missing.slice(0, ERR_LIST_MAX))}`);
     return;
   }
   const layers = dataEntries.map((e) => e.layer);

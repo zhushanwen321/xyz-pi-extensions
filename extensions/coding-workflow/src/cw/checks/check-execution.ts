@@ -16,18 +16,20 @@ import { existsSync } from "node:fs";
 import { join } from "node:path";
 
 import {
-  CheckReport,
   checkFileExists,
   checkFrontmatterVerdict,
   checkNoPlaceholders,
+  type CheckOutput,
+  CheckReport,
   checkRequiredSections,
   checkReviewVerdict,
   extractSection,
   parseFrontmatter,
-  type CheckOutput,
 } from "./shared.js";
 
 const DELIVERABLE = "execution-plan.md";
+// FAIL 报错清单截断上限（避免 detail 过长刷屏）
+const ERR_LIST_MAX = 5;
 
 export function runCheckExecution(topicDir: string): CheckOutput {
   const report = new CheckReport("execution");
@@ -82,12 +84,12 @@ export function runCheckExecution(topicDir: string): CheckOutput {
       if (missing.length > 0) {
         report.addFail(
           "验收清单 = ⑤test-matrix 全量",
-          `清单缺 ${missing.length} 个用例: ${JSON.stringify(missing.slice(0, 5))}`,
+          `清单缺 ${missing.length} 个用例: ${JSON.stringify(missing.slice(0, ERR_LIST_MAX))}`,
         );
       } else if (extra.length > 0) {
         report.addFail(
           "验收清单 = ⑤test-matrix 全量",
-          `清单多 ${extra.length} 个用例（⑤无）: ${JSON.stringify(extra.slice(0, 5))}`,
+          `清单多 ${extra.length} 个用例（⑤无）: ${JSON.stringify(extra.slice(0, ERR_LIST_MAX))}`,
         );
       } else {
         report.addPass(
