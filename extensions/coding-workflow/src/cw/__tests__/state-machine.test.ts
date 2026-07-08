@@ -622,6 +622,20 @@ describe("buildNextAction — tier+status+gatePassed 推导（#9 扁平）", () 
     expect(n.guidance).toContain("FAIL");
   });
 
+  it("detail gate 连续失败恰好达阈值（5 次）→ 触发熔断（>= 边界）", () => {
+    const fails = Array.from({ length: 5 }, (_, i) =>
+      makeGateEntry({ id: i + 1, phase: "detail", result: "fail" }),
+    );
+    const topic = makeTopic({
+      tier: "mid",
+      status: "clarified",
+      gateHistory: fails,
+    });
+    const n = buildNextAction("detail", topic);
+    expect(n.guidance).toContain("熔断");
+    expect(n.guidance).toContain("达熔断阈值 5");
+  });
+
   it("detail gate 连续失败被 pass 打断 → 重新计数（不触发熔断）", () => {
     // 6 次 fail 后 1 次 pass，再 1 次 fail——pass 打断了连续失败
     const history = [

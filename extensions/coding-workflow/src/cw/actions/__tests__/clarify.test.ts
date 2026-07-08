@@ -13,6 +13,7 @@ import { handleClarify } from "../clarify.js";
 import { handleCreate } from "../create.js";
 import {
   closeStore,
+  FAIL_CHECK,
   makeDeps,
   makeMidClarify,
   makeTmpWorkspace,
@@ -106,6 +107,34 @@ describe("handleClarify (#7 review 桩预检)", () => {
     const loaded = store.loadTopic(created.topicId);
     expect(loaded?.waves).toHaveLength(0);
     expect(loaded?.testCases).toHaveLength(0);
+
+    closeStore(store);
+  });
+
+  it("clarify gate fail：2 个 checker 全量跑完（不短路），status 不变", () => {
+    const ws = makeTmpWorkspace();
+    const { deps, store } = makeDeps(ws);
+    const created = handleCreate(
+      { action: "create", slug: "midfail", tier: "mid", objective: "x" },
+      deps,
+    );
+    writeReviewStubs(ws, "midfail", ["clarity", "architecture"]);
+
+    // gate 全 fail：验证 2 个 checker 都跑（全量报告，不 fail-fast）
+    vi.spyOn(GateRunner.prototype, "runCheck").mockReturnValue(FAIL_CHECK);
+    const result = handleClarify(
+      { action: "clarify", topicId: created.topicId, clarifyJson: makeMidClarify() },
+      deps,
+    );
+
+    // status 不变（仍 created），gatePassed.clarify 未设
+    expect(result.status).toBe("created");
+    expect(result.gatePassed.clarify).toBeFalsy();
+    // mid clarify 有 2 个 checker（check_clarity + check_architecture），全量报告都跑
+    expect(vi.mocked(GateRunner.prototype.runCheck).mock.calls.length).toBeGreaterThanOrEqual(2);
+    // nextAction 指向 retry clarify
+    expect(result.nextAction.action).toBe("clarify");
+    expect(result.mustFix).toContain("FAIL");
 
     closeStore(store);
   });

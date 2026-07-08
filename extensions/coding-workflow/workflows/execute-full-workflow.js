@@ -618,7 +618,8 @@ for (let i = 0; i < testWaves2d.length; i++) {
 // review 独立并行跑（所有 test waves 完成后，或无 testCases 时）
 // dataflow D3 防护：merge 冲突时 reviewWt 只含部分 dev 改动，review 会审部分代码——
 // 与 test 同策略（「审部分代码不如不审」），跳过 review，让主 agent 先修 merge 冲突重跑。
-if (!devMergeClean) {
+// 注意：用 mergeClean（第 550 行已算好），不用 devMergeClean（此时仍为初始 true，700 行才更新）。
+if (!mergeClean) {
   phase("Review-skipped");
   log("⚠ dev 聚合有 merge 冲突（" + devMergeFailures.length + " 分支未 merge），跳过 review（审部分代码不如不审）。主 agent 修 merge 后重跑 workflow。");
   // reviewCorrectness/reviewQuality 保持 null，reviewFailures 不 push（跳过非失败）
@@ -701,7 +702,7 @@ devMergeClean = devMergeFailures.length === 0; // 更新 try 外声明的变量
 
 let nextHint;
 if (!allDevOk) {
-  nextHint = "dev 有失败/未完成，回 dev 修失败的 wave，或 ask_user 是否降级";
+  nextHint = "dev 有失败/未完成，回 dev 修失败的 wave，或 ask_user 决策";
 } else if (!devMergeClean) {
   nextHint = "dev 聚合有 merge 冲突（dev.merge_failures 非空，共 " + devMergeFailures.length + " 个分支）。读 dev.merge_failures 看冲突分支，回阶段 A 修冲突后重跑 workflow，或 ask_user 决策";
 } else if (!allTestOk) {

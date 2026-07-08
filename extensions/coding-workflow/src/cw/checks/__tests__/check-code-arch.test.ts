@@ -282,6 +282,8 @@ describe("runCheckCodeArch（移植自 check_code_arch.py）", () => {
     writeFileSync(join(skeletonPath, "src", "big.ts"), lines.join("\n"));
     const out = runCheckCodeArch(topicDir);
     expect(out.passed).toBe(false);
+    // 错误消息含可操作的修复建议（god object 拆分方向）
+    expect(out.report).toContain("拆模块");
   });
 
   it("FAIL — 全骨架无接线（退化 Level 0）→ passed:false（③e）", () => {
@@ -298,6 +300,9 @@ describe("runCheckCodeArch（移植自 check_code_arch.py）", () => {
     ].join("\n"));
     const out = runCheckCodeArch(topicDir);
     expect(out.passed).toBe(false);
+    // 错误消息含可操作的修复建议（接线密度改进项）
+    expect(out.report).toContain("Level 1");
+    expect(out.report).toContain("this.x.foo()");
   });
 
   it("FAIL — 类型检查器返回错误（非 ENOENT）→ passed:false（③c）", () => {

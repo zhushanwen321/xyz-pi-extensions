@@ -181,6 +181,21 @@ describe("runGate", () => {
     expect(result.reports.every((r) => !r.passed)).toBe(true); // 4 个全 fail
   });
 
+  it("mid detail 部分 fail 部分 pass → passed:false + 全部 4 个 report（去短路核心价值场景）", () => {
+    // checker 1 fail，checker 2-4 pass：模拟 issues 过了但 nfr 挂了
+    const spy = vi.spyOn(GateRunner.prototype, "runCheck");
+    spy.mockReturnValueOnce(FAIL_CHECK); // check_issues fail
+    spy.mockReturnValue(PASS_CHECK); // check_nfr/code_arch/execution pass
+    const ctx = makeCtx();
+    const result = runGate(ctx, "mid", "detail");
+    expect(result.passed).toBe(false); // 有 fail 就 false
+    expect(result.reports).toHaveLength(4); // 4 个全跑了，不短路
+    expect(result.reports[0]!.passed).toBe(false); // issues fail
+    expect(result.reports[1]!.passed).toBe(true); // nfr pass
+    expect(result.reports[2]!.passed).toBe(true); // code_arch pass
+    expect(result.reports[3]!.passed).toBe(true); // execution pass
+  });
+
   it("mid detail 全 checker pass → passed:true（4 个都跑）", () => {
     vi.spyOn(GateRunner.prototype, "runCheck").mockReturnValue(PASS_CHECK);
     const ctx = makeCtx();
