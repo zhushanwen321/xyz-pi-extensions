@@ -14,9 +14,45 @@ import type {
   CwAction,
   CwStatus,
   CwTopic,
+  GateHistoryEntry,
   GuardVerdict,
   NextAction,
 } from "./types.js";
+
+// ── gate 熔断（防止无限重试耗尽预算） ──────────────────────
+
+/** 同一 phase 连续 fail 达到此阈值时，guidance 切换为「建议人工介入」。 */
+const GATE_RETRY_LIMIT = 5;
+
+/**
+ * 从 gateHistory 末尾向前数同一 phase 的连续 fail 次数。
+ * 遇到 pass 或不同 phase 即停止——只数「最近一轮连续失败」。
+ */
+function countConsecutiveGateFails(history: GateHistoryEntry[], phase: CwAction): number {
+  let count = 0;
+  for (let i = history.length - 1; i >= 0; i--) {
+    const entry = history[i]!;
+    if (entry.phase !== phase) break;
+    if (entry.result === "fail") {
+      count++;
+    } else {
+      break; // pass 打断连续失败
+    }
+  }
+  return count;
+}
+
+/**
+ * 构造熔断 guidance（连续失败超阈值时调用）。
+ * 不阻断 action 调用——agent 仍可重调 cw，但 guidance 明确提示可能存在机器检查误判。
+ */
+function buildCircuitBreakerGuidance(phase: CwAction, fails: number): string {
+  return (
+    `${phase} gate 已连续失败 ${fails} 次（超熔断阈值 ${GATE_RETRY_LIMIT}）。` +
+    `可能存在机器检查误判（如 regex 把表格单词当方法名）。建议：` +
+    `(1) 逐条检查 mustFix 报错是否合理 (2) ask_user 人工审查交付物，而非继续盲目重试。`
+  );
+}
 
 // ── 声明式转换表（§4.2 architecture 的 1:1 编码，#2 方案 A） ──
 
@@ -249,11 +285,13 @@ export function buildNextAction(action: CwAction, topic: CwTopic): NextAction {
     case "plan": {
       // plan gate fail：status 仍 created，agent 须修 mustFix 后重调 plan（勿调 dev，否则 illegal_transition）
       if (!computeGatePassed("plan", topic)) {
+        const fails = countConsecutiveGateFails(topic.gateHistory, "plan");
         return {
           action: "plan",
           skill: "lite-plan",
-          guidance:
-            "plan gate FAIL。status 仍为 created——修顶层 mustFix 列出的 fail 项后重调 cw(action=plan)，勿调 dev（会 illegal_transition）。",
+          guidance: fails >= GATE_RETRY_LIMIT
+            ? buildCircuitBreakerGuidance("plan", fails)
+            : "plan gate FAIL。status 仍为 created——修顶层 mustFix 列出的 fail 项后重调 cw(action=plan)，勿调 dev（会 illegal_transition）。",
         };
       }
       // plan gate 通过：dev
@@ -268,11 +306,13 @@ export function buildNextAction(action: CwAction, topic: CwTopic): NextAction {
     case "clarify": {
       // clarify gate fail：status 仍 created，agent 须修 mustFix 后重调 clarify
       if (!computeGatePassed("clarify", topic)) {
+        const fails = countConsecutiveGateFails(topic.gateHistory, "clarify");
         return {
           action: "clarify",
           skill: "mid-plan",
-          guidance:
-            "clarify gate FAIL。status 仍为 created——修顶层 mustFix 列出的 fail 项后重调 cw(action=clarify)，勿调 detail（会 illegal_transition）。",
+          guidance: fails >= GATE_RETRY_LIMIT
+            ? buildCircuitBreakerGuidance("clarify", fails)
+            : "clarify gate FAIL。status 仍为 created——修顶层 mustFix 列出的 fail 项后重调 cw(action=clarify)，勿调 detail（会 illegal_transition）。",
         };
       }
       // clarify gate 通过：detail
@@ -286,11 +326,13 @@ export function buildNextAction(action: CwAction, topic: CwTopic): NextAction {
     case "detail": {
       // detail gate fail：status 仍 clarified，agent 须修 mustFix 后重调 detail
       if (!computeGatePassed("detail", topic)) {
+        const fails = countConsecutiveGateFails(topic.gateHistory, "detail");
         return {
           action: "detail",
           skill: "mid-detail-plan",
-          guidance:
-            "detail gate FAIL。status 仍为 clarified——修顶层 mustFix 列出的 fail 项后重调 cw(action=detail)，勿调 dev（会 illegal_transition）。",
+          guidance: fails >= GATE_RETRY_LIMIT
+            ? buildCircuitBreakerGuidance("detail", fails)
+            : "detail gate FAIL。status 仍为 clarified——修顶层 mustFix 列出的 fail 项后重调 cw(action=detail)，勿调 dev（会 illegal_transition）。",
         };
       }
       // detail gate 通过：dev
@@ -348,11 +390,13 @@ export function buildNextAction(action: CwAction, topic: CwTopic): NextAction {
     case "retrospect": {
       // retrospect gate fail：status 仍 tested，agent 须修 mustFix 后重调 retrospect
       if (!computeGatePassed("retrospect", topic)) {
+        const fails = countConsecutiveGateFails(topic.gateHistory, "retrospect");
         return {
           action: "retrospect",
           skill: "coding-retrospect",
-          guidance:
-            "retrospect gate FAIL。status 仍为 tested——修顶层 mustFix 列出的 fail 项后重调 cw(action=retrospect)，勿调 closeout（会 illegal_transition）。",
+          guidance: fails >= GATE_RETRY_LIMIT
+            ? buildCircuitBreakerGuidance("retrospect", fails)
+            : "retrospect gate FAIL。status 仍为 tested——修顶层 mustFix 列出的 fail 项后重调 cw(action=retrospect)，勿调 closeout（会 illegal_transition）。",
         };
       }
       // retrospect gate 通过：closeout
@@ -366,11 +410,13 @@ export function buildNextAction(action: CwAction, topic: CwTopic): NextAction {
     case "closeout": {
       // closeout gate fail：status 仍 retrospected，agent 须修 mustFix 后重调 closeout
       if (!computeGatePassed("closeout", topic)) {
+        const fails = countConsecutiveGateFails(topic.gateHistory, "closeout");
         return {
           action: "closeout",
           skill: "coding-closeout",
-          guidance:
-            "closeout gate FAIL。status 仍为 retrospected——修顶层 mustFix 列出的 fail 项后重调 cw(action=closeout)。topic 尚未关闭。",
+          guidance: fails >= GATE_RETRY_LIMIT
+            ? buildCircuitBreakerGuidance("closeout", fails)
+            : "closeout gate FAIL。status 仍为 retrospected——修顶层 mustFix 列出的 fail 项后重调 cw(action=closeout)。topic 尚未关闭。",
         };
       }
       // closeout gate 通过：topic 已关闭，无后续 action（终态不可逆，§4.4）

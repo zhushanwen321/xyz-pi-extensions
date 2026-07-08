@@ -8,7 +8,7 @@
  * 覆盖：
  *   - GATE_REGISTRY 完整性（11 行表 / 4 checker / progressive 空）
  *   - lookupGateTier
- *   - runGate 串行 fail-fast + progressive 不跑 checker
+ *   - runGate 全量报告（跑完所有 checker 收集全部错误）+ progressive 不跑 checker
  *   - GateRunner.runCheck dispatch（未知 key → infraError；check crash → infraError）
  *   - GitValidator（execFileSync git 三项校验 + ENOENT throw vs 业务 fail）
  *
@@ -172,12 +172,13 @@ describe("runGate", () => {
     expect(result.reports[0]!.report).toContain("PASS");
   });
 
-  it("T2.7 — mid detail 4 checker 串行 fail-fast（首个 fail 则剩余不跑）", () => {
+  it("T2.7 — mid detail 4 checker 全量报告（首个 fail 仍跑剩余 checker 收集全部错误）", () => {
     vi.spyOn(GateRunner.prototype, "runCheck").mockReturnValue(FAIL_CHECK);
     const ctx = makeCtx();
     const result = runGate(ctx, "mid", "detail");
     expect(result.passed).toBe(false);
-    expect(result.reports).toHaveLength(1); // fail-fast 只跑了第 1 个
+    expect(result.reports).toHaveLength(4); // 全量跑完所有 checker，不再 fail-fast
+    expect(result.reports.every((r) => !r.passed)).toBe(true); // 4 个全 fail
   });
 
   it("mid detail 全 checker pass → passed:true（4 个都跑）", () => {

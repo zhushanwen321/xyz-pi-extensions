@@ -205,8 +205,9 @@ function checkPlaceholders(report: CheckReport, skeletonPath: string): void {
   if (hits.length > 0) {
     report.addFail(
       "骨架无占位符/类型逃逸（③）",
-      `${hits.join("; ")}（叶子逻辑方法体应抛 not-implemented 异常，` +
-        `非叶子方法体用接线，不用语言特定的类型逃逸）`,
+      `${hits.join("; ")}。` +
+        `修复建议：叶子逻辑方法体应抛 not-implemented 异常（如 throw new Error('not implemented') / raise NotImplementedError / panic!()），` +
+        `非叶子方法体用注入依赖接线（this.x.foo()），不用语言特定的类型逃逸（any/@ts-ignore/type:ignore/nolint）`,
     );
   } else {
     report.addPass("骨架无占位符/类型逃逸（③）", "无 TODO/eslint-disable/any/type:ignore/nolint 等逃逸");
@@ -227,7 +228,9 @@ function checkGodObject(report: CheckReport, skeletonPath: string, srcFiles: str
   if (overLimit.length > 0) {
     report.addFail(
       `god object（>${GOD_OBJECT_THRESHOLD} 行）`,
-      `${overLimit.length} 个文件超限: ${JSON.stringify(overLimit.slice(0, ERR_LIST_MAX))}`,
+      `${overLimit.length} 个文件超限: ${JSON.stringify(overLimit.slice(0, ERR_LIST_MAX))}。` +
+        `修复建议：按职责拆模块（如把「调度+持久化+协议」三职责拆成三个文件）或提取子类（Strategy/Handler）。` +
+        `注意：${GOD_OBJECT_THRESHOLD} 是骨架阶段阈值（允许更粗粒度），实现期阈值回到 400 行`,
     );
   } else {
     report.addPass(`god object（>${GOD_OBJECT_THRESHOLD} 行）`, `最大文件 ${maxLoc} 行`);
@@ -264,7 +267,12 @@ function checkTypecheck(report: CheckReport, skeletonPath: string): void {
       if (isENOENT(e)) {
         report.addSkip(reportName, `${name} 不可用: ${errMsg(e).slice(0, ERR_MSG_SHORT)}`);
       } else {
-        report.addFail(reportName, `${name} 失败: ${errMsg(e).slice(0, ERR_MSG_LONG)}`);
+        report.addFail(
+          reportName,
+          `${name} 失败: ${errMsg(e).slice(0, ERR_MSG_LONG)}。` +
+            `修复建议：骨架文件须 tsc 自包含（无外部未声明类型/缺 import）；` +
+            `进入 ${SKELETON_DIR}/ 目录跑 \`${cmd.join(" ")}\` 看完整错误详情定位行号`,
+        );
       }
     }
   }
@@ -305,7 +313,10 @@ function checkArchGrepPatterns(report: CheckReport, archMd: string, skeletonPath
   if (violations.length > 0) {
     report.addFail(
       "②§11 架构规则（③）",
-      `${violations.slice(0, ERR_LIST_MAX).join("; ")}（违反②架构决策的层级/依赖方向）`,
+      `${violations.slice(0, ERR_LIST_MAX).join("; ")}（违反②架构决策的层级/依赖方向）。` +
+        `期望格式：system-architecture.md §11 每条 AC 写成带路径作用域的 grep，` +
+        `如 \`grep -rn 'from ".*renderer.*"' src-electron/runtime/src/\`（指向具体文件/目录，验证跨层穿透）。` +
+        `非法：目录级泛搜（无 path）或与②决策无关的全局 pattern——会被跳过不报错但也不验收`,
     );
   } else if (checked > 0) {
     report.addPass(
@@ -382,7 +393,10 @@ function checkOrphanMethods(report: CheckReport, mdPath: string, skeletonPath: s
     report.addFail(
       "orphan 方法（③f）",
       `${missing.length} 个 §3 方法在骨架无定义: ${JSON.stringify(missing.slice(0, ERR_LIST_MAX))}` +
-        `（设计写了骨架没落地，orphan）`,
+        `（设计写了骨架没落地，orphan）。` +
+        `⚠️ 误判排查：本检查用 regex 从签名表提取标识符并在骨架搜 methodName(，` +
+        `若 missing 含非方法名（如表格里的类型名/状态词），给该表格单元格加反引号（如 \`complete\`）可避免误提取。` +
+        `真正的方法名需在骨架源码中有 function 声明或方法定义（this.foo = / foo() 等）。`,
     );
   } else {
     report.addPass(

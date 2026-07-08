@@ -1,5 +1,5 @@
 /**
- * detail.test.ts — detail action（UC-2 mid 后段，#4 AC-4.2 串行 fail-fast）。
+ * detail.test.ts — detail action（UC-2 mid 后段，#4 AC-4.2 全量报告）。
  *
  * 前置：先走通 clarify（create mid → review 桩 → mock pass → handleClarify）拿 clarified 态。
  */
@@ -73,7 +73,7 @@ describe("handleDetail", () => {
     closeStore(store);
   });
 
-  it("T2.7 / AC-4.2 — detail fail-fast：首个 checker fail 则剩余不跑，status 不变", () => {
+  it("T2.7 / AC-4.2 — detail 全量报告：首个 checker fail 仍跑全部 checker 收集所有错误，status 不变", () => {
     const ws = makeTmpWorkspace();
     const { deps, store } = makeDeps(ws);
     // clarify 阶段先 pass（拿到 clarified 态）
@@ -81,7 +81,7 @@ describe("handleDetail", () => {
     const topicId = setupClarifiedMidTopic(deps, "midfail");
     writeReviewStubs(ws, "midfail", ["issues", "nfr", "code-arch", "execution"]);
 
-    // detail 阶段切到 fail：mock 总返 fail → runGate 首个 checker fail 即短路
+    // detail 阶段切到 fail：mock 总返 fail → runGate 全量跑完 4 个 checker
     vi.spyOn(GateRunner.prototype, "runCheck").mockReturnValue(FAIL_CHECK);
     const callsBeforeDetail = vi.mocked(GateRunner.prototype.runCheck).mock.calls.length;
 
@@ -90,9 +90,9 @@ describe("handleDetail", () => {
       deps,
     );
 
-    // fail-fast：detail 只新跑 1 个 checker（check_issues.py）
+    // 全量报告：detail 跑完全部 4 个 checker（不再 fail-fast 短路）
     const callsAfterDetail = vi.mocked(GateRunner.prototype.runCheck).mock.calls.length;
-    expect(callsAfterDetail - callsBeforeDetail).toBe(1);
+    expect(callsAfterDetail - callsBeforeDetail).toBe(4);
 
     // status 不变（仍 clarified），gatePassed.detail 未设
     expect(result.status).toBe("clarified");
@@ -102,7 +102,7 @@ describe("handleDetail", () => {
     expect(result.nextAction.skill).toBe("mid-detail-plan");
     expect(result.mustFix).toContain("FAIL");
 
-    // gateHistory 追加 detail/fail，report 只含 1 个 checker 的输出（fail-fast）
+    // gateHistory 追加 detail/fail，report 含全部 4 个 checker 的输出（全量报告）
     const loaded = store.loadTopic(topicId);
     const detailFails = loaded?.gateHistory.filter(
       (e) => e.phase === "detail" && e.result === "fail",

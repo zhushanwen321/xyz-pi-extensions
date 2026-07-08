@@ -65,7 +65,11 @@ export function runCheckIssues(topicDir: string): CheckOutput {
     }
   }
   if (insufficientSolutions.length > 0) {
-    report.addFail("P0/P1 issue ≥2 方案对比", insufficientSolutions.join("; "));
+    report.addFail(
+      "P0/P1 issue ≥2 方案对比",
+      `${insufficientSolutions.join("; ")}。期望格式：P0/P1 issue 段内含 ≥2 个方案对比（#### 方案 A / #### 方案 B，参考 issue-template.md「方案对比」章节）；` +
+        `修复建议：补 #### 方案 B（含改动/优点/缺点/适用场景），与方案 A 横向对比后给「取舍决策」`,
+    );
   } else if (Object.keys(pLevels).length > 0) {
     report.addPass("P0/P1 issue ≥2 方案对比", "全部 P0/P1 issue 有 ≥2 方案");
   } else {
@@ -84,7 +88,11 @@ export function runCheckIssues(topicDir: string): CheckOutput {
     }
   }
   if (ghostDeps.length > 0) {
-    report.addFail("blocked_by 无幽灵依赖", ghostDeps.join("; "));
+    report.addFail(
+      "blocked_by 无幽灵依赖",
+      `${ghostDeps.join("; ")}。期望格式：**Blocked by**: #N, #M（N/M 必须是 issues.md 内 ## #N 标题定义的真实编号，无依赖写「无」）；` +
+        `修复建议：补建缺失的 issue（## #N 标题 + P 级 + 方案对比），或修正引用指向已存在的编号`,
+    );
   } else {
     report.addPass("blocked_by 无幽灵依赖", "所有 blocked_by 引用都存在");
   }
@@ -107,7 +115,9 @@ export function runCheckIssues(topicDir: string): CheckOutput {
   if (levelViolations.length > 0) {
     report.addFail(
       "P 级一致性",
-      `${levelViolations.join("; ")}（高优先级不应依赖低优先级）`,
+      `${levelViolations.join("; ")}（高优先级不应依赖低优先级）` +
+        `。期望格式：**P 级**: P0/P1/P2/P3（MoSCoW 语义，P0 阻塞项→最前 Wave 无依赖前置，P1→依赖 P0，P2/P3 可后置）；` +
+        `修复建议：下调被依赖项的 P 级至 ≤ 依赖方（如 P0 依赖的项不得为 P2/P3），或拆出 P0 子项先行解决`,
     );
   } else {
     report.addPass("P 级一致性", "P 级与 blocked_by 一致");

@@ -106,7 +106,10 @@ export function runCheckPlan(topicDir: string): CheckOutput {
 function checkRequiredSections(report: CheckReport, mdPath: string): void {
   const missing = REQUIRED_SECTIONS.filter((h) => !hasHeading(mdPath, h));
   if (missing.length > 0) {
-    report.addFail("6 必须章节", `缺失: ${JSON.stringify([...missing])}`);
+    report.addFail(
+      "6 必须章节",
+      `缺失: ${JSON.stringify([...missing])}；6 个必须章节需用确切标题：业务目标 / 技术改动点 / Wave 拆分 / 单测用例清单 / E2E 用例清单 / 覆盖率 gate，缺一不可`,
+    );
   } else {
     report.addPass("6 必须章节", "业务目标/技术改动点/Wave/单测/E2E/覆盖率 全在");
   }
@@ -119,7 +122,7 @@ function checkImplStepsHeading(report: CheckReport, mdPath: string): void {
   } else {
     report.addFail(
       "实现步骤标题",
-      "缺「## 实现步骤」——plan extension extractPlanSteps 无法提取步骤",
+      "缺「## 实现步骤」——plan extension extractPlanSteps 无法提取步骤；必须用确切标题 `## 实现步骤`，其他变体（如 `## 实现计划` / `## 实施步骤`）不被识别",
     );
   }
 }
@@ -161,7 +164,10 @@ function parseWaveTable(mdPath: string): WaveRow[] {
 function checkWaveTable(report: CheckReport, mdPath: string): void {
   const rows = parseWaveTable(mdPath);
   if (rows.length === 0) {
-    report.addFail("Wave 表", "Wave 拆分章节无可解析的 Wave 行（W1/W2...）");
+    report.addFail(
+      "Wave 表",
+      "Wave 拆分章节无可解析的 Wave 行（W1/W2...）；表头需为 `| Wave | 改动文件 | 依赖 | 并行组 |`，每行 Wave 编号必须 W1/W2 格式，改动文件列填逗号分隔的文件路径",
+    );
   } else {
     report.addPass("Wave 表", `解析到 ${rows.length} 个 Wave`);
   }
@@ -203,7 +209,10 @@ function checkParallelSafety(report: CheckReport, mdPath: string): void {
     }
   }
   if (conflicts.length > 0) {
-    report.addFail("并行组文件无交集", conflicts.join("; "));
+    report.addFail(
+      "并行组文件无交集",
+      `${conflicts.join("; ")}；同并行组的 Wave 改同一文件会在 git merge 时冲突，需拆分到不同并行组或合并为单 Wave 顺序执行`,
+    );
   } else {
     const multi = [...groups.values()].filter((m) => m.length >= MIN_TABLE_COLS).length;
     report.addPass(
@@ -274,11 +283,14 @@ function checkTestMachineJudgable(report: CheckReport, mdPath: string): void {
     }
   }
   if (emptyHits.length > 0) {
-    report.addFail("单测输入非空", `${emptyHits.length} 条缺输入: ${JSON.stringify(emptyHits.slice(0, ERR_LIST_SHORT))}`);
+    report.addFail(
+      "单测输入非空",
+      `${emptyHits.length} 条缺输入: ${JSON.stringify(emptyHits.slice(0, ERR_LIST_SHORT))}；每条单测的输入列和预期列都必须填具体值（如输入「userId=1, body={name:"x"}」、预期「{code:0}」），不可留空或填 -`,
+    );
   } else if (vagueHits.length > 0) {
     report.addFail(
       "单测可机器判定",
-      `${vagueHits.length} 条含模糊词（正常工作/应该返回...）: ${JSON.stringify(vagueHits.slice(0, ERR_LIST_SHORT))}`,
+      `${vagueHits.length} 条含模糊词（正常工作/应该返回...）: ${JSON.stringify(vagueHits.slice(0, ERR_LIST_SHORT))}；预期列禁止「正常工作」「应该返回」「行为正确」等模糊词，须写可断言的具体值（如「{code:0, data.id>0}」）`,
     );
   } else {
     report.addPass("单测可机器判定", `${dataRows.length} 条用例输入/预期均具体`);
@@ -318,7 +330,7 @@ function checkTestCoverageOfChanges(report: CheckReport, mdPath: string): void {
   if (uncovered.length > 0) {
     report.addFail(
       "改动点单测覆盖",
-      `${uncovered.length}/${changePoints.length} 个改动点无对应单测: ${JSON.stringify(uncovered.slice(0, ERR_LIST_SHORT))}`,
+      `${uncovered.length}/${changePoints.length} 个改动点无对应单测: ${JSON.stringify(uncovered.slice(0, ERR_LIST_SHORT))}；每个技术改动点文件至少 1 条单测覆盖，且单测的「覆盖改动点」列需标「文件:函数」格式（如 user.ts:createUser）以便机器匹配`,
     );
   } else {
     report.addPass("改动点单测覆盖", `${changePoints.length} 个改动点均有 ≥1 条单测`);
@@ -344,7 +356,10 @@ function checkCoverageGate(report: CheckReport, mdPath: string): void {
   if (!hasCmd) issues.push("缺具体覆盖率命令");
   if (threshold < COVERAGE_THRESHOLD_MIN) issues.push(`阈值 ${threshold}% < ${COVERAGE_THRESHOLD_MIN}%（下限）`);
   if (issues.length > 0) {
-    report.addFail("覆盖率 gate", issues.join("; "));
+    report.addFail(
+      "覆盖率 gate",
+      `${issues.join("; ")}；需含具体覆盖率命令（如「npx vitest run --coverage」或「pytest --cov=src --cov-fail-under=60」）且阈值 ≥60%`,
+    );
   } else {
     report.addPass("覆盖率 gate", `命令存在，阈值 ${threshold}% ≥60%`);
   }
@@ -407,12 +422,15 @@ function checkE2eTestLayer(report: CheckReport, mdPath: string): void {
   if (layerCol === null && missing.length > 0) {
     report.addFail(
       "E2E 测试层",
-      `E2E 表无「测试层」列，${missing.length} 条未标 mock/real: ${JSON.stringify(missing.slice(0, ERR_LIST_MAX))}——见 test-case-schema.md 核心原则四`,
+      `E2E 表无「测试层」列，${missing.length} 条未标 mock/real: ${JSON.stringify(missing.slice(0, ERR_LIST_MAX))}——见 test-case-schema.md 核心原则四；E2E 表必须新增「测试层」列，每行值填 mock 或 real，且 mock 层与 real 层各至少 1 条`,
     );
     return;
   }
   if (missing.length > 0) {
-    report.addFail("E2E 测试层", `${missing.length} 条未标 mock/real: ${JSON.stringify(missing.slice(0, ERR_LIST_MAX))}`);
+    report.addFail(
+      "E2E 测试层",
+      `${missing.length} 条未标 mock/real: ${JSON.stringify(missing.slice(0, ERR_LIST_MAX))}；每条 E2E 用例的「测试层」列必须填 mock 或 real，real 无环境时不可省略，应标 [需集成环境]`,
+    );
     return;
   }
   const layers = dataEntries.map((e) => e.layer);

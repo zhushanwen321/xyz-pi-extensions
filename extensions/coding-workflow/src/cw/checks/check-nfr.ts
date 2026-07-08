@@ -74,7 +74,9 @@ export function runCheckNfr(topicDir: string): CheckOutput {
         report.addFail(
           "验收方式列合法",
           `${invalidAcceptance.length} 行验收方式不合法: ${JSON.stringify(invalidAcceptance.slice(0, ERR_LIST_MAX))}` +
-            `（应 ∈ ${JSON.stringify([...VALID_ACCEPTANCE])}）`,
+            `（应 ∈ ${JSON.stringify([...VALID_ACCEPTANCE])}）` +
+            `。期望格式：缓解项回灌表「验收方式」列填 代码测试 / 骨架约束 / 性能混沌 / 运维项 之一（四选一，见模板「验收方式取值」表）；` +
+            `修复建议：校验/拦截/降级类填「代码测试」，签名/字段/锁存在性填「骨架约束」，压测/混沌 SLA 填「性能混沌」，纯部署配置填「运维项」`,
         );
       } else {
         report.addPass("验收方式列合法", `${tableRows.length} 行缓解项均标了合法验收方式`);
@@ -128,7 +130,9 @@ export function runCheckNfr(topicDir: string): CheckOutput {
   if (realUnacceptable.length > 0) {
     report.addFail(
       "无 ❌ 不可接受项",
-      `残留 ${realUnacceptable.length} 处 ❌（不可接受项应已回 Step 3 重选方案）: ${JSON.stringify(realUnacceptable.slice(0, ERR_LIST_MAX))}`,
+      `残留 ${realUnacceptable.length} 处 ❌（不可接受项应已回 Step 3 重选方案）: ${JSON.stringify(realUnacceptable.slice(0, ERR_LIST_MAX))}` +
+        `。❌ 必须在 ③issues 前置阶段消解（重选方案或降级风险），不可残留到 ④detail gate；` +
+        `修复建议：回 issues.md 对应 issue 补「方案 A/方案 B」对比重选，或在本表「残余风险登记」登记接受理由并改标 ⚠️`,
     );
   } else {
     report.addPass("无 ❌ 不可接受项", "无不可接受项残留");
@@ -194,7 +198,9 @@ function checkBackfeedPhantom(
   if (phantomRefs.length > 0) {
     report.addFail(
       "回灌③指针 PHANTOM",
-      `${phantomRefs.length} 处回灌指针指向不存在的 issue: ${JSON.stringify(phantomRefs.slice(0, ERR_LIST_MAX))}（issues.md 无此编号）`,
+      `${phantomRefs.length} 处回灌指针指向不存在的 issue: ${JSON.stringify(phantomRefs.slice(0, ERR_LIST_MAX))}（issues.md 无此编号）` +
+        `。期望格式：回灌表「回灌去向=③issue」的行写 #issue-id（如 #7），且 issues.md 中必须存在对应 ## #N 标题定义；` +
+        `修复建议：补建缺失的 issue（带 ## #N 标题 + P 级 + 方案对比），或修正指针指向已存在的编号`,
     );
   } else if (checked > 0) {
     report.addPass("回灌③指针 PHANTOM", `${checked} 处回灌③指针均指向真实存在的 issue`);

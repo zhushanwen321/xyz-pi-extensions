@@ -592,6 +592,55 @@ describe("buildNextAction — tier+status+gatePassed 推导（#9 扁平）", () 
     expect(n.guidance).toContain("FAIL");
   });
 
+  it("detail gate 连续失败超阈值 → guidance 含熔断提示（建议人工介入）", () => {
+    const fails = Array.from({ length: 6 }, (_, i) =>
+      makeGateEntry({ id: i + 1, phase: "detail", result: "fail" }),
+    );
+    const topic = makeTopic({
+      tier: "mid",
+      status: "clarified",
+      gateHistory: fails,
+    });
+    const n = buildNextAction("detail", topic);
+    expect(n.guidance).toContain("熔断");
+    expect(n.guidance).toContain("连续失败 6 次");
+    // 不阻断 action 调用——agent 仍可重调，只是 guidance 变了
+    expect(n.action).toBe("detail");
+  });
+
+  it("detail gate 连续失败未超阈值 → guidance 不含熔断提示（正常重试引导）", () => {
+    const fails = Array.from({ length: 4 }, (_, i) =>
+      makeGateEntry({ id: i + 1, phase: "detail", result: "fail" }),
+    );
+    const topic = makeTopic({
+      tier: "mid",
+      status: "clarified",
+      gateHistory: fails,
+    });
+    const n = buildNextAction("detail", topic);
+    expect(n.guidance).not.toContain("熔断");
+    expect(n.guidance).toContain("FAIL");
+  });
+
+  it("detail gate 连续失败被 pass 打断 → 重新计数（不触发熔断）", () => {
+    // 6 次 fail 后 1 次 pass，再 1 次 fail——pass 打断了连续失败
+    const history = [
+      ...Array.from({ length: 6 }, (_, i) =>
+        makeGateEntry({ id: i + 1, phase: "detail", result: "fail" }),
+      ),
+      makeGateEntry({ id: 7, phase: "detail", result: "pass" }),
+      makeGateEntry({ id: 8, phase: "detail", result: "fail" }),
+    ];
+    const topic = makeTopic({
+      tier: "mid",
+      status: "clarified",
+      gateHistory: history,
+    });
+    const n = buildNextAction("detail", topic);
+    // pass 后重新计数，最近只连续 1 次 fail，不触发熔断
+    expect(n.guidance).not.toContain("熔断");
+  });
+
   it("dev 全 committed → test / coding-execute（test 阶段对齐 SKILL.md）+ waves 全 committed + testCases 预览", () => {
     const topic = makeTopic({
       status: "developed",

@@ -3,7 +3,7 @@
  *
  * 内容：
  *   - GATE_REGISTRY 声明式数组（§5.2 的 11 行表 1:1 编码，#4 方案 A）
- *   - runGate 通用执行器（串行 fail-fast，§5.3）
+ *   - runGate 通用执行器（全量报告：跑完所有 checker 后合并返回，§5.3）
  *   - lookupGateTier（progressive gate 透传 gateTier 到 gateHistory）
  *   - GateRunner（dispatch 到 checks/ 下的 TS check 函数，原 python subprocess 已移除）
  *   - GitValidator（execFileSync adapter，#3，真引 git 三项校验）
@@ -117,7 +117,11 @@ function findRule(tier: Tier, phase: CwAction): GateRule {
 }
 
 /**
- * 通用 gate 执行器（single-shot 用，§5.3 串行 fail-fast）。
+ * 通用 gate 执行器（single-shot 用，§5.3 全量报告）。
+ *
+ * 全量跑完所有 checker 后合并返回——避免 fail-fast 导致用户修一层冒一层
+ * （如 detail 的 issues→nfr→code-arch→execution 4 层，fail-fast 时每次只报一层）。
+ * 全量返回所有层的错误，用户可一次修完。
  *
  * progressive phase（dev/test）不在 runGate 跑 checker——action handler 自跑
  * GitValidator/judgeByExpected（per-item 容错，#3 方案 A）。runGate 对 progressive
@@ -126,15 +130,13 @@ function findRule(tier: Tier, phase: CwAction): GateRule {
 export function runGate(ctx: GateContext, tier: Tier, phase: CwAction): GateResult {
   const rule = findRule(tier, phase);
   const reports: CheckerResult[] = [];
+  let allPassed = true;
   for (const checker of rule.checkers) {
     const r = checker(ctx);
     reports.push(r);
-    if (!r.passed) {
-      // fail-fast：剩余 checker 不跑（#4 AC-4.2）。
-      return { passed: false, gateTier: rule.gateTier, reports };
-    }
+    if (!r.passed) allPassed = false; // 不再 fail-fast，继续跑后续 checker 收集全部错误
   }
-  return { passed: true, gateTier: rule.gateTier, reports };
+  return { passed: allPassed, gateTier: rule.gateTier, reports };
 }
 
 /** progressive gate 透传 gateTier 到 gateHistory（dev/test action 用）。 */
