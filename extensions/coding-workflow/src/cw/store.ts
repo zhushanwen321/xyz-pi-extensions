@@ -121,6 +121,8 @@ interface TestCaseRecord {
   requiresScreenshot?: boolean;
   dependsOn?: string[];
   parallelGroup?: string;
+  file?: string;
+  describe?: string;
 }
 
 /** GateHistoryRecord — gate_history 集合的元素（对应原 gate_history 表），含 topicId 外键。 */
@@ -557,6 +559,8 @@ export class CwStore {
       requiresScreenshot: r.requiresScreenshot === true,
       dependsOn: r.dependsOn ?? [],
       parallelGroup: r.parallelGroup,
+      file: r.file,
+      describe: r.describe,
     };
   }
 
@@ -646,6 +650,8 @@ export class CwStore {
           requiresScreenshot: c.requiresScreenshot === true,
           dependsOn: c.dependsOn,
           parallelGroup: c.parallelGroup,
+          file: c.file,
+          describe: c.describe,
         };
         this.fileData!.testCases.push(record);
       }
@@ -717,6 +723,8 @@ export class CwStore {
           requiresScreenshot: c.requiresScreenshot === true,
           dependsOn: c.dependsOn,
           parallelGroup: c.parallelGroup,
+          file: c.file,
+          describe: c.describe,
         });
       }
     });

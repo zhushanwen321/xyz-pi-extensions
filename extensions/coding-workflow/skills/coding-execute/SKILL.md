@@ -42,6 +42,15 @@ test+review（渐进式 cw test）→ cleanup。workflow 内 parallel() 必派 a
 > 主 agent 只做：① 调 workflow（传 topicId/topicDir/planPath/workspaceRoot）② 读 workflow return（next_hint）
 > ③ 按 next_hint 决策（回 dev 修 / ask_user 决策 fail case / proceed to 收尾）。
 > cw(dev/test) 的调用由 workflow 内每个 agent 完成后渐进式发起（决策 3 修订），主 agent 不再手动组装 cw dev/test 入参。
+>
+> **[铁律] 禁止 fallback 到主 agent 直接实现。** workflow 失败（3 轮重试全败 / 工具不可用 / budget 耗尽）时，
+> 主 agent **绝不允许**自行派 implementer/test-runner subagent 接手写代码。**必须调 `ask_user` 通知用户**，由用户决策：
+> - 修复 workflow 问题后重跑
+> - 调整 plan/设计后重跑
+> - 放弃此 topic
+>
+> 主 agent 直接写代码绕过了 workflow 的 ensemble 审查（多路 reviewer + test-runner 独立验证），违反 ADR-029 的机器强制原则。
+> 即使 workflow 完全不可用，也不得主 agent 自行实现——宁可停下来等用户决策，也不可静默降级。
 
 ## 前置检查
 
@@ -138,8 +147,9 @@ workflow return 含 `next_hint`，主 agent 按提示决策：
 > 这是 ADR-029 决策 3 修订的必然结果：渐进式 cw 让状态在 workflow 运行中就入库，return 只报 infra 问题。
 
 **Step 4: 失败循环**
-任一阶段失败回阶段 A 修复后重跑 workflow（限 3 轮）。超限 → goal_control(action=update, status=time_limited)
-Stagnation 暂停，等用户决策。
+任一阶段失败回阶段 A 修复后重跑 workflow（限 3 轮）。超限 → **必须 `ask_user`**（通知用户 workflow 持续失败，由用户决策下一步：修复后重跑 / 调整设计 / 放弃 topic）。
+
+**⚠️ 绝不允许 fallback：** 无论失败原因是什么（workflow 工具不可用 / budget 耗尽 / 连续失败），主 agent 都**不得**自行派 implementer/test-runner subagent 接手写代码。唯一合法操作是 `ask_user`。
 
 ### 自由度分级
 

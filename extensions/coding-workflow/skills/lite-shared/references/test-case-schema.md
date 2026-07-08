@@ -138,6 +138,8 @@ coding-execute 的执行收尾机器门对 real 层用例只认 `pass` 或 `user
 - **requiresScreenshot**（plan.json 必填字段，**不进 plan.md 表格**）：布尔，声明本用例是否要求 `screenshotPath`。CW test lite gate 按此字段判断——`true` 时 submission 缺 screenshot 或文件不存在 → failed；`false` 时跳过 screenshot 校验，只跑 judgeByExpected 重算。**不是按测试层（mock/real）一刀切**——plan 阶段 agent 按用例性质决定：mock 层通常 `false`（无 UI/真实环境，截图无意义），real 层通常 `true`（验证真实跑通）；例外：mock 层测 DOM 渲染也可能要截图，real 层测纯 API 也可能不要
 - **dependsOn**（plan.json 字段，ADR-029 决策 4）：本用例依赖哪些前置用例建的数据状态（如 E3 依赖 E1-r 建的登录态/订单数据）。**硬依赖**——workflow 拓扑排序，被依赖的先跑；上游任一 fail 则 abort 下游（依赖链断）。无依赖填 `-`。
 - **parallelGroup**（plan.json 字段，ADR-029 决策 4）：资源冲突规避分组。同 `parallelGroup` 的用例已确认无资源冲突（不同 chrome profile / 不同 DB 表 / 不同端口），可并行执行；不同组或有 dependsOn 的串行。无并行需求（独占资源）可不填。
+- **file**（plan.json/detail.json 可选字段）：测试代码位置——测试文件路径，如 `src/__tests__/useChat.test.ts`。仅用于定位/溯源（把 CW 用例与具体测试文件关联），不参与 gate 判定。plan 阶段若已知对应测试文件则填，未知可省略。缺省不影响旧数据（向后兼容）。
+- **describe**（plan.json/detail.json 可选字段）：测试代码位置——测试组名，如 `"streaming reset"`（对应 `describe("streaming reset", ...)` 的组名）。与 `file` 配合精确定位到测试文件内的某个 `describe` 块。仅用于定位/溯源，不参与 gate 判定。缺省不影响旧数据（向后兼容）。
 
 ### 测试调度设计（ADR-029 决策 4）
 

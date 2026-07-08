@@ -58,6 +58,10 @@ export const LitePlanSchema = Type.Object({
        * 可并行执行。无此字段视为独占资源（串行）。
        */
       parallelGroup: Type.Optional(Type.String()),
+      /** 测试代码位置（可选）：测试文件路径，如 src/__tests__/useChat.test.ts */
+      file: Type.Optional(Type.String()),
+      /** 测试代码位置（可选）：测试组名，如 "streaming reset" */
+      describe: Type.Optional(Type.String()),
     }),
   ),
 });
@@ -99,6 +103,10 @@ export const MidDetailSchema = Type.Object({
       dependsOn: Type.Optional(Type.Array(Type.String())),
       /** 测试调度：资源冲突规避分组（ADR-029 决策 4，同 LitePlanSchema）。 */
       parallelGroup: Type.Optional(Type.String()),
+      /** 测试代码位置（可选）：测试文件路径，如 src/__tests__/useChat.test.ts */
+      file: Type.Optional(Type.String()),
+      /** 测试代码位置（可选）：测试组名，如 "streaming reset" */
+      describe: Type.Optional(Type.String()),
     }),
   ),
   deliverables: Type.Object({
@@ -303,6 +311,8 @@ function extractLitePlan(json: unknown): ParsedLitePlan {
       requiresScreenshot: boolean;
       dependsOn?: string[];
       parallelGroup?: string;
+      file?: string;
+      describe?: string;
     }>;
   };
   return {
@@ -324,6 +334,8 @@ function extractLitePlan(json: unknown): ParsedLitePlan {
       requiresScreenshot: c.requiresScreenshot,
       dependsOn: c.dependsOn,
       parallelGroup: c.parallelGroup,
+      file: c.file,
+      describe: c.describe,
     })),
   };
 }
@@ -353,6 +365,8 @@ function extractMidDetail(json: unknown): ParsedMidDetail {
       executor: string;
       dependsOn?: string[];
       parallelGroup?: string;
+      file?: string;
+      describe?: string;
     }>;
     deliverables: {
       issues: string;
@@ -380,6 +394,8 @@ function extractMidDetail(json: unknown): ParsedMidDetail {
       executor: c.executor,
       dependsOn: c.dependsOn,
       parallelGroup: c.parallelGroup,
+      file: c.file,
+      describe: c.describe,
     })),
     deliverables: obj.deliverables,
   };

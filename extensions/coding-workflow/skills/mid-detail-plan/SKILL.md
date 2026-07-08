@@ -64,7 +64,8 @@ requirements/architecture（mid-plan 已完成）
 | 3. execution + 回灌对齐 | 主 agent 产 execution-plan（读 code-arch 时序图）+ 补 code-arch 来源 B + 验证 nfr 指针 + 验收清单 + 机器检查全跑 | `../full-execution-plan/references/{vertical-slice\|wave-template\|deliverable-template}.md` |
 | 4. review-fix-loop | 派 5~6 路并行 reviewer（跨 4 份文档）→ 汇总 → 收敛（MAX=2） | `../mid-shared/references/review-fix-loop.md` + 本 SKILL「维度审查分配」节 |
 | 5. 一致性终检 | 派 1 fresh subagent 全文档一致性检查（合并 full 6b 反哺 + 6c 终检） | `../full-execution-plan/references/consistency-check.md` |
-| 6. 定稿 + 渲染 | 残留 D-不可逆 ask + 定稿 4 份 .md + 派 fresh subagent 渲染 4 HTML | `coding-visualizer` skill |
+| 6a. 定稿 + gate | 残留 D-不可逆 ask + 定稿 4 份 .md + detail.json + cw(detail) gate | — |
+| 6b. 渲染（可选）| 派 fresh subagent 渲染 4 HTML（gate 通过后，预算紧张可延后）| `coding-visualizer` skill |
 
 Announce at start: "我正在使用 mid-detail-plan skill 来高效产出实施设计 4 件套（L2 标准档）。"
 
@@ -240,7 +241,8 @@ Wave 编排（根：从时序图推导）
 | **红队 · 反过度编排** | 反向（删/质疑） | 全部 4 份 + 骨架 | `../full-shared/references/review-agent.md` 红队节（port/seam/分层/Wave 是否过度，deletion test） |
 
 > **第 6 路（可选，状态复杂时）：异常猎手**——触发条件：状态复杂度信号≥中（4+ 状态/单状态机）或跨边界数≥中（2+ 外部系统）。
-> 从 ② §5 状态转换路径 / §8 跨进程边界扫异常路径（失败帧）。范式抄 `../full-issues/references/fog-of-war.md` 角色 B。
+> 失败帧（bottom-up），从 code-architecture.md §5 状态转换路径 / §8 跨进程边界扫异常路径。
+> Task prompt 见 `../mid-shared/references/review-fix-loop.md`「L3a · 异常猎手」节（含 hunting 清单）。
 
 **派发：** 5~6 路 `wait:false` 同消息派发，context 注入 decisions.md。
 **汇总：** 按 review-fix-loop L4 汇总去重。
@@ -289,19 +291,11 @@ changes/review-execution.md    ← execution 维度的 review 结论
 > CW detail action 调用前会预检这 4 个文件是否存在（`findMissingReviewStubs` with DETAIL_REVIEW_SLUGS），
 > 缺失返 hint 不跑 gate（agent 不再面对裸 FAIL）。落盘是 skill 的职责（CW 不造假桩）。
 
-## Step 6：定稿 + 渲染 HTML
+## Step 6a：定稿 + cw(detail) gate（必须）
 
 1. **二次 ask**（残留 D-不可逆）：loop + 终检后残留的 D-不可逆 must_fix，按 batch-ask 二次 ask 协议打包提问。
 2. **主 agent 定稿** 4 份 .md（frontmatter `verdict: pass`，decisions.md 溯源核对）。
-3. **派 fresh subagent 渲染 HTML**（4 个，wait:false 并行，加载 coding-visualizer）：
-   - issues.md → hero=决策 DAG 图（节点按 P 级着色）
-   - non-functional-design.md → hero=风险矩阵热力图（issue×7 维度）
-   - code-architecture.md → hero=包依赖图 + 核心时序图
-   - execution-plan.md → hero=Wave 依赖 DAG 图（并行组标注）
-
-**交接（定稿后）：**
-
-定稿后**必须额外产出 detail.json**（CW `detail` action 的入参，D-006 结构化 JSON）。
+3. **产出 detail.json**（CW `detail` action 的入参，D-006 结构化 JSON）。
 
 **detail.json schema 见 `../lite-shared/references/cw-json-schemas.md`「detail.json」节**（字段约束 + format 锁定）。
 关键提醒：`format` 必须 === `"mid-detail"`（D-003）；`testCases[].id` 用 `T2.4` 格式；`testCases[].assertion` 是自然语言断言（**无 expected 字段**，mid 信声明 D-008）。
@@ -315,8 +309,21 @@ cw(action=detail, topicId="<create 时返回的 topicId>", detailJson=<JSON.pars
 **[MANDATORY] `detailJson` 必须是 object**（`JSON.parse` 后的值），不是 JSON 字符串。
 传 string 会被 CW 在 `assertFormat` 拒（报 `invalid plan json: not an object`），因为 schema 声明的是 `type: object`。
 
-CW detail gate 预检 `changes/review-{issues,nfr,code-arch,execution}.md` 存在 → 跑机器检查（issues/nfr/code-arch/execution）串行 fail-fast →
+CW detail gate 预检 `changes/review-{issues,nfr,code-arch,execution}.md` 存在 → 跑机器检查（issues/nfr/code-arch/execution）全量报告 →
 通过后返回 `nextAction: {action:"dev", skill:"coding-execute", waves:[...]}`。
+
+gate fail → 修 mustFix（全量报告会一次性返回所有层的错误）后重调 cw(action=detail)。
+连续失败超阈值时 guidance 会含「熔断」提示——检查是否机器检查误判，必要时 ask_user 人工审查。
+
+## Step 6b：HTML 渲染（可选，gate 通过后）
+
+> 此步骤是**可选的可视化增强**，不阻塞 dev 阶段。预算紧张时可跳过，在 retrospect 后补。
+
+**派 fresh subagent 渲染 HTML**（4 个，wait:false 并行，加载 coding-visualizer）：
+- issues.md → hero=决策 DAG 图（节点按 P 级着色）
+- non-functional-design.md → hero=风险矩阵热力图（issue×7 维度）
+- code-architecture.md → hero=包依赖图 + 核心时序图
+- execution-plan.md → hero=Wave 依赖 DAG 图（并行组标注）
 
 ## Self-Check
 
@@ -352,7 +359,9 @@ loop + 终检：
 定稿：
 - [ ] 4 份 .md frontmatter 含 `verdict: pass`
 - [ ] decisions.md 每条溯源指向真实章节
-- [ ] 4 个 HTML 已渲染并 open，hero 图就位
+
+可选（预算紧张时可延后到 retrospect 后补）：
+- [ ] 4 个 HTML 已渲染并 open，hero 图就位（Step 6b，不阻塞 dev 阶段）
 
 ## 标记说明
 

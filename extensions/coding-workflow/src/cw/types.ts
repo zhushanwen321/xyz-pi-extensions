@@ -139,6 +139,10 @@ export interface TestCase {
   dependsOn?: string[];
   /** 测试调度：资源冲突规避分组（ADR-029 决策 4）。 */
   parallelGroup?: string;
+  /** 测试代码位置（可选）：测试文件路径，如 src/__tests__/useChat.test.ts */
+  file?: string;
+  /** 测试代码位置（可选）：测试组名，如 "streaming reset" */
+  describe?: string;
 }
 
 export interface GateHistoryEntry {
@@ -205,6 +209,10 @@ export interface TestCaseSeed {
   dependsOn?: string[];
   /** 测试调度：资源冲突规避分组（ADR-029 决策 4）。 */
   parallelGroup?: string;
+  /** 测试代码位置（可选）：测试文件路径，如 src/__tests__/useChat.test.ts */
+  file?: string;
+  /** 测试代码位置（可选）：测试组名，如 "streaming reset" */
+  describe?: string;
 }
 
 export interface GateHistorySeed {
