@@ -147,7 +147,41 @@ function buildWaves(items) {
   return waves2d;
 }
 
-const devWaves2d = buildWaves(planWaves);
+/**
+ * 单 implementer agent 的文件数上限。超出时把 wave item 拆为多个子任务，
+ * 每个分配独立 worktree 并行执行——避免单 agent 处理过多文件导致偏离设计。
+ *
+ * 仅对 lite tier（有 changes 文件列表）生效。mid tier 用 issues 数组（无文件列表），
+ * 当前不拆——agent 按设计文档自行控制范围。TODO: 等 issue→文件映射落地后支持 mid。
+ */
+const MAX_FILES_PER_AGENT = 3;
+
+function splitWaveItemByFiles(waveCase, maxFiles) {
+  // mid tier 或无 changes 字段：不拆，返回原 item
+  if (TIER !== "lite" || !Array.isArray(waveCase.changes) || waveCase.changes.length <= maxFiles) {
+    return [waveCase];
+  }
+  // 按 maxFiles 分组，每组生成一个子任务
+  const originalId = waveCase.id;
+  const subTasks = [];
+  for (let i = 0; i < waveCase.changes.length; i += maxFiles) {
+    const chunk = waveCase.changes.slice(i, i + maxFiles);
+    subTasks.push({
+      ...waveCase,
+      changes: chunk,
+      // id 加后缀用于日志/description 区分；waveId 保留原始值供 cw dev 渐进式提交
+      id: originalId + "p" + subTasks.length,
+      waveId: originalId,
+    });
+  }
+  log("  wave " + originalId + " 拆分: " + waveCase.changes.length + " 文件 → " +
+    subTasks.length + " 子任务（每 ≤" + maxFiles + " 文件）");
+  return subTasks;
+}
+
+const devWaves2d = buildWaves(planWaves).map((wave) =>
+  wave.flatMap((item) => splitWaveItemByFiles(item, MAX_FILES_PER_AGENT)),
+);
 const testWaves2d = buildWaves(planTestCases);
 log("dev waves: " + devWaves2d.length + " 个（" + devWaves2d.map((w) => w.map((c) => c.id).join("|")).join(" → ") + "）");
 log("test waves: " + testWaves2d.length + " 个（" + testWaves2d.map((w) => w.map((c) => c.id).join("|")).join(" → ") + "）");
@@ -282,7 +316,20 @@ log("worktree 建好：dev pool " + devWtPool.length + " (max parallel=" + maxPa
 // ── Prompt 构造器 ─────────────────────────────────────────────────
 
 function buildImplementerPrompt(waveCase, worktreePath) {
-  const changes = (waveCase.changes || []).join("\n  - ");
+  const isMid = TIER === "mid";
+  // tier 感知：mid 用 issues 数组 + 设计文档路径；lite 用 changes 文件路径数组
+  const taskSection = isMid
+    ? [
+        "## 本 wave 涉及的 issue",
+        "  - " + (waveCase.issues || []).join("\n  - "),
+        "",
+        "## 设计文档（必读！改动细节在这里，不要凭猜测实现）",
+        "  - " + TOPIC_DIR + "/issues.md（issue 描述 + 验收标准 + 方案对比）",
+        "  - " + TOPIC_DIR + "/code-architecture.md（§3 签名表 + §5 状态机 + §6 测试矩阵）",
+        "  - " + TOPIC_DIR + "/code-skeleton/（骨架文件，按签名表填充实现）",
+        "  - " + TOPIC_DIR + "/execution-plan.md（Wave 依赖 + 测试验收清单）",
+      ].join("\n")
+    : "## 本 wave 改动点\n  - " + (waveCase.changes || []).join("\n  - ");
   return [
     "你是 implementer（TDD：先写失败测试 → 实现 → 跑通 → commit）。wave " + waveCase.id + "。",
     "",
@@ -293,8 +340,7 @@ function buildImplementerPrompt(waveCase, worktreePath) {
     worktreePath,
     "所有命令在此目录跑：`cd " + worktreePath + " && <cmd>`",
     "",
-    "## 本 wave 改动点",
-    "  - " + changes,
+    taskSection,
     "",
     "## TDD 步骤",
     "1. 先写失败测试（覆盖改动点的预期行为）",
@@ -302,12 +348,17 @@ function buildImplementerPrompt(waveCase, worktreePath) {
     "3. 写最小实现让测试 pass（绿）",
     "4. 重构（如需）",
     "5. 跑相关测试确认无回归",
-    "6. git add + commit（message 描述本 wave 做了什么）",
+    "6. git status 检查改动文件列表，确认只改了本 wave 相关的文件（非本 wave 的文件不要动）",
+    "7. git add <你改动的文件> + commit（message 描述本 wave 做了什么）",
+    "",
+    "⚠️ 工作区污染防护：禁止 git add -A / git add . 。工作区可能有骨架文件、配置文件、",
+    "其他 agent 的残留——commit 它们会污染聚合分支。只 add 你为本 wave 改动的文件。",
+    "mid tier 尤其注意：先 read 设计文档了解要改什么，不要 commit 骨架目录里的未改动文件。",
     "",
     "## 完成后强制（渐进式提交 cw）",
     "commit 后必须立即调 cw tool 提交本 wave 的 commitHash：",
     'cw(action="dev", topicId="' + TOPIC_ID + '", workspacePath="' + WORKSPACE_ROOT + '", ',
-    '  tasks=[{waveId: "' + waveCase.id + '", commitHash: "<你的 commit hash 全 40 字符>"}])',
+    '  tasks=[{waveId: "' + (waveCase.waveId || waveCase.id) + '", commitHash: "<你的 commit hash 全 40 字符>"}])',
     "⚠️ workspacePath 必须传项目根（" + WORKSPACE_ROOT + "），不能用你的 cwd（你在 worktree 里，否则 cw 打开错误的 db）",
     "⚠️ 不调 cw = workflow 判你失败",
     "",
