@@ -147,41 +147,7 @@ function buildWaves(items) {
   return waves2d;
 }
 
-/**
- * 单 implementer agent 的文件数上限。超出时把 wave item 拆为多个子任务，
- * 每个分配独立 worktree 并行执行——避免单 agent 处理过多文件导致偏离设计。
- *
- * 仅对 lite tier（有 changes 文件列表）生效。mid tier 用 issues 数组（无文件列表），
- * 当前不拆——agent 按设计文档自行控制范围。TODO: 等 issue→文件映射落地后支持 mid。
- */
-const MAX_FILES_PER_AGENT = 3;
-
-function splitWaveItemByFiles(waveCase, maxFiles) {
-  // mid tier 或无 changes 字段：不拆，返回原 item
-  if (TIER !== "lite" || !Array.isArray(waveCase.changes) || waveCase.changes.length <= maxFiles) {
-    return [waveCase];
-  }
-  // 按 maxFiles 分组，每组生成一个子任务
-  const originalId = waveCase.id;
-  const subTasks = [];
-  for (let i = 0; i < waveCase.changes.length; i += maxFiles) {
-    const chunk = waveCase.changes.slice(i, i + maxFiles);
-    subTasks.push({
-      ...waveCase,
-      changes: chunk,
-      // id 加后缀用于日志/description 区分；waveId 保留原始值供 cw dev 渐进式提交
-      id: originalId + "p" + subTasks.length,
-      waveId: originalId,
-    });
-  }
-  log("  wave " + originalId + " 拆分: " + waveCase.changes.length + " 文件 → " +
-    subTasks.length + " 子任务（每 ≤" + maxFiles + " 文件）");
-  return subTasks;
-}
-
-const devWaves2d = buildWaves(planWaves).map((wave) =>
-  wave.flatMap((item) => splitWaveItemByFiles(item, MAX_FILES_PER_AGENT)),
-);
+const devWaves2d = buildWaves(planWaves);
 const testWaves2d = buildWaves(planTestCases);
 log("dev waves: " + devWaves2d.length + " 个（" + devWaves2d.map((w) => w.map((c) => c.id).join("|")).join(" → ") + "）");
 log("test waves: " + testWaves2d.length + " 个（" + testWaves2d.map((w) => w.map((c) => c.id).join("|")).join(" → ") + "）");
@@ -358,7 +324,7 @@ function buildImplementerPrompt(waveCase, worktreePath) {
     "## 完成后强制（渐进式提交 cw）",
     "commit 后必须立即调 cw tool 提交本 wave 的 commitHash：",
     'cw(action="dev", topicId="' + TOPIC_ID + '", workspacePath="' + WORKSPACE_ROOT + '", ',
-    '  tasks=[{waveId: "' + (waveCase.waveId || waveCase.id) + '", commitHash: "<你的 commit hash 全 40 字符>"}])',
+    '  tasks=[{waveId: "' + waveCase.id + '", commitHash: "<你的 commit hash 全 40 字符>"}])',
     "⚠️ workspacePath 必须传项目根（" + WORKSPACE_ROOT + "），不能用你的 cwd（你在 worktree 里，否则 cw 打开错误的 db）",
     "⚠️ 不调 cw = workflow 判你失败",
     "",

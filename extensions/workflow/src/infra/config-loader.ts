@@ -381,11 +381,14 @@ async function loadWorkflowsFromDirs(options?: {
   const tmpDir = resolve(workspaceRoot, ".pi/workflows/.tmp");
 
  // npm package locations to scan for pi.workflows manifest
-  // 只扫全局 pi 扩展目录（Pi 扩展安装红线：npm install 只进 ~/.pi/agent/npm/node_modules）
+  // 扫两条路径：
+  //   1. ~/.pi/agent/npm/node_modules — 正式 npm 安装的扩展（pi install npm:xxx）
+  //   2. ~/.pi/agent/extensions/ — dev symlink 的扩展（本地开发模式）
   // 项目级 node_modules 是 pnpm workspace 依赖，不是 pi 扩展，不扫
   // 测试可通过 options.npmDirs 注入临时目录
   const npmDirs = options?.npmDirs ?? [
     resolve(homedir(), ".pi", "agent", "npm", "node_modules"),
+    resolve(homedir(), ".pi", "agent", "extensions"),
   ];
 
  // Number of non-npm scan results (project, user, tmp)
