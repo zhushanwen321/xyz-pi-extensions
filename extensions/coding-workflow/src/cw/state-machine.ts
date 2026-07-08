@@ -48,7 +48,7 @@ function countConsecutiveGateFails(history: GateHistoryEntry[], phase: CwAction)
  */
 function buildCircuitBreakerGuidance(phase: CwAction, fails: number): string {
   return (
-    `${phase} gate 已连续失败 ${fails} 次（超熔断阈值 ${GATE_RETRY_LIMIT}）。` +
+    `${phase} gate 已连续失败 ${fails} 次（达熔断阈值 ${GATE_RETRY_LIMIT}）。` +
     `可能存在机器检查误判（如 regex 把表格单词当方法名）。建议：` +
     `(1) 逐条检查 mustFix 报错是否合理 (2) ask_user 人工审查交付物，而非继续盲目重试。`
   );

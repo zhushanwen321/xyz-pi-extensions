@@ -13,6 +13,7 @@ const meta = {
 // ── 常量 & 全局依赖 ───────────────────────────────────────────────
 
 const fs = require("fs");
+const path = require("path");
 const { execFileSync } = require("child_process");
 
 const DEFAULT_AGENT_TIMEOUT_MS = 1_800_000; // 30 min，对齐 review-fix-loop
@@ -29,6 +30,10 @@ const OVERLAP_MEDIUM_THRESHOLD = 0.3; // ≥ 30% → NEEDS-VERIFY；< 30% → LO
 const TOPIC_ID = $ARGS.topicId;
 const TOPIC_DIR = $ARGS.topicDir;
 const PLAN_PATH = $ARGS.planPath;
+// TOPIC_ROOT = 设计文档所在目录（issues.md/code-architecture.md 等在 topic 根目录，非 changes 子目录）。
+// TOPIC_DIR 可能是 changes 子目录（coding-execute SKILL 约定），但设计文档在 topic 根目录。
+// PLAN_PATH = .xyz-harness/{slug}/plan.json → dirname 即 topic 根目录。
+const TOPIC_ROOT = path.dirname(PLAN_PATH);
 const WORKSPACE_ROOT = $ARGS.workspaceRoot;
 const BASE_REF = $ARGS.baseRef || "main";
 const MODEL = $ARGS.model;
@@ -290,10 +295,10 @@ function buildImplementerPrompt(waveCase, worktreePath) {
         "  - " + (waveCase.issues || []).join("\n  - "),
         "",
         "## 设计文档（必读！改动细节在这里，不要凭猜测实现）",
-        "  - " + TOPIC_DIR + "/issues.md（issue 描述 + 验收标准 + 方案对比）",
-        "  - " + TOPIC_DIR + "/code-architecture.md（§3 签名表 + §5 状态机 + §6 测试矩阵）",
-        "  - " + TOPIC_DIR + "/code-skeleton/（骨架文件，按签名表填充实现）",
-        "  - " + TOPIC_DIR + "/execution-plan.md（Wave 依赖 + 测试验收清单）",
+        "  - " + TOPIC_ROOT + "/issues.md（issue 描述 + 验收标准 + 方案对比）",
+        "  - " + TOPIC_ROOT + "/code-architecture.md（§3 API 契约签名表 + §4 时序图 + §6 测试矩阵）",
+        "  - " + TOPIC_ROOT + "/code-skeleton/（骨架文件，按签名表填充实现）",
+        "  - " + TOPIC_ROOT + "/execution-plan.md（Wave 依赖 + 测试验收清单）",
       ].join("\n")
     : "## 本 wave 改动点\n  - " + (waveCase.changes || []).join("\n  - ");
   return [
@@ -317,9 +322,8 @@ function buildImplementerPrompt(waveCase, worktreePath) {
     "6. git status 检查改动文件列表，确认只改了本 wave 相关的文件（非本 wave 的文件不要动）",
     "7. git add <你改动的文件> + commit（message 描述本 wave 做了什么）",
     "",
-    "⚠️ 工作区污染防护：禁止 git add -A / git add . 。工作区可能有骨架文件、配置文件、",
-    "其他 agent 的残留——commit 它们会污染聚合分支。只 add 你为本 wave 改动的文件。",
-    "mid tier 尤其注意：先 read 设计文档了解要改什么，不要 commit 骨架目录里的未改动文件。",
+    "⚠️ 工作区污染防护：禁止 git add -A / git add . 。你可能创建了临时文件（debug 日志、",
+    "scratch 脚本等），commit 它们会污染聚合分支。只 git add 你为本 wave 改动的源码和测试文件。",
     "",
     "## 完成后强制（渐进式提交 cw）",
     "commit 后必须立即调 cw tool 提交本 wave 的 commitHash：",

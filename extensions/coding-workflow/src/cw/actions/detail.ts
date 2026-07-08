@@ -1,5 +1,5 @@
 /**
- * detail action — mid single-shot gate，4 checker 串行 fail-fast（UC-2 mid 后段，#4 AC-4.2）。
+ * detail action — mid single-shot gate，4 checker 全量报告（UC-2 mid 后段，#4 AC-4.2）。
  *
  * #7 AC-7.1：gate 前预检 changes/review-{issues,nfr,code-arch,execution}.md 是否存在。
  * 缺失则返结构化 hint（与 clarify 同机制），不跑 gate。
@@ -19,7 +19,7 @@ export interface DetailParams {
 }
 
 export function handleDetail(params: DetailParams, deps: ActionDeps): ActionResult {
-  // 接线：loadTopic → guard → parse → review 桩预检(#7) → transaction{runGate(4 checker fail-fast) → 写 waves/testCases → mutate}。
+  // 接线：loadTopic → guard → parse → review 桩预检(#7) → transaction{runGate(4 checker 全量报告) → 写 waves/testCases → mutate}。
   const topic = deps.store.loadTopic(params.topicId);
   if (!topic) {
     throw new Error(`topic not found: ${params.topicId}`);

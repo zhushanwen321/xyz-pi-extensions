@@ -13,6 +13,7 @@ const meta = {
 // ── 常量 & 全局依赖 ───────────────────────────────────────────────
 
 const fs = require("fs");
+const path = require("path");
 const { execFileSync } = require("child_process");
 
 const DEFAULT_AGENT_TIMEOUT_MS = 1_800_000; // 30 min，对齐 review-fix-loop
@@ -29,6 +30,10 @@ const OVERLAP_MEDIUM_THRESHOLD = 0.3; // ≥ 30% → NEEDS-VERIFY；< 30% → LO
 const TOPIC_ID = $ARGS.topicId;
 const TOPIC_DIR = $ARGS.topicDir;
 const PLAN_PATH = $ARGS.planPath;
+// TOPIC_ROOT = 设计文档所在目录（issues.md/code-architecture.md 等在 topic 根目录，非 changes 子目录）。
+// TOPIC_DIR 可能是 changes 子目录（coding-execute SKILL 约定），但设计文档在 topic 根目录。
+// PLAN_PATH = .xyz-harness/{slug}/plan.json → dirname 即 topic 根目录。
+const TOPIC_ROOT = path.dirname(PLAN_PATH);
 const WORKSPACE_ROOT = $ARGS.workspaceRoot;
 const BASE_REF = $ARGS.baseRef || "main";
 const MODEL = $ARGS.model;
@@ -282,7 +287,20 @@ log("worktree 建好：dev pool " + devWtPool.length + " (max parallel=" + maxPa
 // ── Prompt 构造器 ─────────────────────────────────────────────────
 
 function buildImplementerPrompt(waveCase, worktreePath) {
-  const changes = (waveCase.changes || []).join("\n  - ");
+  const isMid = TIER === "mid";
+  // tier 感知：mid 用 issues 数组 + 设计文档路径；lite 用 changes 文件路径数组
+  const taskSection = isMid
+    ? [
+        "## 本 wave 涉及的 issue",
+        "  - " + (waveCase.issues || []).join("\n  - "),
+        "",
+        "## 设计文档（必读！改动细节在这里，不要凭猜测实现）",
+        "  - " + TOPIC_ROOT + "/issues.md（issue 描述 + 验收标准 + 方案对比）",
+        "  - " + TOPIC_ROOT + "/code-architecture.md（§3 API 契约签名表 + §4 时序图 + §6 测试矩阵）",
+        "  - " + TOPIC_ROOT + "/code-skeleton/（骨架文件，按签名表填充实现）",
+        "  - " + TOPIC_ROOT + "/execution-plan.md（Wave 依赖 + 测试验收清单）",
+      ].join("\n")
+    : "## 本 wave 改动点\n  - " + (waveCase.changes || []).join("\n  - ");
   return [
     "你是 implementer（TDD：先写失败测试 → 实现 → 跑通 → commit）。wave " + waveCase.id + "。",
     "",
@@ -293,8 +311,7 @@ function buildImplementerPrompt(waveCase, worktreePath) {
     worktreePath,
     "所有命令在此目录跑：`cd " + worktreePath + " && <cmd>`",
     "",
-    "## 本 wave 改动点",
-    "  - " + changes,
+    taskSection,
     "",
     "## TDD 步骤",
     "1. 先写失败测试（覆盖改动点的预期行为）",
@@ -302,7 +319,11 @@ function buildImplementerPrompt(waveCase, worktreePath) {
     "3. 写最小实现让测试 pass（绿）",
     "4. 重构（如需）",
     "5. 跑相关测试确认无回归",
-    "6. git add + commit（message 描述本 wave 做了什么）",
+    "6. git status 检查改动文件列表，确认只改了本 wave 相关的文件（非本 wave 的文件不要动）",
+    "7. git add <你改动的文件> + commit（message 描述本 wave 做了什么）",
+    "",
+    "⚠️ 工作区污染防护：禁止 git add -A / git add . 。你可能创建了临时文件（debug 日志、",
+    "scratch 脚本等），commit 它们会污染聚合分支。只 git add 你为本 wave 改动的源码和测试文件。",
     "",
     "## 完成后强制（渐进式提交 cw）",
     "commit 后必须立即调 cw tool 提交本 wave 的 commitHash：",
