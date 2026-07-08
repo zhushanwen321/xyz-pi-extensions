@@ -19,6 +19,7 @@
  */
 
 import type { AgentCallOpts, AgentResult } from "../engine/models/types.js";
+import { formatFailureContext } from "./format-helpers.js";
 import { makeEmptyPipeline } from "./jsonl-parser.js";
 import { buildArgs, resolveInvocation, runPiProcess } from "./pi-runner.js";
 
@@ -292,11 +293,15 @@ export class ConcurrencyGate {
       const durationMs = Date.now() - startedAt;
 
       if (opts.schema && pipeline.parsedOutput === undefined) {
+ // [HISTORICAL] schema-error 必须带 exitCode + stderr，否则 abort/崩溃被误判为
+ // "LLM 拒绝调 tool"。对称修复：与 subprocess-agent-runner.ts 保持一致。
+ // 详见 subprocess-agent-runner.ts:formatFailureContext 的教训记录。
+        const ctx = formatFailureContext(exitCode, stderr);
         if (!pipeline.hasToolCall) {
           resolve({
             content: pipeline.output,
             durationMs: Date.now() - startedAt,
-            error: "Agent did not call structured-output tool",
+            error: `Agent did not call structured-output tool${ctx}`,
             toolCalls: pipeline.toolCalls,
           });
           return;
@@ -305,7 +310,7 @@ export class ConcurrencyGate {
           resolve({
             content: pipeline.output,
             durationMs,
-            error: "Agent completed without calling structured-output tool",
+            error: `Agent completed without calling structured-output tool${ctx}`,
             toolCalls: pipeline.toolCalls,
           });
           return;
@@ -332,3 +337,4 @@ export class ConcurrencyGate {
     }
   }
 }
+

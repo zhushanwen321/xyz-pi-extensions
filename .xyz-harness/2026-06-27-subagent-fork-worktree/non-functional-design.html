@@ -1,0 +1,466 @@
+<!DOCTYPE html>
+<!--
+  non-functional-design.html — design-nfr（④ 非功能性设计）阶段产物。
+  主角图：HTML table 风险矩阵热力图（issue × 7 维度，✅⚠️ 着色）——非 Mermaid。
+  特有 CSS：.risk-ok / .risk-warn / .risk-na。
+-->
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>非功能性设计 — subagent fork 上下文 + worktree 隔离</title>
+<style>
+/*
+ * design.css — design-visual-explainer 公共样式
+ * 从 issues.html (feat-system-prompt-loader) 抽出，作为 6 阶段产物骨架的统一底座。
+ * 阶段特有类（.issue / .wave-card / .uc / .risk-* 等）放各骨架局部 style，不在此文件。
+ *
+ * render.sh 通过占位符注释 INLINE:design.css 将本文件内联进产物 HTML。
+ */
+* { margin: 0; padding: 0; box-sizing: border-box; }
+:root {
+  --font-body: 'Bricolage Grotesque', 'PingFang SC', system-ui, sans-serif;
+  --font-mono: 'Space Mono', 'JetBrains Mono', 'SF Mono', Consolas, monospace;
+  --bg: #f6f8f8; --surface: #ffffff; --surface-2: #eef2f1; --surface-elevated: #ffffff;
+  --border: rgba(15, 40, 40, 0.08); --border-bright: rgba(15, 40, 40, 0.16);
+  --text: #0f2a2a; --text-dim: #5a6b6b;
+  --accent: #0d9488; --accent-dim: rgba(13, 148, 136, 0.10);
+  --slate: #334155; --slate-dim: rgba(51, 65, 85, 0.10);
+  --green: #059669; --green-dim: rgba(5, 150, 105, 0.12);
+  --red: #dc2626; --red-dim: rgba(220, 38, 38, 0.10);
+  --orange: #c2410c; --orange-dim: rgba(194, 65, 12, 0.10);
+  --amber: #b45309; --amber-dim: rgba(180, 83, 9, 0.12);
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #0a1414; --surface: #111d1d; --surface-2: #182626; --surface-elevated: #162121;
+    --border: rgba(180, 220, 220, 0.07); --border-bright: rgba(180, 220, 220, 0.15);
+    --text: #e3efee; --text-dim: #8aa0a0;
+    --accent: #2dd4bf; --accent-dim: rgba(45, 212, 191, 0.13);
+    --slate: #94a3b8; --slate-dim: rgba(148, 163, 184, 0.12);
+    --green: #34d399; --green-dim: rgba(52, 211, 153, 0.13);
+    --red: #f87171; --red-dim: rgba(248, 113, 113, 0.12);
+    --orange: #fb923c; --orange-dim: rgba(251, 146, 60, 0.12);
+    --amber: #fbbf24; --amber-dim: rgba(251, 191, 36, 0.14);
+  }
+}
+html { scroll-behavior: smooth; }
+body { font-family: var(--font-body); color: var(--text); line-height: 1.65; background: var(--bg); background-image: radial-gradient(ellipse at 50% -5%, var(--accent-dim) 0%, transparent 55%); padding: 32px; overflow-wrap: break-word; }
+.grid > *, .flex > *, [style*="display:grid"] > *, [style*="display:flex"] > * { min-width: 0; }
+h1 { font-size: 38px; font-weight: 700; letter-spacing: -1px; margin-bottom: 6px; text-wrap: balance; }
+h2 { font-size: 22px; font-weight: 600; letter-spacing: -0.3px; margin: 56px 0 18px; padding-bottom: 10px; border-bottom: 1px solid var(--border); scroll-margin-top: 70px; }
+h3 { font-size: 16px; font-weight: 700; margin: 26px 0 12px; color: var(--accent); font-family: var(--font-mono); letter-spacing: 0.2px; scroll-margin-top: 70px; }
+h4 { font-size: 13px; font-weight: 600; margin: 18px 0 8px; color: var(--slate); font-family: var(--font-mono); }
+p { margin-bottom: 12px; }
+.subtitle { color: var(--text-dim); font-size: 13px; margin-bottom: 8px; font-family: var(--font-mono); }
+code { font-family: var(--font-mono); font-size: 0.92em; }
+strong { font-weight: 600; }
+
+/* Layout: TOC + main 双栏 */
+.wrap { max-width: 1380px; margin: 0 auto; display: grid; grid-template-columns: 168px 1fr; gap: 0 44px; }
+.main { min-width: 0; }
+header.doc-head { margin-bottom: 28px; }
+.badge-row { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 14px; }
+.tag { font-family: var(--font-mono); font-size: 10px; font-weight: 600; text-transform: uppercase; letter-spacing: 1px; padding: 4px 10px; border-radius: 20px; background: var(--accent-dim); color: var(--accent); border: 1px solid color-mix(in srgb, var(--accent) 30%, transparent); }
+.tag--slate { background: var(--slate-dim); color: var(--slate); border-color: color-mix(in srgb, var(--slate) 30%, transparent); }
+.tag--green { background: var(--green-dim); color: var(--green); border-color: color-mix(in srgb, var(--green) 30%, transparent); }
+.tag--amber { background: var(--amber-dim); color: var(--amber); border-color: color-mix(in srgb, var(--amber) 30%, transparent); }
+
+/* TOC sidebar + scroll-spy */
+.toc { position: sticky; top: 24px; align-self: start; padding: 14px 0; grid-row: 1/-1; max-height: calc(100dvh - 48px); overflow-y: auto; }
+.toc-title { font-family: var(--font-mono); font-size: 9px; font-weight: 700; text-transform: uppercase; letter-spacing: 2px; color: var(--text-dim); padding: 0 0 10px; margin-bottom: 8px; border-bottom: 1px solid var(--border); }
+.toc a { display: block; font-size: 11px; color: var(--text-dim); text-decoration: none; padding: 4px 8px; border-radius: 5px; border-left: 2px solid transparent; transition: all .15s; line-height: 1.35; margin-bottom: 1px; }
+.toc a:hover { color: var(--text); background: var(--surface-2); }
+.toc a.active { color: var(--text); border-left-color: var(--accent); background: var(--accent-dim); }
+
+/* TL;DR 摘要框 */
+.tldr { background: var(--surface-elevated); border: 1px solid color-mix(in srgb, var(--accent) 35%, var(--border)); border-radius: 14px; padding: 20px 24px; margin: 24px 0 8px; box-shadow: 0 4px 18px rgba(13,148,136,.06); }
+.tldr__label { font-family: var(--font-mono); font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: 1.8px; color: var(--accent); margin-bottom: 10px; display: flex; align-items: center; gap: 8px; }
+.tldr__label::before { content: ''; width: 8px; height: 8px; border-radius: 50%; background: currentColor; }
+.tldr ul { list-style: none; padding: 0; }
+.tldr li { padding: 5px 0 5px 18px; position: relative; font-size: 14px; line-height: 1.55; }
+.tldr li::before { content: '→'; position: absolute; left: 0; color: var(--accent); font-weight: 600; }
+.tldr code { font-family: var(--font-mono); font-size: 12px; background: var(--accent-dim); color: var(--accent); padding: 1px 6px; border-radius: 3px; }
+
+/* Mermaid zoom/pan 外壳（与 zoom.js 的选择器契约绑定，勿改名） */
+.mermaid-wrap { position: relative; background: var(--surface); border: 1px solid var(--border); border-radius: 12px; padding: 32px 24px; overflow: auto; margin-bottom: 24px; display: flex; justify-content: center; align-items: center; min-height: 400px; cursor: grab; }
+.mermaid-wrap.is-panning { cursor: grabbing; user-select: none; }
+.zoom-controls { position: absolute; top: 8px; right: 8px; display: flex; gap: 2px; z-index: 10; background: var(--surface); border: 1px solid var(--border); border-radius: 6px; padding: 2px; }
+.zoom-controls button { width: 28px; height: 28px; border: none; background: transparent; color: var(--text-dim); font-family: var(--font-mono); font-size: 14px; cursor: pointer; border-radius: 4px; display: flex; align-items: center; justify-content: center; transition: background .15s, color .15s; }
+.zoom-controls button:hover { background: var(--border); color: var(--text); }
+.diagram-shell { position: relative; }
+.diagram-shell__hint { font-family: var(--font-mono); font-size: 11px; color: var(--text-dim); margin-bottom: 8px; opacity: .7; }
+.mermaid-viewport { position: relative; overflow: hidden; width: 100%; height: 100%; min-height: 300px; }
+.mermaid-canvas { position: absolute; top: 0; left: 0; }
+.zoom-label { font-family: var(--font-mono); font-size: 10px; color: var(--text-dim); padding: 0 6px; white-space: nowrap; }
+.mermaid .nodeLabel { font-family: var(--font-body) !important; font-size: 14px !important; }
+.mermaid .edgeLabel { font-family: var(--font-mono) !important; font-size: 12px !important; }
+.mermaid .node rect, .mermaid .node circle, .mermaid .node polygon { stroke-width: 1.5px !important; }
+
+/* 数据表格（功能清单/AC 清单/追溯表/签名表/决策记录） */
+.table-wrap { background: var(--surface); border: 1px solid var(--border); border-radius: 12px; overflow: hidden; margin: 16px 0 24px; }
+.table-scroll { overflow-x: auto; -webkit-overflow-scrolling: touch; }
+.data-table { width: 100%; border-collapse: collapse; font-size: 13px; line-height: 1.55; }
+.data-table thead { position: sticky; top: 0; z-index: 2; }
+.data-table th { background: var(--surface-2); font-family: var(--font-mono); font-size: 10px; font-weight: 600; text-transform: uppercase; letter-spacing: 1px; color: var(--text-dim); text-align: left; padding: 13px 16px; border-bottom: 2px solid var(--border-bright); white-space: nowrap; }
+.data-table td { padding: 11px 16px; border-bottom: 1px solid var(--border); vertical-align: top; }
+.data-table tbody tr:nth-child(even) { background: var(--accent-dim); }
+.data-table tbody tr:hover { background: var(--border); }
+.data-table tbody tr:last-child td { border-bottom: none; }
+.data-table code { font-family: var(--font-mono); font-size: 11px; background: var(--accent-dim); color: var(--accent); padding: 1px 5px; border-radius: 3px; }
+
+/* Callout 提示框 */
+.callout { background: var(--surface-2); border: 1px solid var(--border); border-left: 3px solid var(--accent); border-radius: 0 8px 8px 0; padding: 14px 18px; font-size: 13px; line-height: 1.6; color: var(--text-dim); margin: 20px 0; }
+.callout strong { color: var(--text); font-weight: 600; }
+.callout code { font-family: var(--font-mono); font-size: 11px; background: var(--accent-dim); color: var(--accent); padding: 1px 5px; border-radius: 3px; }
+
+/* 章节小标题（mono 大写，区别于 h2） */
+.sec-head { font-family: var(--font-mono); font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: 1.5px; color: var(--accent); margin: 40px 0 14px; padding-bottom: 8px; border-bottom: 1px solid var(--border); }
+
+/* 卡片组件（架构概览 / 决策记录 / 模块概览） */
+.ve-card { background: var(--surface); border: 1px solid var(--border); border-radius: 12px; padding: 18px 20px; display: flex; flex-direction: column; gap: 8px; }
+.ve-card--elevated { box-shadow: 0 4px 18px rgba(13,148,136,.06); }
+.ve-card__label { font-family: var(--font-mono); font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: 1.2px; color: var(--accent); display: flex; align-items: center; gap: 6px; }
+.ve-card__label::before { content: ''; width: 7px; height: 7px; border-radius: 50%; background: currentColor; }
+.ve-card h3 { margin: 0; color: var(--text); font-family: var(--font-body); font-size: 17px; letter-spacing: -0.2px; }
+.ve-card p { margin: 0; font-size: 13.5px; color: var(--text-dim); line-height: 1.55; }
+.card-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 16px; margin: 18px 0 28px; }
+.node-list { list-style: none; padding: 0; margin: 0; }
+.node-list li { padding: 4px 0 4px 16px; position: relative; font-size: 13px; line-height: 1.5; color: var(--text-dim); }
+.node-list li::before { content: '›'; position: absolute; left: 0; color: var(--accent); font-weight: 700; }
+.node-list code { font-family: var(--font-mono); font-size: 11.5px; background: var(--accent-dim); color: var(--accent); padding: 1px 5px; border-radius: 3px; }
+
+/* 状态药丸（AC 清单 / 追溯表状态列） */
+.status { display: inline-flex; align-items: center; gap: 5px; font-family: var(--font-mono); font-size: 11px; font-weight: 600; padding: 2px 8px; border-radius: 5px; white-space: nowrap; }
+.status::before { content: ''; width: 6px; height: 6px; border-radius: 50%; background: currentColor; }
+.status--match { background: var(--green-dim); color: var(--green); }
+.status--warn { background: var(--amber-dim); color: var(--amber); }
+.status--gap { background: var(--red-dim); color: var(--red); }
+.status--na { background: var(--slate-dim); color: var(--slate); }
+
+/* 热力图单元格（④ NFR 风险矩阵） */
+.heatmap-cell { text-align: center; font-size: 15px; padding: 8px; }
+.heatmap-cell--good { background: var(--green-dim); }
+.heatmap-cell--warn { background: var(--amber-dim); }
+.heatmap-cell--bad { background: var(--red-dim); }
+.heatmap-cell--na { background: transparent; color: var(--text-dim); }
+
+/* 图例 */
+.legend { display: flex; flex-wrap: wrap; gap: 14px; margin: 16px 0; font-size: 12px; color: var(--text-dim); font-family: var(--font-mono); }
+.legend-item { display: flex; align-items: center; gap: 6px; }
+.legend-swatch { width: 14px; height: 14px; border-radius: 3px; }
+
+/* Footer */
+footer.doc-foot { margin-top: 48px; padding-top: 20px; border-top: 1px solid var(--border); font-size: 12px; color: var(--text-dim); font-family: var(--font-mono); }
+
+/* 入场动画 */
+@keyframes fadeUp { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: translateY(0); } }
+.animate { animation: fadeUp .35s ease-out both; animation-delay: calc(var(--i, 0) * .04s); }
+
+/* 响应式 */
+@media (prefers-reduced-motion: reduce) { *, *::before, *::after { animation-duration: .01ms !important; transition-duration: .01ms !important; } }
+@media (max-width: 1000px) {
+  .wrap { grid-template-columns: 1fr; }
+  .toc { position: sticky; top: 0; z-index: 200; max-height: none; display: flex; gap: 4px; align-items: center; overflow-x: auto; background: var(--bg); border-bottom: 1px solid var(--border); padding: 10px 0; grid-row: auto; }
+  .toc-title { display: none; }
+  .toc a { white-space: nowrap; flex-shrink: 0; border-left: none; border-bottom: 2px solid transparent; border-radius: 4px 4px 0 0; padding: 6px 10px; font-size: 10px; }
+  .toc a.active { border-left: none; border-bottom-color: var(--accent); background: var(--surface); }
+  h2, h3 { scroll-margin-top: 60px; }
+  body { padding: 16px; }
+}
+@media (max-width: 768px) { body { padding: 12px; } h1 { font-size: 26px; } }
+
+
+/* === nfr 阶段特有样式 === */
+.risk-ok { background: var(--green-dim); color: var(--green); text-align: center; font-weight: 700; font-size: 16px; }
+.risk-warn { background: var(--amber-dim); color: var(--amber); text-align: center; font-weight: 700; font-size: 16px; }
+.risk-na { background: transparent; color: var(--text-dim); text-align: center; font-size: 14px; }
+.callout--critical { border-left-color: var(--red); background: var(--red-dim); }
+.callout--critical strong { color: var(--red); }
+.dim-cell { font-family: var(--font-mono); font-size: 10px; font-weight: 600; text-transform: uppercase; letter-spacing: .5px; color: var(--text-dim); text-align: center; }
+.iss-cell { font-family: var(--font-mono); font-size: 12px; font-weight: 700; color: var(--accent); }
+</style>
+</head>
+<body>
+<div class="wrap">
+<nav class="toc" id="toc">
+  <div class="toc-title">目录</div>
+  <a href="#tldr">TL;DR</a>
+  <a href="#matrix">风险矩阵</a>
+  <a href="#critical">关键副作用</a>
+  <a href="#detail">详细分析</a>
+  <a href="#mitigation">缓解项回灌</a>
+  <a href="#residual">残余风险</a>
+  <a href="#skeleton">⑤骨架验证</a>
+</nav>
+<main class="main">
+<header class="doc-head">
+  <h1>非功能性设计</h1>
+  <p class="subtitle">subagent fork 上下文 + worktree 隔离 · ④ NFR · upstream: issues.md</p>
+  <div class="badge-row">
+    <span class="tag tag--green">verdict: pass</span>
+    <span class="tag tag--amber">13 issue × 7 维度</span>
+    <span class="tag tag--slate">无 ❌ 不可接受项</span>
+    <span class="tag tag--slate">高密度：#4 / #7</span>
+    <span class="tag">7 残余风险（均已接受）</span>
+  </div>
+</header>
+
+<div class="tldr animate" id="tldr" style="--i:0">
+  <div class="tldr__label">TL;DR · 核心结论</div>
+  <ul>
+    <li><strong>13 issue × 7 维度全评</strong>：无不可接受项（❌），所有 ⚠️ 均有缓解或标记残余风险。高密度风险集中在 <code>#4 WorktreeManager</code>（外部 git 副作用 + 数据安全 + 跨实例删活竞态）与 <code>#7 SubagentService</code>（D-017 时序 + 三件套故障处理）。</li>
+    <li><strong>3 个最危险风险已缓解</strong>：D-022 collectPatch 失败保 worktree（数据黑洞）→ AC-7.4 故障注入；D-024 reaper 孤儿判据 .alive 守卫（跨实例删活 worktree）→ AC-4.4/9.4；pid 复用（24h 隐形僵尸）→ 软超时兜底 + 监控指标。</li>
+    <li><strong>12 条缓解回灌③issue</strong>（已在 issues.md AC，双向可查）+ 2 条回灌⑤契约（recordId 白名单 + fork 日志）+ 4 条运维项（日志/指标配置）。</li>
+    <li><strong>7 条残余风险全部接受</strong>：pid 复用（D-021 拍板）/ reaper 无 24h 超时不对称 / collectPatch 部分成功 / Windows 限制（OS-7）/ fork×compaction 交错 / 10 层嵌套 token / crashed↔externalInstance 翻转。</li>
+    <li><strong>追踪收敛</strong>：Round 1 发现 18 gap（含 #5 时序方向 F 错 + #9 职责②缺失 K），全修；收敛复核 CONVERGED，实质修复率 100%。</li>
+  </ul>
+</div>
+
+<h2 class="sec-head" id="matrix">风险矩阵热力图（主角图）— issue × 7 维度</h2>
+
+<div class="legend animate" style="--i:1">
+  <div class="legend-item"><span class="risk-ok" style="padding:2px 8px;border-radius:4px;">✅</span> 无风险 / 不适用（已说明）</div>
+  <div class="legend-item"><span class="risk-warn" style="padding:2px 8px;border-radius:4px;">⚠️</span> 有风险已缓解</div>
+  <div class="legend-item"><span style="color:var(--text-dim);">—</span> 不适用（POSIX-only/纯函数等）</div>
+  <div class="legend-item"><span style="color:var(--red);font-weight:700;">❌</span> 不可接受（本轮无此项）</div>
+</div>
+
+<div class="table-wrap animate" style="--i:2">
+  <div class="table-scroll">
+    <table class="data-table" style="text-align:center;">
+      <thead>
+        <tr>
+          <th style="text-align:left;">Issue</th>
+          <th>安全</th><th>数据</th><th>性能</th><th>并发</th><th>稳定性</th><th>兼容性</th><th>可观测</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr><td style="text-align:left;" class="iss-cell">#1 types.ts</td><td class="risk-warn">⚠️</td><td class="risk-warn">⚠️</td><td class="risk-ok">✅</td><td class="risk-ok">✅</td><td class="risk-ok">✅</td><td class="risk-warn">⚠️</td><td class="risk-ok">✅</td></tr>
+        <tr><td style="text-align:left;" class="iss-cell">#2 状态机</td><td class="risk-ok">✅</td><td class="risk-warn">⚠️</td><td class="risk-ok">✅</td><td class="risk-warn">⚠️</td><td class="risk-ok">✅</td><td class="risk-warn">⚠️</td><td class="risk-warn">⚠️</td></tr>
+        <tr><td style="text-align:left;" class="iss-cell">#3 SCR</td><td class="risk-warn">⚠️</td><td class="risk-ok">✅</td><td class="risk-ok">✅</td><td class="risk-ok">✅</td><td class="risk-ok">✅</td><td class="risk-ok">✅</td><td class="risk-ok">✅</td></tr>
+        <tr><td style="text-align:left;" class="iss-cell">#4 WorktreeManager ★</td><td class="risk-warn">⚠️</td><td class="risk-warn">⚠️</td><td class="risk-warn">⚠️</td><td class="risk-warn">⚠️</td><td class="risk-warn">⚠️</td><td class="risk-na">—</td><td class="risk-warn">⚠️</td></tr>
+        <tr><td style="text-align:left;" class="iss-cell">#5 FinalizedMarker</td><td class="risk-ok">✅</td><td class="risk-warn">⚠️</td><td class="risk-ok">✅</td><td class="risk-ok">✅</td><td class="risk-ok">✅</td><td class="risk-ok">✅</td><td class="risk-ok">✅</td></tr>
+        <tr><td style="text-align:left;" class="iss-cell">#6 session-runner</td><td class="risk-warn">⚠️</td><td class="risk-warn">⚠️</td><td class="risk-warn">⚠️</td><td class="risk-ok">✅</td><td class="risk-warn">⚠️</td><td class="risk-warn">⚠️</td><td class="risk-warn">⚠️</td></tr>
+        <tr><td style="text-align:left;" class="iss-cell">#7 SubagentService ★</td><td class="risk-ok">✅</td><td class="risk-warn">⚠️</td><td class="risk-warn">⚠️</td><td class="risk-warn">⚠️</td><td class="risk-warn">⚠️</td><td class="risk-ok">✅</td><td class="risk-warn">⚠️</td></tr>
+        <tr><td style="text-align:left;" class="iss-cell">#8 subagent-tool</td><td class="risk-warn">⚠️</td><td class="risk-ok">✅</td><td class="risk-ok">✅</td><td class="risk-ok">✅</td><td class="risk-ok">✅</td><td class="risk-ok">✅</td><td class="risk-ok">✅</td></tr>
+        <tr><td style="text-align:left;" class="iss-cell">#9 index.ts</td><td class="risk-ok">✅</td><td class="risk-warn">⚠️</td><td class="risk-warn">⚠️</td><td class="risk-warn">⚠️</td><td class="risk-warn">⚠️</td><td class="risk-ok">✅</td><td class="risk-ok">✅</td></tr>
+        <tr><td style="text-align:left;" class="iss-cell">#10 session-file-gc</td><td class="risk-ok">✅</td><td class="risk-ok">✅</td><td class="risk-ok">✅</td><td class="risk-warn">⚠️</td><td class="risk-ok">✅</td><td class="risk-ok">✅</td><td class="risk-ok">✅</td></tr>
+        <tr><td style="text-align:left;" class="iss-cell">#11 ADR-001</td><td class="risk-ok">✅</td><td class="risk-ok">✅</td><td class="risk-ok">✅</td><td class="risk-ok">✅</td><td class="risk-ok">✅</td><td class="risk-warn">⚠️</td><td class="risk-ok">✅</td></tr>
+        <tr><td style="text-align:left;" class="iss-cell">#12 跨实例 crashed ★</td><td class="risk-ok">✅</td><td class="risk-warn">⚠️</td><td class="risk-ok">✅</td><td class="risk-warn">⚠️</td><td class="risk-warn">⚠️</td><td class="risk-warn">⚠️</td><td class="risk-warn">⚠️</td></tr>
+        <tr><td style="text-align:left;" class="iss-cell">#13 alive-store</td><td class="risk-ok">✅</td><td class="risk-warn">⚠️</td><td class="risk-ok">✅</td><td class="risk-ok">✅</td><td class="risk-ok">✅</td><td class="risk-ok">✅</td><td class="risk-ok">✅</td></tr>
+      </tbody>
+    </table>
+  </div>
+</div>
+
+<div class="callout animate" style="--i:3">
+  <strong>矩阵观察</strong>：13 issue 全部为 ✅ 或 ⚠️（无可接受性问题）。高密度风险集中在 <code>#4 WorktreeManager</code>（6/7 维度 ⚠️，外部 git 副作用 + 数据安全 + 跨实例删活竞态）与 <code>#7 SubagentService</code>（5/7 维度 ⚠️，D-017 时序 + 故障处理），符合"最重新模块 + 编排汇合点"预期。<code>#12 跨实例 crashed</code>（5/7 ⚠️）是跨实例正确性最高风险区。<code>#3/#8/#10/#11</code> 风险低（纯函数/schema/卫生项/文档）。
+</div>
+
+<h2 class="sec-head" id="critical">关键副作用（需下游关注）</h2>
+
+<div class="card-grid animate" style="--i:4">
+  <div class="ve-card ve-card--elevated">
+    <div class="ve-card__label" style="color: var(--red);">★ D-022 数据黑洞（#7）</div>
+    <h3>collectPatch 失败 → cleanup 删 worktree</h3>
+    <p>worktree subagent 核心交付物是 git 改动。collectPatch 失败时若仍 cleanup（D-017 三件套 best-effort 连带）= patch 没生成 + worktree rm -rf + branch -D = 改动彻底丢失不可恢复。</p>
+    <p><strong>缓解</strong>：collectPatch 失败→cleanup 必须跳过（保 worktree+分支）+ record.result.patchFailed:true + 路径。数据安全 &gt; 回收完整性。AC-7.4 故障注入测试。</p>
+    <span class="tag tag--green">回灌 #7 AC-7.4（代码测试）</span>
+  </div>
+  <div class="ve-card">
+    <div class="ve-card__label" style="color: var(--red);">★ D-024 删活 worktree（#4/#9）</div>
+    <h3>reaper 跨实例误删实例 A 活 worktree</h3>
+    <p>reaper 看不到实例 A 内存 running record，若孤儿判据=「无对应 running record」→ 误把 A 正在跑的活 worktree 当孤儿清 → 子 agent 工作目录 rm -rf。比 crashed 误判严重一个量级（删数据）。</p>
+    <p><strong>缓解</strong>：孤儿判据=终态标记 且无活 .alive（readAliveMarker+isProcessAlive from #13）。绝不删活 .alive 的 worktree。AC-4.4/9.4 跨实例故障注入。</p>
+    <span class="tag tag--green">回灌 #4/#9 AC（代码测试）</span>
+  </div>
+  <div class="ve-card">
+    <div class="ve-card__label" style="color: var(--amber);">★ pid 复用（#12）</div>
+    <h3>24h 隐形僵尸 record</h3>
+    <p>A 死后 pid 被 B 复用 → .alive 探活返回活 → record 投影 externalInstance 最坏 24h（直到软超时）。不可见崩溃。</p>
+    <p><strong>缓解</strong>：startedAt+24h 软超时兜底（AC-12.3）+ externalInstance 年龄分布指标（让僵尸可观测）。D-021 用户拍板：概率正确非确定，pi 长生命周期下复用窗口极小。</p>
+    <span class="tag tag--amber">残余风险（已接受）</span>
+  </div>
+  <div class="ve-card">
+    <div class="ve-card__label" style="color: var(--amber);">★ D-017 时序窗口（#5）</div>
+    <h3>①②后③前无 .finalized 误判 crashed</h3>
+    <p>D-017 时序 ⓪collectPatch→①completeRecord→②archive→③writeFileSync。真窗口：①②后③前 → 无 .finalized 但磁盘已 done → 三分支恒判 crashed（不读 recon.status）。</p>
+    <p><strong>缓解</strong>：窗口极短（archive 与 writeFileSync 间）+ 纯显示误差（record 磁盘完整）+ crashed 是安全降级。原"UC-7 recon 兜底"不成立（三分支不读 recon.status）。</p>
+    <span class="tag tag--amber">残余风险（已接受）</span>
+  </div>
+</div>
+
+<h2 class="sec-head" id="detail">详细分析（13 issue × 7 维度，见 .md）</h2>
+<div class="callout animate" style="--i:5">
+  完整 7 维度详细分析（每 ⚠️ 维度按 4 字段模板：风险/影响/缓解/残余；✅ 维度一行理由）见 <code>non-functional-design.md</code>。此处摘列各 issue 关键风险与缓解方向。HTML 侧重矩阵 + 关键副作用 + 回灌登记的可视化，逐维度的完整推理在 .md。
+</div>
+
+<div class="table-wrap animate" style="--i:6">
+  <div class="table-scroll">
+    <table class="data-table">
+      <thead><tr><th>Issue</th><th>关键风险（⚠️ 维度摘要）</th><th>缓解方向</th></tr></thead>
+      <tbody>
+        <tr><td><code>#1</code></td><td>安全：unknown 非 any 收窄；兼容：crashed 是编译期 breaking</td><td>AC-1.6 shape check；编译器强制全仓同步（优势）</td></tr>
+        <tr><td><code>#2</code></td><td>数据：三分支非原子；并发：markReconstructedStatus 收口；兼容：BC-7 done→crashed 重分类</td><td>静态规则禁裸赋值（AC-2.2/2.3）；BC-7 已决</td></tr>
+        <tr><td><code>#3</code></td><td>安全：路径遍历（mainSessionFile）</td><td>SDK 受控路径 + effectiveCwd 只读传参</td></tr>
+        <tr><td><code>#4</code></td><td>安全：git 参数注入；数据：collectPatch 失败黑洞；并发：跨实例删活；性能：大 repo create 慢</td><td>recordId 白名单；D-024 .alive 守卫；node_modules 软链</td></tr>
+        <tr><td><code>#5</code></td><td>数据：D-017 时序窗口（①②后③前）误判 crashed</td><td>窗口极短 + 纯显示 + 安全降级</td></tr>
+        <tr><td><code>#6</code></td><td>安全：mutate 串台；性能：嵌套体积；兼容：cwd 拆分 breaking</td><td>AC-6.1/6.4 集成断言；createBranchedSession 优先；编译期同步</td></tr>
+        <tr><td><code>#7</code></td><td>数据：D-022 黑洞；并发：CAS 竞争；稳定性：三件套失败</td><td>collectPatch 失败保 worktree；现有 CAS；B9 兜底</td></tr>
+        <tr><td><code>#8</code></td><td>安全：fork 继承敏感数据（G5）</td><td>system prompt 警告（与 #11 ADR 口径一致）</td></tr>
+        <tr><td><code>#9</code></td><td>数据：getSessionFile() 时序；并发：跨实例 reaper；性能：scan 阻塞启动</td><td>依赖 SDK 保证；D-024 .alive 守卫；best-effort 不阻断</td></tr>
+        <tr><td><code>#10</code></td><td>并发：GC 清 .alive 误致 crashed（B3）</td><td>清前先 isProcessAlive 守卫（AC-10.2）</td></tr>
+        <tr><td><code>#11</code></td><td>兼容：ADR-001 契约变更</td><td>文档修订 + 与 #8 口径一致</td></tr>
+        <tr><td><code>#12</code></td><td>数据：四分支非原子；并发：翻转；稳定性：Windows；兼容：投影字段</td><td>pid 探活 + externalInstance 投影 + 软超时</td></tr>
+        <tr><td><code>#13</code></td><td>数据：writeAliveMarker 抛错 → 跨实例误判 crashed</td><td>best-effort 降级（与 tombstone-store 范式一致）</td></tr>
+      </tbody>
+    </table>
+  </div>
+</div>
+
+<h2 class="sec-head" id="mitigation">缓解项回灌登记</h2>
+
+<div class="table-wrap animate" style="--i:7">
+  <div class="table-scroll">
+    <table class="data-table">
+      <thead><tr><th>缓解项</th><th>来源</th><th>维度</th><th>回灌去向</th><th>验收方式</th><th>状态</th></tr></thead>
+      <tbody>
+        <tr><td>recordId 白名单 + 建议 AC-4.14</td><td>#4</td><td>安全</td><td>⑤契约 + 建议补③</td><td>骨架约束</td><td>待落</td></tr>
+        <tr><td>collectPatch 失败保 worktree（D-022）</td><td>#7</td><td>数据</td><td>③#7 AC-7.4</td><td>代码测试</td><td>已落</td></tr>
+        <tr><td>completeRecord/archive 抛错兜底（B9）</td><td>#7</td><td>稳定性</td><td>③#7 AC-7.9</td><td>代码测试</td><td>已落</td></tr>
+        <tr><td>reaper 孤儿判据 .alive 守卫（D-024）</td><td>#4/#9</td><td>并发</td><td>③#4 AC-4.4 / #9 AC-9.4</td><td>代码测试</td><td>已落</td></tr>
+        <tr><td>GC 清 .alive 先探活（B3）</td><td>#10</td><td>并发</td><td>③#10 AC-10.2</td><td>代码测试</td><td>已落</td></tr>
+        <tr><td>四分支 sidecar 矩阵（D-021）</td><td>#12</td><td>并发</td><td>③#12 AC-12.2</td><td>代码测试</td><td>已落</td></tr>
+        <tr><td>externalInstance 投影类型测试（D-023）</td><td>#1/#12</td><td>数据</td><td>③#1 AC-1.5 / #12 AC-12.4</td><td>代码测试</td><td>已落</td></tr>
+        <tr><td>fork 继承敏感数据文档化（G5）</td><td>#8</td><td>安全</td><td>③#8 AC-8.4</td><td>骨架约束</td><td>已落</td></tr>
+        <tr><td>fork 两级降级链测试</td><td>#6</td><td>稳定性</td><td>③#6 AC-6.3</td><td>代码测试</td><td>已落</td></tr>
+        <tr><td>node_modules 软链生效验证</td><td>#4</td><td>性能</td><td>③#4 AC-4.10/4.11</td><td>代码测试</td><td>已落</td></tr>
+        <tr><td>status 收口静态规则</td><td>#2</td><td>并发</td><td>③#2 AC-2.2/2.3</td><td>代码测试</td><td>已落</td></tr>
+        <tr><td>fork 路径日志（createBranched/forkFrom + depth）</td><td>#6</td><td>可观测</td><td>⑤契约</td><td>骨架约束</td><td>待落</td></tr>
+        <tr><td>crashed reason 日志 + 计数</td><td>#2</td><td>可观测</td><td>运维项</td><td>运维项</td><td>待落</td></tr>
+        <tr><td>WorktreeManager 日志 + 成功率</td><td>#4</td><td>可观测</td><td>运维项</td><td>运维项</td><td>待落</td></tr>
+        <tr><td>finalizeRecord 三件套日志 + patchFailed 计数</td><td>#7</td><td>可观测</td><td>运维项</td><td>运维项</td><td>待落</td></tr>
+        <tr><td>pid 复用兜底 + externalInstance 年龄指标</td><td>#12</td><td>可观测</td><td>运维项</td><td>运维项</td><td>待落</td></tr>
+      </tbody>
+    </table>
+  </div>
+</div>
+
+<div class="callout animate" style="--i:8">
+  <strong>回灌去向统计</strong>：<strong>③issue（即时承诺）</strong>12 条已在 issues.md AC（Step2 回灌重建器核对全 OK，无 PHANTOM/MISMATCH）；<strong>⑤契约（延期承诺）</strong>2 条（recordId 白名单 + fork 日志，由 ⑤code-arch §6 来源B 接住）；<strong>运维项</strong>4 条（日志/指标配置，不进开发 issue）。
+</div>
+
+<h2 class="sec-head" id="residual">残余风险登记（7 条，均已接受）</h2>
+
+<div class="table-wrap animate" style="--i:9">
+  <div class="table-scroll">
+    <table class="data-table">
+      <thead><tr><th>风险</th><th>影响</th><th>接受理由</th><th>监控</th></tr></thead>
+      <tbody>
+        <tr><td>pid 复用（24h 隐形僵尸）</td><td>跨实例误判 running-elsewhere，最坏 24h</td><td>D-021 拍板：pi 长生命周期复用窗口极小；软超时兜底；A 改动最小</td><td>复用触发计数 + externalInstance 年龄指标</td></tr>
+        <tr><td>reaper 无 24h 超时不对称</td><td>pid 复用孤儿 worktree 磁盘残留</td><td>无数据丢失，仅磁盘占用；reaper 是卫生非正确性</td><td>孤儿磁盘占用 + 人工清理</td></tr>
+        <tr><td>collectPatch 部分成功</td><td>worktree 改动可能丢失（patch 不完整）</td><td>UC-4 接受降级：空 patch+警告；D-022 保 worktree 兜底</td><td>patchFailed 计数</td></tr>
+        <tr><td>Windows pid 探活限制</td><td>Windows 跨实例 crashed 检测不准</td><td>OS-7 首版 POSIX-only；AC-12.5 try/catch 保守判死</td><td>文档标注</td></tr>
+        <tr><td>fork × compaction 交错</td><td>fork 取不完整/交错历史</td><td>AC-6.9 createBranchedSession 取 compaction 后路径 + SDK 快照读</td><td>fork 失败/降级计数</td></tr>
+        <tr><td>10 层嵌套 token 压力</td><td>极端嵌套 token/磁盘累积</td><td>D-007 depth≤10 硬截断；createBranchedSession 体积控制</td><td>depth 分布（接近 10 告警）</td></tr>
+        <tr><td>crashed↔externalInstance 翻转</td><td>跨实例记录扫描间分类不稳定</td><td>crashed 是保守安全降级，最终收敛 externalInstance；窗口短</td><td>翻转计数指标</td></tr>
+      </tbody>
+    </table>
+  </div>
+</div>
+
+<h2 class="sec-head" id="skeleton">需⑤骨架验证的副作用</h2>
+
+<div class="table-wrap animate" style="--i:10">
+  <div class="table-scroll">
+    <table class="data-table">
+      <thead><tr><th>副作用</th><th>来源</th><th>验证什么</th><th>预期结论</th><th>⑤stub</th></tr></thead>
+      <tbody>
+        <tr><td>createBranchedSession mutate 不串台</td><td>#6</td><td>fork:true 时传 createAgentSession 的是 mutate 后同一实例，子 agent 写独立 session</td><td>session.messages 含主历史且写入落子 session</td><td>session-runner fork 分流 stub</td></tr>
+        <tr><td>node_modules 软链 + setupHook</td><td>#4</td><td>create 后 worktree 内 node_modules 可用 + setupHook 执行</td><td>node_modules/.bin 存在 + setupHook 副作用</td><td>WorktreeManager.create stub</td></tr>
+        <tr><td>recordId 白名单防注入</td><td>#4</td><td>recordId 含 shell 元字符时 create 拒绝</td><td>含特殊字符 recordId 抛错</td><td>WorktreeManager.create 校验 stub</td></tr>
+        <tr><td>fork 两级降级链</td><td>#6</td><td>createBranchedSession 抛错→降级 forkFrom</td><td>mock reject → 走 forkFrom（两级）</td><td>session-runner 降级 try/catch stub</td></tr>
+        <tr><td>session_start 时 mainSessionFile 就绪</td><td>#9</td><td>session_start 触发时主 session 文件已存在</td><td>getSessionFile() 返回有效路径</td><td>index.ts session_start 缓存 stub</td></tr>
+      </tbody>
+    </table>
+  </div>
+</div>
+
+<footer class="doc-foot">subagent fork 上下文 + worktree 隔离 · 非功能性设计 · upstream: issues.md · verdict: pass · 13 issue × 7 维度</footer>
+</main>
+</div>
+
+<script type="module">/*
+ * zoom.js — design-visual-explainer 公共脚本
+ * 从 issues.html (feat-system-prompt-loader) 抽出，含 Mermaid zoom/pan/fit/expand + TOC scroll-spy。
+ * render.sh 通过占位符注释 INLINE:zoom.js 将本文件内联进产物 HTML 的 script[type=module]。
+ *
+ * 依赖：mermaid@11 + @mermaid-js/layout-elk（CDN ESM import）。
+ * CSS 契约：.diagram-shell 及内部 .mermaid-wrap/.mermaid-viewport/.mermaid-canvas/.diagram-source/.zoom-label
+ *          + [data-action] 按钮（zoom-in/out/fit/one/expand）— 类名与 design.css 绑定，勿改名。
+ */
+import mermaid from 'https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.esm.min.mjs';
+import elkLayouts from 'https://cdn.jsdelivr.net/npm/@mermaid-js/layout-elk/dist/mermaid-layout-elk.esm.min.mjs';
+
+const config = { fitPadding: 28, minHeight: 360, maxHeightPx: 960, maxHeightVh: 0.84, maxInitialZoom: 1.8, minZoom: 0.08, maxZoom: 6.5, zoomStep: 0.14, readabilityFloor: 0.58 };
+const clamp = (n, lo, hi) => Math.max(lo, Math.min(hi, n));
+let activeDrag = null;
+addEventListener('mousemove', (e) => activeDrag?.onMove(e));
+addEventListener('mouseup', () => { activeDrag?.onEnd(); activeDrag = null; });
+const isDark = matchMedia('(prefers-color-scheme: dark)').matches;
+
+mermaid.registerLayoutLoaders(elkLayouts);
+mermaid.initialize({
+  startOnLoad: false, theme: 'base', look: 'classic', layout: 'elk',
+  themeVariables: {
+    fontFamily: "'Bricolage Grotesque', 'PingFang SC', system-ui, sans-serif", fontSize: '14px',
+    primaryColor: isDark ? '#115e59' : '#ccfbf1', primaryBorderColor: isDark ? '#2dd4bf' : '#0d9488', primaryTextColor: isDark ? '#ccfbf1' : '#134e3a',
+    secondaryColor: isDark ? '#1e293b' : '#fef3c7', secondaryBorderColor: isDark ? '#fbbf24' : '#b45309', secondaryTextColor: isDark ? '#fef3c7' : '#451a03',
+    lineColor: isDark ? '#5eead4' : '#5f8a85',
+  }
+});
+
+function initDiagram(shell) {
+  const wrap = shell.querySelector('.mermaid-wrap');
+  const viewport = shell.querySelector('.mermaid-viewport');
+  const canvas = shell.querySelector('.mermaid-canvas');
+  const source = shell.querySelector('.diagram-source');
+  const label = shell.querySelector('.zoom-label');
+  if (!wrap || !viewport || !canvas || !source || !label) { console.error('initDiagram: missing elements', shell); return; }
+  let zoom = 1, fitMode = 'contain', panX = 0, panY = 0, svgW = 0, svgH = 0;
+  let sx = 0, sy = 0, spx = 0, spy = 0, touchDist = 0, touchCx = 0, touchCy = 0;
+  function constrainPan() { const vpW = viewport.clientWidth, vpH = viewport.clientHeight; const rW = svgW*zoom, rH = svgH*zoom, pad = config.fitPadding; panX = (rW+pad*2<=vpW)?(vpW-rW)/2:clamp(panX,vpW-rW-pad,pad); panY = (rH+pad*2<=vpH)?(vpH-rH)/2:clamp(panY,vpH-rH-pad,pad); }
+  function applyTransform() { const svg = canvas.querySelector('svg'); if (!svg||!svgW) return; constrainPan(); svg.style.width=(svgW*zoom)+'px'; svg.style.height=(svgH*zoom)+'px'; canvas.style.transform=`translate(${panX}px,${panY}px)`; label.textContent=Math.round(zoom*100)+'% \u2014 '+fitMode; }
+  function canPan() { return svgW*zoom+config.fitPadding*2>viewport.clientWidth || svgH*zoom+config.fitPadding*2>viewport.clientHeight; }
+  function computeSmartFit() { const vpW=viewport.clientWidth,vpH=viewport.clientHeight; const aW=Math.max(80,vpW-config.fitPadding*2),aH=Math.max(80,vpH-config.fitPadding*2); const contain=Math.min(aW/svgW,aH/svgH); let z=contain,mode='contain'; if(contain<config.readabilityFloor){const chartR=svgH/svgW,vpR=vpH/Math.max(vpW,1); if(chartR>=vpR){z=aW/svgW;mode='width-priority';}else{z=aH/svgH;mode='height-priority';}} return {zoom:clamp(z,config.minZoom,config.maxInitialZoom),mode}; }
+  function fitDiagram() { if(!svgW)return; const fit=computeSmartFit(); zoom=fit.zoom; fitMode=fit.mode; panX=(viewport.clientWidth-svgW*zoom)/2; panY=(viewport.clientHeight-svgH*zoom)/2; applyTransform(); }
+  function setOneToOne() { zoom=clamp(1,config.minZoom,config.maxZoom); fitMode='1:1'; panX=(viewport.clientWidth-svgW*zoom)/2; panY=(viewport.clientHeight-svgH*zoom)/2; applyTransform(); }
+  function zoomAround(factor,cx,cy) { const next=clamp(zoom*factor,config.minZoom,config.maxZoom); const ratio=next/zoom; panX=cx-ratio*(cx-panX); panY=cy-ratio*(cy-panY); zoom=next; fitMode='custom'; applyTransform(); }
+  function readSvgNaturalSize(svg) { let w=0,h=0; if(svg.viewBox?.baseVal?.width>0){w=svg.viewBox.baseVal.width;h=svg.viewBox.baseVal.height;} if(!w){w=parseFloat(svg.getAttribute('width'))||0;h=parseFloat(svg.getAttribute('height'))||0;} if(!w){const b=svg.getBBox();w=b.width;h=b.height;} if(!w){const r=svg.getBoundingClientRect();w=r.width||1000;h=r.height||700;} if(!svg.getAttribute('viewBox'))svg.setAttribute('viewBox',`0 0 ${w} ${h}`); return {w,h}; }
+  function setAdaptiveHeight() { if(!svgW)return; const usableW=Math.max(280,wrap.getBoundingClientRect().width-2); const idealH=(svgH/svgW)*usableW+config.fitPadding*2; const maxVp=Math.floor(innerHeight*config.maxHeightVh); const hardMax=Math.min(config.maxHeightPx,Math.max(config.minHeight+40,maxVp)); wrap.style.height=Math.round(clamp(idealH,config.minHeight,hardMax))+'px'; }
+  function openInNewTab() { const svg=canvas.querySelector('svg'); if(!svg)return; const clone=svg.cloneNode(true); clone.style.width=''; clone.style.height=''; const bg=isDark?'#0a1414':'#f6f8f8'; const html=`<!DOCTYPE html><html><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Diagram</title><style>body{margin:0;min-height:100vh;display:flex;align-items:center;justify-content:center;background:${bg};padding:40px;box-sizing:border-box}svg{max-width:100%;max-height:90vh;height:auto}</style></head><body>${clone.outerHTML}</body></html>`; open(URL.createObjectURL(new Blob([html],{type:'text/html'})),'_blank'); }
+  async function render() { try { const code=source.textContent.trim(); if(!code){label.textContent='Error: Empty source';return;} const id='diagram-'+Date.now()+'-'+Math.random().toString(36).slice(2,8); const {svg}=await mermaid.render(id,code); canvas.innerHTML=svg; const svgNode=canvas.querySelector('svg'); if(!svgNode){label.textContent='Error: No SVG';return;} const size=readSvgNaturalSize(svgNode); svgW=size.w; svgH=size.h; svgNode.removeAttribute('width'); svgNode.removeAttribute('height'); svgNode.style.maxWidth='none'; svgNode.style.display='block'; setAdaptiveHeight(); fitDiagram(); } catch(err){ console.error('Mermaid render failed:',err); label.textContent='Error: '+(err.message||'Render failed'); } }
+  const actions = { 'zoom-in':()=>zoomAround(1+config.zoomStep,viewport.clientWidth/2,viewport.clientHeight/2), 'zoom-out':()=>zoomAround(1/(1+config.zoomStep),viewport.clientWidth/2,viewport.clientHeight/2), 'zoom-fit':fitDiagram, 'zoom-one':setOneToOne, 'zoom-expand':openInNewTab };
+  Object.entries(actions).forEach(([a,h])=>wrap.querySelector(`[data-action="${a}"]`)?.addEventListener('click',h));
+  viewport.addEventListener('dblclick',fitDiagram);
+  viewport.addEventListener('wheel',(e)=>{ if(e.ctrlKey||e.metaKey){e.preventDefault();const rect=viewport.getBoundingClientRect();const f=e.deltaY<0?1+config.zoomStep:1/(1+config.zoomStep);zoomAround(f,e.clientX-rect.left,e.clientY-rect.top);return;} if(canPan()){e.preventDefault();panX-=e.deltaX;panY-=e.deltaY;applyTransform();} },{passive:false});
+  viewport.addEventListener('mousedown',(e)=>{ if(e.target.closest('.zoom-controls')||!canPan())return; wrap.classList.add('is-panning'); sx=e.clientX;sy=e.clientY;spx=panX;spy=panY;e.preventDefault(); activeDrag={onMove:(ev)=>{panX=spx+(ev.clientX-sx);panY=spy+(ev.clientY-sy);applyTransform();},onEnd:()=>wrap.classList.remove('is-panning')}; });
+  viewport.addEventListener('touchstart',(e)=>{ if(e.touches.length===1){sx=e.touches[0].clientX;sy=e.touches[0].clientY;spx=panX;spy=panY;} else if(e.touches.length===2){const dx=e.touches[0].clientX-e.touches[1].clientX,dy=e.touches[0].clientY-e.touches[1].clientY;touchDist=Math.sqrt(dx*dx+dy*dy);const r=viewport.getBoundingClientRect();touchCx=(e.touches[0].clientX+e.touches[1].clientX)/2-r.left;touchCy=(e.touches[0].clientY+e.touches[1].clientY)/2-r.top;} },{passive:true});
+  viewport.addEventListener('touchmove',(e)=>{ if(e.touches.length===1&&canPan()){if(touchDist>0){sx=e.touches[0].clientX;sy=e.touches[0].clientY;spx=panX;spy=panY;touchDist=0;}e.preventDefault();panX=spx+(e.touches[0].clientX-sx);panY=spy+(e.touches[0].clientY-sy);applyTransform();}else if(e.touches.length===2&&touchDist>0){e.preventDefault();const dx=e.touches[0].clientX-e.touches[1].clientX,dy=e.touches[0].clientY-e.touches[1].clientY;const d=Math.sqrt(dx*dx+dy*dy);zoomAround(d/touchDist,touchCx,touchCy);touchDist=d;} },{passive:false});
+  new ResizeObserver(()=>{if(svgW){setAdaptiveHeight();fitDiagram();}}).observe(wrap);
+  render();
+}
+document.querySelectorAll('.diagram-shell').forEach(initDiagram);
+
+/* TOC scroll-spy：高亮当前 section 对应的 TOC 链接 */
+(function() {
+  const toc = document.getElementById('toc'); if (!toc) return;
+  const links = toc.querySelectorAll('a'); const sections = [];
+  links.forEach(link => { const el = document.getElementById(link.getAttribute('href').slice(1)); if (el) sections.push({ el, link }); });
+  sections.forEach(s => new IntersectionObserver(entries => { entries.forEach(entry => { if (entry.isIntersecting) { links.forEach(l => l.classList.remove('active')); s.link.classList.add('active'); if (innerWidth <= 1000) s.link.scrollIntoView({ behavior: 'smooth', block: 'nearest', inline: 'center' }); } }); }, { rootMargin: '-10% 0px -80% 0px' }).observe(s.el));
+  links.forEach(link => link.addEventListener('click', e => { e.preventDefault(); const el = document.getElementById(link.getAttribute('href').slice(1)); if (el) { el.scrollIntoView({ behavior: 'smooth', block: 'start' }); history.replaceState(null, '', '#' + el.id); } }));
+})();
+</script>
+</body>
+</html>

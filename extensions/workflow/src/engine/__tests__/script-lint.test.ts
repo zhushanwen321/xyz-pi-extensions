@@ -153,6 +153,138 @@ await agent({
   });
 });
 
+// ── bare async IIFE 检测（[HISTORICAL] daily-news-impact 2ms 子进程被杀的根因）──
+
+describe("lintScript — bare async IIFE", () => {
+  it("[HISTORICAL] daily-news-impact 模式：未 await 的 IIFE 内调 agent → invalid", () => {
+ // 复刻真实 daily-news-impact.js 的结构：const meta + (async function main(){...})();
+    const source = `
+const meta = { name: 'daily-news-impact' };
+
+(async function main() {
+  const result = await agent({ prompt: 'analyze', description: 'parse' });
+  return result;
+})();
+`;
+    const r = lintScript(source);
+    expect(r.valid).toBe(false);
+    expect(r.findings.some((f) => f.severity === "error" && f.message.includes("IIFE"))).toBe(true);
+  });
+
+  it("箭头 IIFE 未 await + agent → invalid", () => {
+    const source = `
+(async () => {
+  await agent({ prompt: 'x' });
+})();
+`;
+    const r = lintScript(source);
+    expect(r.valid).toBe(false);
+    expect(r.findings.some((f) => f.message.includes("IIFE"))).toBe(true);
+  });
+
+  it("匿名 function IIFE 未 await + parallel → invalid", () => {
+    const source = `
+(async function() {
+  await parallel([() => agent({ prompt: 'a' })]);
+})();
+`;
+    const r = lintScript(source);
+    expect(r.valid).toBe(false);
+  });
+
+  it("IIFE 内无 agent（纯 execSync）→ 不触发 IIFE 规则（entry-point 规则另算）", () => {
+ // stock-screening 模式：IIFE + 纯 execSync，不含 agent。
+ // 此脚本会被 entry-point 规则拦下（必须有 agent/parallel/pipeline），
+ // 但不应触发 bare-IIFE 规则（IIFE 内无 agent，不会杀子进程）。
+    const source = `
+(async function main() {
+  const fs = require('node:fs');
+  const out = execSync('python3 script.py');
+  fs.writeFileSync('result.json', out);
+})();
+`;
+    const r = lintScript(source);
+    const iifeFindings = r.findings.filter((f) => f.message.includes("IIFE"));
+    expect(iifeFindings).toHaveLength(0);
+  });
+
+  it("裸顶层 await agent（无 IIFE）→ valid", () => {
+    const source = `
+const meta = { name: 'simple' };
+const result = await agent({ prompt: 'hi' });
+return result;
+`;
+    const r = lintScript(source);
+    expect(r.valid).toBe(true);
+  });
+
+  it("await 的 IIFE + agent → valid", () => {
+    const source = `
+await (async function main() {
+  await agent({ prompt: 'x' });
+})();
+`;
+    const r = lintScript(source);
+    expect(r.valid).toBe(true);
+  });
+
+ // [HISTORICAL] 方向 2 收紧：被 =/return 接住的 IIFE 降为 warning（不阻断），
+ // 避免误伤合法写法。只有孤立语句（fire-and-forget）才 error。
+  it("赋值后 await 的 IIFE → warning（valid=true，有 finding 提醒检查）", () => {
+    const source = `
+const p = (async () => {
+  return await agent({ prompt: 'x' });
+})();
+const r = await p;
+`;
+    const r = lintScript(source);
+    expect(r.valid).toBe(true);
+    const iifeFindings = r.findings.filter((f) => f.message.includes("IIFE") || f.message.includes("IIFE"));
+    expect(iifeFindings).toHaveLength(1);
+    expect(iifeFindings[0].severity).toBe("warning");
+  });
+
+  it("return 内的 IIFE（被外层函数接住）→ warning（不阻断）", () => {
+    const source = `
+function wrap() {
+  return (async () => {
+    return await agent({ prompt: 'x' });
+  })();
+}
+const r = await wrap();
+`;
+    const r = lintScript(source);
+    expect(r.valid).toBe(true);
+    const iifeFindings = r.findings.filter((f) => f.message.includes("IIFE"));
+    expect(iifeFindings).toHaveLength(1);
+    expect(iifeFindings[0].severity).toBe("warning");
+  });
+
+  it("IIFE 前是分号（语句边界）→ error（fire-and-forget）", () => {
+    const source = `
+const meta = {};
+(async function main() {
+  await agent({ prompt: 'x' });
+})();
+`;
+    const r = lintScript(source);
+    expect(r.valid).toBe(false);
+    const errs = r.findings.filter((f) => f.severity === "error" && f.message.includes("IIFE"));
+    expect(errs).toHaveLength(1);
+  });
+
+  it("多个 IIFE 各自独立判断（matchAll 覆盖）", () => {
+ // 两个独立 IIFE 都含 agent，应各自报一条 error（共 2 条）
+    const source = `
+(async function a() { await agent({ prompt: 'a' }); })();
+(async function b() { await agent({ prompt: 'b' }); })();
+`;
+    const r = lintScript(source);
+    const iifeFindings = r.findings.filter((f) => f.message.includes("IIFE"));
+    expect(iifeFindings).toHaveLength(2);
+  });
+});
+
 // ── entry-point 检查 ─────
 
 describe("lintScript entry-point check", () => {

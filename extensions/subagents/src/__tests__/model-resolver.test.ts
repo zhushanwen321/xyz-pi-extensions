@@ -97,15 +97,15 @@ describe("resolveModel — explicit override failures throw (no silent fallback)
     const reg = makeRegistry([]);
     expect(() =>
       resolveModel(undefined, reg, { model: "x/nonexistent" }, ctxModel),
-    ).toThrow(/not found or auth not configured/);
+    ).toThrow(/not found in registry/);
   });
 
-  it("paramOverride.model found but auth missing → throws", () => {
+  it("paramOverride.model found but auth missing → throws auth-specific message", () => {
     const m = makeModel({ id: "unauthed", provider: "u" });
     const reg = makeRegistry([m], []); // 无鉴权
     expect(() =>
       resolveModel(undefined, reg, { model: "u/unauthed" }, ctxModel),
-    ).toThrow(/not found or auth not configured/);
+    ).toThrow(/exists but auth is not configured/);
   });
 
   it("agentConfig.model not in registry → throws", () => {
@@ -117,7 +117,7 @@ describe("resolveModel — explicit override failures throw (no silent fallback)
         undefined,
         ctxModel,
       ),
-    ).toThrow(/not found or auth not configured/);
+    ).toThrow(/not found in registry/);
   });
 
   it("no override, no agentConfig.model, no ctxModel → throws listing available", () => {
@@ -132,7 +132,7 @@ describe("resolveModel — explicit override failures throw (no silent fallback)
     const reg = makeRegistry([]);
     expect(() =>
       resolveModel(undefined, reg, { model: "no-slash" }, ctxModel),
-    ).toThrow(/not found or auth not configured/);
+    ).toThrow(/not found in registry/);
   });
 });
 
@@ -198,8 +198,87 @@ describe("resolveModel — thinkingLevel resolution", () => {
 });
 
 // ============================================================
-// availableThinkingLevels
+// lookupModel 容错：剥离 ":thinkingLevel" 后缀（A）
 // ============================================================
+
+describe('resolveModel — strips ":thinkingLevel" suffix from model string (A)', () => {
+  it('resolves model passed with ":xhigh" suffix', () => {
+    const m = makeModel({ id: "ds-pro", provider: "deepseek-router", reasoning: true, thinkingLevelMap: { xhigh: 3 } });
+    const reg = makeRegistry([m]);
+    const r = resolveModel(undefined, reg, { model: "deepseek-router/ds-pro:xhigh" }, ctxModel);
+    expect(r.model.id).toBe("ds-pro");
+  });
+
+  it('resolves model passed with ":high" suffix (registry has no suffix)', () => {
+    const m = makeModel({ id: "sonnet", provider: "anthropic", reasoning: true, thinkingLevelMap: { high: 2 } });
+    const reg = makeRegistry([m]);
+    const r = resolveModel(undefined, reg, { model: "anthropic/sonnet:high" });
+    expect(r.model.id).toBe("sonnet");
+  });
+
+  it('strips ":off" suffix (off is a valid thinking level)', () => {
+    const m = makeModel({ id: "m1", provider: "p", reasoning: false });
+    const reg = makeRegistry([m]);
+    const r = resolveModel(undefined, reg, { model: "p/m1:off" });
+    expect(r.model.id).toBe("m1");
+  });
+
+  it('does NOT strip unrelated colon suffix (e.g. ":foo")', () => {
+    // ":foo" 不是合法 thinking level，不剥离 → 查不到 → 抛 not found
+    const m = makeModel({ id: "m1", provider: "p", reasoning: false });
+    const reg = makeRegistry([m]);
+    expect(() => resolveModel(undefined, reg, { model: "p/m1:foo" })).toThrow(/not found in registry/);
+  });
+
+  it('suffix-stripped resolve still respects explicit thinkingLevel param', () => {
+    const m = makeModel({ id: "ds-pro", provider: "deepseek-router", reasoning: true, thinkingLevelMap: { high: 2, xhigh: 3 } });
+    const reg = makeRegistry([m]);
+    // model 带 ":xhigh" 但 thinkingLevel param 指定 high -> thinking 取 high
+    const r = resolveModel(undefined, reg, { model: "deepseek-router/ds-pro:xhigh", thinkingLevel: "high" });
+    expect(r.model.id).toBe("ds-pro");
+    expect(r.thinkingLevel).toBe("high");
+  });
+});
+
+// ============================================================
+// not-found 错误信息：列出相近可用 model（B）
+// ============================================================
+
+describe("resolveModel — not-found error suggests similar models (B)", () => {
+  it("not-found with available registry lists similar models", () => {
+    const m = makeModel({ id: "ds-pro", provider: "deepseek-router" });
+    const reg = makeRegistry([m]);
+    let msg = "";
+    try {
+      resolveModel(undefined, reg, { model: "deepseek-router/ds-por" }, ctxModel); // 拼写错误
+    } catch (e) {
+      msg = (e as Error).message;
+    }
+    expect(msg).toMatch(/not found in registry/);
+    expect(msg).toMatch(/deepseek-router\/ds-pro/); // 建议列表含正确拼写
+  });
+
+  it("not-found with empty registry reports no available models", () => {
+    const reg = makeRegistry([]);
+    expect(() => resolveModel(undefined, reg, { model: "x/none" }, ctxModel)).toThrow(
+      /Registry has no available models/,
+    );
+  });
+
+  it("auth-missing error does NOT list models, points to models.json", () => {
+    const m = makeModel({ id: "unauthed", provider: "u" });
+    const reg = makeRegistry([m], []);
+    let msg = "";
+    try {
+      resolveModel(undefined, reg, { model: "u/unauthed" }, ctxModel);
+    } catch (e) {
+      msg = (e as Error).message;
+    }
+    expect(msg).toMatch(/auth is not configured/);
+    expect(msg).toMatch(/models\.json/);
+    expect(msg).not.toMatch(/Similar available models/); // auth 错误不列 model
+  });
+});
 
 describe("availableThinkingLevels", () => {
   it("returns [] when reasoning false", () => {

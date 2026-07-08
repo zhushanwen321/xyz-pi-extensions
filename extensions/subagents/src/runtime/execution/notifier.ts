@@ -23,6 +23,11 @@ export interface BgNotifyRecord {
   error?: string;
   startedAt: number;
   endedAt: number | undefined;
+  /** [MF#1] fork+worktree 模式下子 agent 改动的 patch 路径（worktree 外，cleanup 后留存）。
+   *  done 时通知文本显式提示 `git apply`，否则 background 子 agent 在隔离 worktree 的改动
+   *  会静默丢失——父 LLM 不知 patch 路径，无法应用。与 sync 路径对称（sync 把 patchFile
+   *  放进 JSON content）。 */
+  patchFile?: string;
 }
 
 /** notifier 依赖的 pi 最小接口（解耦，便于测试）。 */
@@ -172,8 +177,15 @@ export class BgNotifier {
     const agent = record.agent;
     const id = record.id;
     switch (record.status) {
-      case "done":
-        return `Subagent "${agent}" (${id}) completed. Result:\n${record.result ?? "(empty)"}`;
+      case "done": {
+        const base = `Subagent "${agent}" (${id}) completed. Result:\n${record.result ?? "(empty)"}`;
+        // [MF#1] background fork+worktree：显式回传 patch 路径 + git apply 指令。worktree cleanup
+        // 后改动仅留存于 patch 文件，父 LLM 不被告知路径即会丢失。这是改动回传的显式契约。
+        if (record.patchFile) {
+          return `${base}\n\nThis subagent ran in an isolated worktree; its file changes were captured as a patch:\n  ${record.patchFile}\nTo bring these changes into the current repo, run: \`git apply ${record.patchFile}\``;
+        }
+        return base;
+      }
       case "failed":
         return `Subagent "${agent}" (${id}) failed: ${record.error ?? "(unknown error)"}`;
       case "cancelled":

@@ -1,5 +1,21 @@
 # @zhushanwen/pi-ask-user
 
+## 0.0.4
+
+### Patch Changes
+
+- 7b4d775: Fix Other option marker misalignment (single-select freeform, multi-select non-freeform, freeText preview indent) and strip bracketed-paste escape sequences (`\x1b[200~` / `\x1b[201~`) that leaked into the Other/comment editor text.
+
+## 0.0.3
+
+### Patch Changes
+
+- 1684bde: Companion changes shipped alongside the subagents spawn/fork rework:
+
+  - `pi-ask-user`: fix paste truncation for emoji / astral-plane surrogate pairs and "Others" option alignment; add component paste regression tests.
+  - `pi-taste-lint`: new rule additions supporting the subagents refactor.
+  - `pi-types`: extend the `mariozechner` SDK type stubs with the new APIs consumed by the spawn execution model.
+
 ## 0.0.2
 
 ### Patch Changes

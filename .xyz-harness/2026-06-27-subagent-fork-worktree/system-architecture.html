@@ -1,0 +1,710 @@
+<!DOCTYPE html>
+<!--
+  system-architecture.html — design-architecture（② 系统设计）阶段产物。
+  主角图：stateDiagram-v2 状态机（hero）+ 分层架构 graph TB + Context Map + 泳道 sequenceDiagram。
+  沿用公共类（无特有样式）。
+  主题：subagent fork 上下文 + worktree 隔离 — 架构设计。
+-->
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>系统架构设计 — subagent fork 上下文 + worktree 隔离</title>
+<style>
+/*
+ * design.css — design-visual-explainer 公共样式
+ * 从 issues.html (feat-system-prompt-loader) 抽出，作为 6 阶段产物骨架的统一底座。
+ * 阶段特有类（.issue / .wave-card / .uc / .risk-* 等）放各骨架局部 style，不在此文件。
+ *
+ * render.sh 通过占位符注释 INLINE:design.css 将本文件内联进产物 HTML。
+ */
+* { margin: 0; padding: 0; box-sizing: border-box; }
+:root {
+  --font-body: 'Bricolage Grotesque', 'PingFang SC', system-ui, sans-serif;
+  --font-mono: 'Space Mono', 'JetBrains Mono', 'SF Mono', Consolas, monospace;
+  --bg: #f6f8f8; --surface: #ffffff; --surface-2: #eef2f1; --surface-elevated: #ffffff;
+  --border: rgba(15, 40, 40, 0.08); --border-bright: rgba(15, 40, 40, 0.16);
+  --text: #0f2a2a; --text-dim: #5a6b6b;
+  --accent: #0d9488; --accent-dim: rgba(13, 148, 136, 0.10);
+  --slate: #334155; --slate-dim: rgba(51, 65, 85, 0.10);
+  --green: #059669; --green-dim: rgba(5, 150, 105, 0.12);
+  --red: #dc2626; --red-dim: rgba(220, 38, 38, 0.10);
+  --orange: #c2410c; --orange-dim: rgba(194, 65, 12, 0.10);
+  --amber: #b45309; --amber-dim: rgba(180, 83, 9, 0.12);
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #0a1414; --surface: #111d1d; --surface-2: #182626; --surface-elevated: #162121;
+    --border: rgba(180, 220, 220, 0.07); --border-bright: rgba(180, 220, 220, 0.15);
+    --text: #e3efee; --text-dim: #8aa0a0;
+    --accent: #2dd4bf; --accent-dim: rgba(45, 212, 191, 0.13);
+    --slate: #94a3b8; --slate-dim: rgba(148, 163, 184, 0.12);
+    --green: #34d399; --green-dim: rgba(52, 211, 153, 0.13);
+    --red: #f87171; --red-dim: rgba(248, 113, 113, 0.12);
+    --orange: #fb923c; --orange-dim: rgba(251, 146, 60, 0.12);
+    --amber: #fbbf24; --amber-dim: rgba(251, 191, 36, 0.14);
+  }
+}
+html { scroll-behavior: smooth; }
+body { font-family: var(--font-body); color: var(--text); line-height: 1.65; background: var(--bg); background-image: radial-gradient(ellipse at 50% -5%, var(--accent-dim) 0%, transparent 55%); padding: 32px; overflow-wrap: break-word; }
+.grid > *, .flex > *, [style*="display:grid"] > *, [style*="display:flex"] > * { min-width: 0; }
+h1 { font-size: 38px; font-weight: 700; letter-spacing: -1px; margin-bottom: 6px; text-wrap: balance; }
+h2 { font-size: 22px; font-weight: 600; letter-spacing: -0.3px; margin: 56px 0 18px; padding-bottom: 10px; border-bottom: 1px solid var(--border); scroll-margin-top: 70px; }
+h3 { font-size: 16px; font-weight: 700; margin: 26px 0 12px; color: var(--accent); font-family: var(--font-mono); letter-spacing: 0.2px; scroll-margin-top: 70px; }
+h4 { font-size: 13px; font-weight: 600; margin: 18px 0 8px; color: var(--slate); font-family: var(--font-mono); }
+p { margin-bottom: 12px; }
+.subtitle { color: var(--text-dim); font-size: 13px; margin-bottom: 8px; font-family: var(--font-mono); }
+code { font-family: var(--font-mono); font-size: 0.92em; }
+strong { font-weight: 600; }
+
+/* Layout: TOC + main 双栏 */
+.wrap { max-width: 1380px; margin: 0 auto; display: grid; grid-template-columns: 168px 1fr; gap: 0 44px; }
+.main { min-width: 0; }
+header.doc-head { margin-bottom: 28px; }
+.badge-row { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 14px; }
+.tag { font-family: var(--font-mono); font-size: 10px; font-weight: 600; text-transform: uppercase; letter-spacing: 1px; padding: 4px 10px; border-radius: 20px; background: var(--accent-dim); color: var(--accent); border: 1px solid color-mix(in srgb, var(--accent) 30%, transparent); }
+.tag--slate { background: var(--slate-dim); color: var(--slate); border-color: color-mix(in srgb, var(--slate) 30%, transparent); }
+.tag--green { background: var(--green-dim); color: var(--green); border-color: color-mix(in srgb, var(--green) 30%, transparent); }
+.tag--amber { background: var(--amber-dim); color: var(--amber); border-color: color-mix(in srgb, var(--amber) 30%, transparent); }
+
+/* TOC sidebar + scroll-spy */
+.toc { position: sticky; top: 24px; align-self: start; padding: 14px 0; grid-row: 1/-1; max-height: calc(100dvh - 48px); overflow-y: auto; }
+.toc-title { font-family: var(--font-mono); font-size: 9px; font-weight: 700; text-transform: uppercase; letter-spacing: 2px; color: var(--text-dim); padding: 0 0 10px; margin-bottom: 8px; border-bottom: 1px solid var(--border); }
+.toc a { display: block; font-size: 11px; color: var(--text-dim); text-decoration: none; padding: 4px 8px; border-radius: 5px; border-left: 2px solid transparent; transition: all .15s; line-height: 1.35; margin-bottom: 1px; }
+.toc a:hover { color: var(--text); background: var(--surface-2); }
+.toc a.active { color: var(--text); border-left-color: var(--accent); background: var(--accent-dim); }
+
+/* TL;DR 摘要框 */
+.tldr { background: var(--surface-elevated); border: 1px solid color-mix(in srgb, var(--accent) 35%, var(--border)); border-radius: 14px; padding: 20px 24px; margin: 24px 0 8px; box-shadow: 0 4px 18px rgba(13,148,136,.06); }
+.tldr__label { font-family: var(--font-mono); font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: 1.8px; color: var(--accent); margin-bottom: 10px; display: flex; align-items: center; gap: 8px; }
+.tldr__label::before { content: ''; width: 8px; height: 8px; border-radius: 50%; background: currentColor; }
+.tldr ul { list-style: none; padding: 0; }
+.tldr li { padding: 5px 0 5px 18px; position: relative; font-size: 14px; line-height: 1.55; }
+.tldr li::before { content: '→'; position: absolute; left: 0; color: var(--accent); font-weight: 600; }
+.tldr code { font-family: var(--font-mono); font-size: 12px; background: var(--accent-dim); color: var(--accent); padding: 1px 6px; border-radius: 3px; }
+
+/* Mermaid zoom/pan 外壳（与 zoom.js 的选择器契约绑定，勿改名） */
+.mermaid-wrap { position: relative; background: var(--surface); border: 1px solid var(--border); border-radius: 12px; padding: 32px 24px; overflow: auto; margin-bottom: 24px; display: flex; justify-content: center; align-items: center; min-height: 400px; cursor: grab; }
+.mermaid-wrap.is-panning { cursor: grabbing; user-select: none; }
+.zoom-controls { position: absolute; top: 8px; right: 8px; display: flex; gap: 2px; z-index: 10; background: var(--surface); border: 1px solid var(--border); border-radius: 6px; padding: 2px; }
+.zoom-controls button { width: 28px; height: 28px; border: none; background: transparent; color: var(--text-dim); font-family: var(--font-mono); font-size: 14px; cursor: pointer; border-radius: 4px; display: flex; align-items: center; justify-content: center; transition: background .15s, color .15s; }
+.zoom-controls button:hover { background: var(--border); color: var(--text); }
+.diagram-shell { position: relative; }
+.diagram-shell__hint { font-family: var(--font-mono); font-size: 11px; color: var(--text-dim); margin-bottom: 8px; opacity: .7; }
+.mermaid-viewport { position: relative; overflow: hidden; width: 100%; height: 100%; min-height: 300px; }
+.mermaid-canvas { position: absolute; top: 0; left: 0; }
+.zoom-label { font-family: var(--font-mono); font-size: 10px; color: var(--text-dim); padding: 0 6px; white-space: nowrap; }
+.mermaid .nodeLabel { font-family: var(--font-body) !important; font-size: 14px !important; }
+.mermaid .edgeLabel { font-family: var(--font-mono) !important; font-size: 12px !important; }
+.mermaid .node rect, .mermaid .node circle, .mermaid .node polygon { stroke-width: 1.5px !important; }
+
+/* 数据表格（功能清单/AC 清单/追溯表/签名表/决策记录） */
+.table-wrap { background: var(--surface); border: 1px solid var(--border); border-radius: 12px; overflow: hidden; margin: 16px 0 24px; }
+.table-scroll { overflow-x: auto; -webkit-overflow-scrolling: touch; }
+.data-table { width: 100%; border-collapse: collapse; font-size: 13px; line-height: 1.55; }
+.data-table thead { position: sticky; top: 0; z-index: 2; }
+.data-table th { background: var(--surface-2); font-family: var(--font-mono); font-size: 10px; font-weight: 600; text-transform: uppercase; letter-spacing: 1px; color: var(--text-dim); text-align: left; padding: 13px 16px; border-bottom: 2px solid var(--border-bright); white-space: nowrap; }
+.data-table td { padding: 11px 16px; border-bottom: 1px solid var(--border); vertical-align: top; }
+.data-table tbody tr:nth-child(even) { background: var(--accent-dim); }
+.data-table tbody tr:hover { background: var(--border); }
+.data-table tbody tr:last-child td { border-bottom: none; }
+.data-table code { font-family: var(--font-mono); font-size: 11px; background: var(--accent-dim); color: var(--accent); padding: 1px 5px; border-radius: 3px; }
+
+/* Callout 提示框 */
+.callout { background: var(--surface-2); border: 1px solid var(--border); border-left: 3px solid var(--accent); border-radius: 0 8px 8px 0; padding: 14px 18px; font-size: 13px; line-height: 1.6; color: var(--text-dim); margin: 20px 0; }
+.callout strong { color: var(--text); font-weight: 600; }
+.callout code { font-family: var(--font-mono); font-size: 11px; background: var(--accent-dim); color: var(--accent); padding: 1px 5px; border-radius: 3px; }
+
+/* 章节小标题（mono 大写，区别于 h2） */
+.sec-head { font-family: var(--font-mono); font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: 1.5px; color: var(--accent); margin: 40px 0 14px; padding-bottom: 8px; border-bottom: 1px solid var(--border); }
+
+/* 卡片组件（架构概览 / 决策记录 / 模块概览） */
+.ve-card { background: var(--surface); border: 1px solid var(--border); border-radius: 12px; padding: 18px 20px; display: flex; flex-direction: column; gap: 8px; }
+.ve-card--elevated { box-shadow: 0 4px 18px rgba(13,148,136,.06); }
+.ve-card__label { font-family: var(--font-mono); font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: 1.2px; color: var(--accent); display: flex; align-items: center; gap: 6px; }
+.ve-card__label::before { content: ''; width: 7px; height: 7px; border-radius: 50%; background: currentColor; }
+.ve-card h3 { margin: 0; color: var(--text); font-family: var(--font-body); font-size: 17px; letter-spacing: -0.2px; }
+.ve-card p { margin: 0; font-size: 13.5px; color: var(--text-dim); line-height: 1.55; }
+.card-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 16px; margin: 18px 0 28px; }
+.node-list { list-style: none; padding: 0; margin: 0; }
+.node-list li { padding: 4px 0 4px 16px; position: relative; font-size: 13px; line-height: 1.5; color: var(--text-dim); }
+.node-list li::before { content: '›'; position: absolute; left: 0; color: var(--accent); font-weight: 700; }
+.node-list code { font-family: var(--font-mono); font-size: 11.5px; background: var(--accent-dim); color: var(--accent); padding: 1px 5px; border-radius: 3px; }
+
+/* 状态药丸（AC 清单 / 追溯表状态列） */
+.status { display: inline-flex; align-items: center; gap: 5px; font-family: var(--font-mono); font-size: 11px; font-weight: 600; padding: 2px 8px; border-radius: 5px; white-space: nowrap; }
+.status::before { content: ''; width: 6px; height: 6px; border-radius: 50%; background: currentColor; }
+.status--match { background: var(--green-dim); color: var(--green); }
+.status--warn { background: var(--amber-dim); color: var(--amber); }
+.status--gap { background: var(--red-dim); color: var(--red); }
+.status--na { background: var(--slate-dim); color: var(--slate); }
+
+/* 热力图单元格（④ NFR 风险矩阵） */
+.heatmap-cell { text-align: center; font-size: 15px; padding: 8px; }
+.heatmap-cell--good { background: var(--green-dim); }
+.heatmap-cell--warn { background: var(--amber-dim); }
+.heatmap-cell--bad { background: var(--red-dim); }
+.heatmap-cell--na { background: transparent; color: var(--text-dim); }
+
+/* 图例 */
+.legend { display: flex; flex-wrap: wrap; gap: 14px; margin: 16px 0; font-size: 12px; color: var(--text-dim); font-family: var(--font-mono); }
+.legend-item { display: flex; align-items: center; gap: 6px; }
+.legend-swatch { width: 14px; height: 14px; border-radius: 3px; }
+
+/* Footer */
+footer.doc-foot { margin-top: 48px; padding-top: 20px; border-top: 1px solid var(--border); font-size: 12px; color: var(--text-dim); font-family: var(--font-mono); }
+
+/* 入场动画 */
+@keyframes fadeUp { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: translateY(0); } }
+.animate { animation: fadeUp .35s ease-out both; animation-delay: calc(var(--i, 0) * .04s); }
+
+/* 响应式 */
+@media (prefers-reduced-motion: reduce) { *, *::before, *::after { animation-duration: .01ms !important; transition-duration: .01ms !important; } }
+@media (max-width: 1000px) {
+  .wrap { grid-template-columns: 1fr; }
+  .toc { position: sticky; top: 0; z-index: 200; max-height: none; display: flex; gap: 4px; align-items: center; overflow-x: auto; background: var(--bg); border-bottom: 1px solid var(--border); padding: 10px 0; grid-row: auto; }
+  .toc-title { display: none; }
+  .toc a { white-space: nowrap; flex-shrink: 0; border-left: none; border-bottom: 2px solid transparent; border-radius: 4px 4px 0 0; padding: 6px 10px; font-size: 10px; }
+  .toc a.active { border-left: none; border-bottom-color: var(--accent); background: var(--surface); }
+  h2, h3 { scroll-margin-top: 60px; }
+  body { padding: 16px; }
+}
+@media (max-width: 768px) { body { padding: 12px; } h1 { font-size: 26px; } }
+
+/* === system-architecture 阶段无特有样式，沿用公共类 === */
+</style>
+</head>
+<body>
+<div class="wrap">
+<nav class="toc" id="toc">
+  <div class="toc-title">目录</div>
+  <a href="#tldr">TL;DR</a>
+  <a href="#state-machine">状态机</a>
+  <a href="#goal-transform">目标转换</a>
+  <a href="#stance">设计立场</a>
+  <a href="#ubiquitous">统一语言</a>
+  <a href="#core-model">核心模型</a>
+  <a href="#layering">分层架构</a>
+  <a href="#modules">模块划分</a>
+  <a href="#context-map">Context 边界</a>
+  <a href="#swimlane">泳道图</a>
+  <a href="#decisions">关键决策</a>
+  <a href="#anti-patterns">反模式 AC</a>
+  <a href="#contracts">行为契约</a>
+</nav>
+<main class="main">
+<header class="doc-head">
+  <h1>系统架构设计</h1>
+  <p class="subtitle">subagent fork 上下文 + worktree 隔离 · ② 系统设计 · upstream: requirements.md</p>
+  <div class="badge-row">
+    <span class="tag tag--green">verdict: pass</span>
+    <span class="tag tag--amber">mode: refactor</span>
+    <span class="tag tag--slate">4 新增模块 · 9 修改模块</span>
+    <span class="tag tag--slate">无 Port（D-019 删 GitPort）</span>
+    <span class="tag">crashed 新终态</span>
+  </div>
+</header>
+
+<div class="tldr animate" id="tldr" style="--i:0">
+  <div class="tldr__label">TL;DR · 核心结论</div>
+  <ul>
+    <li><strong>核心计算 = 技术流程编排</strong>（非业务规则编排）→ <strong>维持现有三层架构</strong>（外壳/Runtime/Core）做增量增强。编排复杂度集中（SubagentService 编排 + session-runner 执行），无领域规则膨胀，三层铁律（Core 零 Pi 依赖/依赖单向）被充分复用。</li>
+    <li><strong>4 个新增模块</strong>：SessionContextResolver（Core，<strong>纯函数</strong> D-014）/ WorktreeManager（Runtime，git 生命周期+collectPatch+scan+gitRun）/ FinalizedMarker（Runtime，.finalized sidecar）/ alive-store（Runtime，D-021 反哺 pid 探活载体）。</li>
+    <li><strong>状态机加 crashed 新终态</strong>：5 态（running/done/failed/cancelled/crashed）全不可逆；crashed 不经 tryTransition（重建推断态）；三分支检测（.cancelled/.finalized/都无）→ D-021 扩展四分支（pid 探活）。</li>
+    <li><strong>无 Port</strong>：D-019 删 GitPort（红队 deletion test 击穿，git CLI 极稳定 seam 价值近零），git 收口到 WorktreeManager 内部私有 gitRun helper。</li>
+    <li><strong>关键决策</strong>：D-014 SCR 纯函数化（forkFrom 上移 session-runner）/ D-017 finalizeRecord 三件套独立 try/catch + collectPatch 先行 / D-021~D-024 反哺（pid 探活/数据黑洞/类型裂缝/删活 worktree）。</li>
+  </ul>
+</div>
+
+<h2 class="sec-head" id="state-machine">状态机流转（主角图）</h2>
+
+<div class="diagram-shell animate" style="--i:1">
+  <p class="diagram-shell__hint">状态机 · running 起始，5 终态不可逆 · crashed 不经 tryTransition（重建推断态）· 拖动平移、缩放、双击适配</p>
+  <div class="mermaid-wrap">
+    <div class="zoom-controls">
+      <button type="button" data-action="zoom-in" title="放大">+</button>
+      <button type="button" data-action="zoom-out" title="缩小">&minus;</button>
+      <button type="button" data-action="zoom-fit" title="适配">⊡</button>
+      <button type="button" data-action="zoom-one" title="1:1">1:1</button>
+      <button type="button" data-action="zoom-expand" title="新窗口">⤢</button>
+      <span class="zoom-label">Loading...</span>
+    </div>
+    <div class="mermaid-viewport">
+      <div class="mermaid mermaid-canvas"></div>
+    </div>
+  </div>
+  <script type="text/plain" class="diagram-source">
+stateDiagram-v2
+    [*] --> running
+    running --> done: finalizeRecord 成功
+    running --> failed: finalizeRecord 失败
+    running --> cancelled: cancelBackground CAS 抢锁
+    running --> crashed: 启动期重建检测无 finalized/cancelled 标记
+    done --> [*]
+    failed --> [*]
+    cancelled --> [*]
+    crashed --> [*]
+  </script>
+</div>
+
+<div class="callout animate" style="--i:2">
+  <strong>终态集合 {done, failed, cancelled, crashed} 全不可逆。</strong> crashed 不经 tryTransition（特化决策 §10）——它是 reconstructAll 重建时推断的（进程已死，内存 record 不存在），非运行期转换。tryTransition 保护 running record 收尾竞争，crashed 不参与。Reason 与 Status 正交：crashed 的 reason 固定 = "process killed (no finalized marker)"。
+</div>
+
+<div class="table-wrap animate" style="--i:3">
+  <div class="table-scroll">
+    <table class="data-table">
+      <thead><tr><th>Status</th><th>Priority（仅排序）</th><th>Reason</th><th>到达路径</th></tr></thead>
+      <tbody>
+        <tr><td><code>running</code></td><td>0（活态排前）</td><td>—</td><td>起始态</td></tr>
+        <tr><td><code>done</code></td><td>3（正常排后）</td><td>"normal completion"</td><td>finalizeRecord 成功</td></tr>
+        <tr><td><code>failed</code></td><td>1（异常）</td><td>"llm error"/"turn limit"/"create session failed"</td><td>finalizeRecord 失败</td></tr>
+        <tr><td><code>cancelled</code></td><td>2（用户主动）</td><td>"cancelled by user"</td><td>cancelBackground CAS 抢锁</td></tr>
+        <tr><td><strong>crashed</strong></td><td><strong>1（异常，与 failed 同级）</strong></td><td><strong>"process killed (no finalized marker)"</strong></td><td>启动期三分支检测「都无」→ D-021 扩展四分支 pid 探活</td></tr>
+      </tbody>
+    </table>
+  </div>
+</div>
+
+<h2 class="sec-head" id="goal-transform">目标转换（业务→系统 + 搭便车）</h2>
+
+<div class="table-wrap animate" style="--i:4">
+  <div class="table-scroll">
+    <table class="data-table">
+      <thead><tr><th>业务目标</th><th>系统目标</th><th>衡量标准</th></tr></thead>
+      <tbody>
+        <tr><td>G1 继承主 agent 上下文</td><td><strong>SO-1</strong> SessionContextResolver 解析 fork 意图（纯函数），session-runner 按 fork 分流创建带历史的 sessionManager</td><td>fork:true 时 messages 含主历史；深度≤10</td></tr>
+        <tr><td>G2 独立 worktree 运行</td><td><strong>SO-2</strong> WorktreeManager 管理 git worktree 生命周期，effectiveCwd=worktreePath</td><td>worktree:true 时 cwd=worktreePath；崩溃残留被 reaper 清扫</td></tr>
+        <tr><td>G3 组合 + 可观测完整</td><td><strong>SO-3</strong> session 存储恒用主 cwd 编码（解耦 effectiveCwd），crashed 正确标记</td><td>/list 看到所有 subagent；崩溃显示 crashed 非 done</td></tr>
+      </tbody>
+    </table>
+  </div>
+</div>
+
+<h4 style="color:var(--accent);font-family:var(--font-mono);margin:24px 0 8px;">搭便车改造目标（均已纳入）</h4>
+<div class="table-wrap animate" style="--i:5">
+  <div class="table-scroll">
+    <table class="data-table">
+      <thead><tr><th>改造目标</th><th>动机</th><th>状态</th></tr></thead>
+      <tbody>
+        <tr><td>SessionRunnerContext.cwd → effectiveCwd + mainCwd</td><td>消除单 cwd 契约裂缝（worktree 时两者≠）；D-004 存储解耦基础</td><td>已纳入（D-012③）</td></tr>
+        <tr><td>ExecutionStatus 加 crashed + STATUS_PRIORITY 补全</td><td>crashed 是 D-006 终态表达；缺 key 编译报错</td><td>已纳入（D-012②, D-013#2）</td></tr>
+        <tr><td>ADR-001 决策 2 修订</td><td>引入 fork 后「task=全部输入」契约不再绝对</td><td>已纳入（D-012④）</td></tr>
+        <tr><td>session-file-gc 对称清理 .finalized</td><td>finalized 是新增文件，GC 不清会成孤儿</td><td>已纳入（D-013#3）</td></tr>
+      </tbody>
+    </table>
+  </div>
+</div>
+
+<h2 class="sec-head" id="stance">设计立场</h2>
+<div class="callout animate" style="--i:6">
+  <strong>核心计算是技术流程编排</strong>（非业务规则编排）：把"委派子任务"这个意图，编排成"解析上下文 → 创建/隔离执行环境 → 执行 → 回收改动 → 标记状态"的确定性 pipeline。无复杂业务规则引擎。<strong>分层决策：维持现有三层架构</strong>（外壳/TUI/Runtime/Core）做增量增强——编排复杂度集中（SubagentService 编排 + session-runner 执行），无领域规则膨胀趋势；现有三层铁律（Core 零 Pi 依赖、依赖单向）被充分复用；新增模块按"是否有外部副作用 / 零依赖可单测"归入对应层。
+</div>
+
+<h2 class="sec-head" id="ubiquitous">统一语言（Ubiquitous Language）</h2>
+<div class="table-wrap animate" style="--i:7">
+  <div class="table-scroll">
+    <table class="data-table">
+      <thead><tr><th>术语</th><th>定义</th></tr></thead>
+      <tbody>
+        <tr><td><code>effectiveCwd</code></td><td>子 agent 实际运行目录（= worktreePath / 用户指定 cwd / 主 cwd）。传 createAgentSession。</td></tr>
+        <tr><td><code>mainCwd</code></td><td>主 agent 的 cwd。恒定，用于 subagent session 存储目录编码。</td></tr>
+        <tr><td>fork 意图</td><td>SessionContextResolver 返回的纯数据 {shouldFork, forkSource, effectiveCwd, sessionDir}。不含副作用。</td></tr>
+        <tr><td>worktree 隔离</td><td>子 agent 在独立 git worktree 运行（文件系统级，非进程内存级）。改名自 isolation（D-008）。</td></tr>
+        <tr><td>patch 回传</td><td>worktree subagent 完成后 git diff 生成 patch 回传，主 agent 自行 git apply。</td></tr>
+        <tr><td>finalized sidecar</td><td>正常完成/失败时写的 <code>.finalized</code> 标记，启动期检测崩溃（无此标记 = crashed）。</td></tr>
+        <tr><td><strong>crashed</strong></td><td>新增终态：进程被 kill -9/OOM/断电打断，无 finalized/cancelled 标记的子 agent 状态。</td></tr>
+      </tbody>
+    </table>
+  </div>
+</div>
+
+<h2 class="sec-head" id="core-model">核心模型 + 不变式</h2>
+
+<div class="card-grid animate" style="--i:8">
+  <div class="ve-card ve-card--elevated">
+    <div class="ve-card__label">ExecutionRecord · aggregate</div>
+    <h3>唯一状态源</h3>
+    <p><strong>不变式</strong>：status 经 tryTransition/reconstructStatus 收口（不裸赋值）；turns[] 只增不删；sessionId 创建后不变。</p>
+    <p>已有，本轮加 crashed 终态 + markReconstructedStatus 收口（M3）。</p>
+  </div>
+  <div class="ve-card">
+    <div class="ve-card__label">SessionContextResolver · 纯函数（D-014）</div>
+    <h3>fork 意图解析</h3>
+    <p><strong>不变式</strong>：相同输入相同输出；<strong>零副作用</strong>（不调 pi SDK，不碰 IO）。</p>
+    <p>解析 fork/worktree/cwd 意图 → 返回纯数据，真可单测。</p>
+  </div>
+  <div class="ve-card">
+    <div class="ve-card__label">WorktreeHandle · 值对象（新增）</div>
+    <h3>worktree 创建快照</h3>
+    <p><strong>不变式</strong>：path + branch + baseCommit 创建后不变。</p>
+    <p>worktree 创建结果传递，生命周期态归 WorktreeManager 内部。</p>
+  </div>
+  <div class="ve-card">
+    <div class="ve-card__label">SubagentIdentityData · 实体</div>
+    <h3>嵌套 fork 深度追踪</h3>
+    <p><strong>不变式</strong>：id 创建后不变；forkDepth 写入时校验≤10（构造器守卫 M4）。</p>
+    <p>fork 时从 parent identity 读 depth+1（D-007）。</p>
+  </div>
+</div>
+
+<div class="callout animate" style="--i:9">
+  <strong>降级决策（主动不建模）</strong>：① <strong>worktree 嵌套</strong>（worktree-of-worktree）首版禁止（OS-6），WorktreeManager.create 检测已在 worktree 内则拒绝（<code>.git</code> 文件检查）；② <strong>patch 内容结构</strong>是 git 原生 unified diff 文本非领域对象，collectPatch 只调度 git + 文件 IO 不解析；③ <strong>keepBranch</strong>已删除（D-015，YAGNI），清理恒为 remove --force + branch -D。
+</div>
+
+<h2 class="sec-head" id="layering">分层架构</h2>
+
+<div class="diagram-shell animate" style="--i:10">
+  <p class="diagram-shell__hint">三层架构 · 外壳 → Runtime → Core（零 Pi 依赖）· ★=新增模块 · 拖动平移、缩放、双击适配</p>
+  <div class="mermaid-wrap">
+    <div class="zoom-controls">
+      <button type="button" data-action="zoom-in" title="放大">+</button>
+      <button type="button" data-action="zoom-out" title="缩小">&minus;</button>
+      <button type="button" data-action="zoom-fit" title="适配">⊡</button>
+      <button type="button" data-action="zoom-one" title="1:1">1:1</button>
+      <button type="button" data-action="zoom-expand" title="新窗口">⤢</button>
+      <span class="zoom-label">Loading...</span>
+    </div>
+    <div class="mermaid-viewport">
+      <div class="mermaid mermaid-canvas"></div>
+    </div>
+  </div>
+  <script type="text/plain" class="diagram-source">
+flowchart TB
+  subgraph Shell["外壳（薄壳）"]
+    TOOL["subagent-tool.ts<br/>(+fork/worktree/cwd 参数)"]
+    IDX["index.ts<br/>(+session_start 挂 reaper<br/>+缓存主session路径)"]
+  end
+  subgraph Runtime["Runtime 层（编排+副作用）"]
+    SVC["SubagentService<br/>(+持有新组件, 编排汇合点)"]
+    MC["ModelConfigService"]
+    WM["★ WorktreeManager<br/>(git生命周期+collectPatch+scan+gitRun)"]
+    FM["★ FinalizedMarker<br/>(.finalized sidecar)"]
+    AS["★ alive-store<br/>(D-021 pid探活载体)"]
+    RS["record-store<br/>(+crashed三分支)"]
+    GC["session-file-gc<br/>(+清.finalized)"]
+  end
+  subgraph Core["Core 层（零 Pi 依赖）"]
+    SR["session-runner<br/>(+fork分流: 调forkFrom/create)"]
+    SCR["★ SessionContextResolver<br/>(纯函数: fork意图, 零副作用)"]
+    ER["execution-record<br/>(+crashed,+markReconstructedStatus)"]
+    REC["session-reconstructor"]
+    CP["concurrency-pool · turn-limiter"]
+    PE["path-encoding · model-resolver"]
+  end
+  Shell --> Runtime
+  Runtime --> Core
+  </script>
+</div>
+
+<div class="callout animate" style="--i:11">
+  <strong>关键设计（D-014）</strong>：SessionContextResolver 是真正纯函数，只返回 fork 意图，不调 pi SDK。实际 forkFrom 调用留 session-runner（经 ctx.sdk 合法访问）。<strong>fork 体积控制（D-018）</strong>：优先 <code>createBranchedSession(leafId)</code>（只取 leaf→root，体积更小），forkFrom 仅降级。<strong>无 Port（D-019）</strong>：删 GitPort，git 收口 WorktreeManager 内部私有 gitRun helper。
+</div>
+
+<h2 class="sec-head" id="modules">模块划分（新增 4 + 修改 9）</h2>
+
+<div class="table-wrap animate" style="--i:12">
+  <div class="table-scroll">
+    <table class="data-table">
+      <thead><tr><th>新增模块</th><th>层</th><th>职责</th><th>LOC</th></tr></thead>
+      <tbody>
+        <tr><td><code>SessionContextResolver</code></td><td>Core 编排</td><td>纯函数 resolveSessionContext → {shouldFork, forkSource, effectiveCwd, sessionDir}。深度校验≤10。零副作用（D-014）</td><td>~60</td></tr>
+        <tr><td><code>WorktreeManager</code></td><td>Runtime 执行域</td><td>git worktree 生命周期：create/cleanup/scan(reaper)/collectPatch + 私有 gitRun（D-019 删 GitPort，D-020 合并 PatchCollector）</td><td>~450</td></tr>
+        <tr><td><code>FinalizedMarker</code></td><td>Runtime 执行域</td><td>write/read .finalized sidecar。对称 GC 兼容</td><td>~50</td></tr>
+        <tr><td><code>alive-store</code>（D-021 反哺）</td><td>Runtime 执行域</td><td>writeAliveMarker/readAliveMarker/removeAliveMarker。.alive sidecar 对称三件，跨实例 crashed 探活载体</td><td>~40</td></tr>
+      </tbody>
+    </table>
+  </div>
+</div>
+
+<h4 style="color:var(--accent);font-family:var(--font-mono);margin:18px 0 8px;">SubagentService 集成点（D-013#5, GAP-E5）</h4>
+<div class="table-wrap animate" style="--i:13">
+  <div class="table-scroll">
+    <table class="data-table">
+      <thead><tr><th>方法</th><th>调用的新组件</th><th>D-017 时序 / 守卫</th></tr></thead>
+      <tbody>
+        <tr><td><code>execute</code>（前置）</td><td>WorktreeManager.create（worktree:true 时）</td><td>worktreeHandle 回填 record；非 worktree 跳过</td></tr>
+        <tr><td><code>finalizeRecord</code></td><td>⓪collectPatch → ①completeRecord → ②archive → ③finalized+cleanup</td><td>collectPatch 必须先于 completeRecord；archive 在副作用写之前；三件套各自独立 try/catch</td></tr>
+        <tr><td><code>cancelBackground</code></td><td>WorktreeManager.cleanup（worktree:true 时）</td><td>worktreeHandle==null 跳过；不写 finalized（cancelled 有 .cancelled）</td></tr>
+      </tbody>
+    </table>
+  </div>
+</div>
+
+<h2 class="sec-head" id="context-map">Context 边界（系统间）</h2>
+
+<div class="diagram-shell animate" style="--i:14">
+  <p class="diagram-shell__hint">Context Map · 本系统 → pi CLI 核心（客户-供应商）/ git（遵奉者）· 拖动平移、缩放、双击适配</p>
+  <div class="mermaid-wrap">
+    <div class="zoom-controls">
+      <button type="button" data-action="zoom-in" title="放大">+</button>
+      <button type="button" data-action="zoom-out" title="缩小">&minus;</button>
+      <button type="button" data-action="zoom-fit" title="适配">⊡</button>
+      <button type="button" data-action="zoom-one" title="1:1">1:1</button>
+      <button type="button" data-action="zoom-expand" title="新窗口">⤢</button>
+      <span class="zoom-label">Loading...</span>
+    </div>
+    <div class="mermaid-viewport">
+      <div class="mermaid mermaid-canvas"></div>
+    </div>
+  </div>
+  <script type="text/plain" class="diagram-source">
+flowchart TB
+  subgraph subagents["subagents 扩展（本系统）"]
+    SE["SubagentService<br/>编排"]
+    SR["session-runner<br/>执行(forkFrom在此调)"]
+    WM["WorktreeManager<br/>worktree生命周期<br/>+collectPatch+scan"]
+    SCR["SessionContextResolver<br/>纯函数:产fork意图"]
+    SE --> SR
+    SE --> WM
+    SR --> SCR
+  end
+  subgraph pi["pi CLI 核心（客户-供应商）"]
+    SDK["createAgentSession +<br/>SessionManager.forkFrom<br/>(经ctx.sdk鸭子类型)"]
+    EXT["ExtensionContext<br/>sessionManager.getSessionFile()"]
+  end
+  subgraph git["git（遵奉者）"]
+    GITCMD["git CLI"]
+  end
+  SR -->|sdk.SessionManager.forkFrom/create| SDK
+  SE -.->|取主session路径| EXT
+  WM -->|内部gitRun helper| GITCMD
+  </script>
+</div>
+
+<h2 class="sec-head" id="swimlane">泳道图</h2>
+
+<h3 style="margin-top:20px;">fork + worktree 组合执行</h3>
+<div class="diagram-shell animate" style="--i:15">
+  <p class="diagram-shell__hint">sequenceDiagram · tool→SVC→WM→SR→SCR→SDK · D-017 时序 collectPatch 先行</p>
+  <div class="mermaid-wrap">
+    <div class="zoom-controls">
+      <button type="button" data-action="zoom-in" title="放大">+</button>
+      <button type="button" data-action="zoom-out" title="缩小">&minus;</button>
+      <button type="button" data-action="zoom-fit" title="适配">⊡</button>
+      <button type="button" data-action="zoom-one" title="1:1">1:1</button>
+      <button type="button" data-action="zoom-expand" title="新窗口">⤢</button>
+      <span class="zoom-label">Loading...</span>
+    </div>
+    <div class="mermaid-viewport">
+      <div class="mermaid mermaid-canvas"></div>
+    </div>
+  </div>
+  <script type="text/plain" class="diagram-source">
+sequenceDiagram
+    participant Tool as subagent-tool
+    participant SVC as SubagentService
+    participant WM as WorktreeManager
+    participant SR as session-runner
+    participant SCR as SessionContextResolver
+    participant SDK as pi SDK
+    Tool->>SVC: execute({task, fork:true, worktree:true})
+    SVC->>SVC: resolveMode / resolveIdentity
+    SVC->>WM: create(mainCwd, recordId)
+    WM-->>SVC: WorktreeHandle{path, branch, baseCommit}
+    Note over SVC: effectiveCwd = worktreePath
+    SVC->>SR: run(ctx{effectiveCwd, mainCwd, mainSessionFile})
+    SR->>SCR: resolveSessionContext({fork:true, cwd:worktreePath, mainCwd, mainSessionFile})
+    SCR-->>SR: forkIntent{shouldFork:true, forkSource, effectiveCwd, sessionDir}
+    Note over SR: 分流: shouldFork ? createBranchedSession(优先) : create
+    SR->>SDK: createBranchedSession(leafId) [优先,D-018]
+    SDK-->>SR: forked sessionManager
+    SR->>SDK: createAgentSession({cwd:effectiveCwd, sessionManager})
+    SDK-->>SR: session(restore 主历史)
+    SR->>SDK: session.prompt(task)
+    SDK-->>SR: AgentResult
+    SR->>SVC: AgentResult
+    SVC->>SVC: finalizeRecord: 0.WM.collectPatch -> 1.completeRecord -> 2.archive -> 3.FinalizedMarker+cleanup
+    SVC-->>Tool: result(patch 路径在 result)
+  </script>
+</div>
+
+<h3 style="margin-top:24px;">崩溃恢复（启动期检测）</h3>
+<div class="diagram-shell animate" style="--i:16">
+  <p class="diagram-shell__hint">sequenceDiagram · 启动期 reaper + reconstructAll 三分支检测</p>
+  <div class="mermaid-wrap">
+    <div class="zoom-controls">
+      <button type="button" data-action="zoom-in" title="放大">+</button>
+      <button type="button" data-action="zoom-out" title="缩小">&minus;</button>
+      <button type="button" data-action="zoom-fit" title="适配">⊡</button>
+      <button type="button" data-action="zoom-one" title="1:1">1:1</button>
+      <button type="button" data-action="zoom-expand" title="新窗口">⤢</button>
+      <span class="zoom-label">Loading...</span>
+    </div>
+    <div class="mermaid-viewport">
+      <div class="mermaid mermaid-canvas"></div>
+    </div>
+  </div>
+  <script type="text/plain" class="diagram-source">
+sequenceDiagram
+    participant IDX as index.ts
+    participant WM as WorktreeManager
+    participant RS as RecordStore
+    participant FM as FinalizedMarker
+    Note over IDX: pi 启动(上次被 kill -9)
+    IDX->>WM: scan(mainCwd, agentDir)
+    WM->>WM: git worktree list 找 pi-sub-* 孤儿 清理
+    IDX->>RS: collectRecords(/list)
+    RS->>RS: reconstructAll 遍历
+    loop 每个 session
+        RS->>FM: readFinalized
+        alt 有 .cancelled
+            RS->>RS: status = cancelled
+        else 有 .finalized
+            RS->>RS: status = done/failed(recon推导)
+        else 都无
+            RS->>RS: status = crashed(经markReconstructedStatus)
+        end
+    end
+  </script>
+</div>
+
+<h2 class="sec-head" id="decisions">关键决策</h2>
+
+<div class="card-grid animate" style="--i:17">
+  <div class="ve-card ve-card--elevated">
+    <div class="ve-card__label">D-014 · REVISIT of D-009</div>
+    <h3>SessionContextResolver 纯函数化</h3>
+    <p><strong>张力</strong>：归 Core 编排但调 forkFrom 需 pi SDK（打破 Core 零依赖）+ forkFrom 有 IO 副作用（打破纯函数）。</p>
+    <p><strong>决策</strong>：SCR 只返回 fork 意图数据（真纯函数），forkFrom 调用留 session-runner。3 帧交叉验证击穿初稿矛盾。</p>
+  </div>
+  <div class="ve-card">
+    <div class="ve-card__label">D-017 · GAP-E6</div>
+    <h3>finalizeRecord 三件套独立 try/catch</h3>
+    <p><strong>决策</strong>：顺序 ⓪collectPatch→①completeRecord→②archive→③finalized+cleanup，三件套各自独立 try/catch。</p>
+    <p>collectPatch 先于 completeRecord（patch 要进 result）；archive 在副作用写之前（防 record 卡 running）。</p>
+  </div>
+  <div class="ve-card">
+    <div class="ve-card__label">crashed 特化</div>
+    <h3>不经 tryTransition</h3>
+    <p><strong>违反</strong>：状态变更不经 CAS 收口。</p>
+    <p><strong>合理</strong>：crashed 是重建推断态（进程已死，内存 record 不存在），非运行期转换。tryTransition 保护 running record 收尾竞争，crashed 不参与。</p>
+  </div>
+  <div class="ve-card">
+    <div class="ve-card__label">GAP-E5 特化</div>
+    <h3>cleanup 挂 finalizeRecord 内</h3>
+    <p><strong>违反</strong>：cleanup 不在 run() finally（session-runner Core 层）。</p>
+    <p><strong>合理</strong>：放 session-runner finally 会跨层（Core 调 Runtime）。放 finalizeRecord 符合分层 + 三终态路径全覆盖。</p>
+  </div>
+</div>
+
+<h2 class="sec-head" id="anti-patterns">反模式检查（grep AC 清单）</h2>
+
+<div class="table-wrap animate" style="--i:18">
+  <div class="table-scroll">
+    <table class="data-table">
+      <thead><tr><th>AC</th><th>检查项</th><th>验证（grep / find）</th></tr></thead>
+      <tbody>
+        <tr><td><code>AC-1</code></td><td>Core 层零 Pi 依赖</td><td><code>grep -rn "from.*pi-coding-agent" core/</code> 仅 session-runner.ts:150 getSdk 动态 import；SCR 零 import</td></tr>
+        <tr><td><code>AC-2</code></td><td>SessionContextResolver 零副作用（D-014）</td><td><code>grep "execFileSync|writeFileSync|spawn|forkFrom|sdk\." session-context-resolver.ts</code> 无输出</td></tr>
+        <tr><td><code>AC-3</code></td><td>STATUS_PRIORITY 覆盖 crashed</td><td><code>grep "crashed" record-store.ts</code> 命中</td></tr>
+        <tr><td><code>AC-4</code></td><td>worktree 清理配对</td><td>WorktreeManager.cleanup 内 worktree remove + branch -D 成对</td></tr>
+        <tr><td><code>AC-5</code></td><td>finalized sidecar GC 清理</td><td><code>grep "finalized" session-file-gc.ts</code> 命中</td></tr>
+        <tr><td><code>AC-6</code></td><td>reaper 挂 session_start</td><td><code>grep -A5 "session_start" index.ts</code> 含 WorktreeManager.scan</td></tr>
+        <tr><td><code>AC-7</code></td><td>keepBranch 已删（D-015）</td><td><code>grep -ri "keepBranch"</code> 无输出</td></tr>
+        <tr><td><code>AC-8</code></td><td>SdkLike 含 forkFrom + createBranchedSession</td><td><code>grep -E "forkFrom|createBranchedSession" types.ts</code> 命中</td></tr>
+        <tr><td><code>AC-9</code></td><td>finalizeRecord 时序 collectPatch 先行</td><td>collectPatch 调用在 completeRecord 之前</td></tr>
+        <tr><td><code>AC-10</code></td><td>GitPort 不存在（D-019）</td><td><code>find -name "*git-port*" -o -name "*GitPort*"</code> 无输出；WorktreeManager 有私有 gitRun</td></tr>
+        <tr><td><code>AC-11</code></td><td>PatchCollector 不独立（D-020）</td><td><code>find -name "*patch-collector*"</code> 无输出；collectPatch 是 WorktreeManager 方法</td></tr>
+      </tbody>
+    </table>
+  </div>
+</div>
+
+<h2 class="sec-head" id="contracts">行为契约保持清单</h2>
+
+<div class="table-wrap animate" style="--i:19">
+  <div class="table-scroll">
+    <table class="data-table">
+      <thead><tr><th>BC</th><th>契约</th><th>处理</th></tr></thead>
+      <tbody>
+        <tr><td><code>BC-1</code></td><td>sync/background 统一执行入口</td><td><strong>保持</strong>——fork/worktree 不改 sync/bg 分叉，仅前置 worktree create、后置 patch+cleanup</td></tr>
+        <tr><td><code>BC-2</code></td><td>task prompt = 上下文输入（ADR-001 决策 2）</td><td><strong>变更（→D-012④ ADR 修订）</strong>——fork:true 时上下文=主历史+task；fork:false 保持原行为</td></tr>
+        <tr><td><code>BC-3</code></td><td>subagent session 物理隔离（ADR-024）</td><td><strong>保持</strong>——编码用 mainCwd（D-004），路径模式不变</td></tr>
+        <tr><td><code>BC-4</code></td><td>cancelled tombstone 机制</td><td><strong>保持</strong>——cancelled 写 .cancelled 不写 .finalized（互斥）</td></tr>
+        <tr><td><code>BC-5</code></td><td>RecordStore 单目录扫描</td><td><strong>保持</strong>——sessionsDir 恒用 mainCwd 编码</td></tr>
+        <tr><td><code>BC-6</code></td><td>并发池 sync 优先级抢占</td><td><strong>保持</strong>——worktree subagent 进同一 pool</td></tr>
+        <tr><td><code>BC-7</code></td><td>崩溃态 done→crashed 重分类（GAP-E4）</td><td><strong>变更</strong>——现有 kill-9 会话重建显示 done（误判）；本次三分支检测重分类为 crashed</td></tr>
+        <tr><td><code>BC-8</code></td><td>background detached .catch 吞错（D-017）</td><td><strong>约束收紧</strong>——finalizeRecord 三件套独立 try/catch，archive 在副作用写之前防跳过</td></tr>
+      </tbody>
+    </table>
+  </div>
+</div>
+
+<footer class="doc-foot">subagent fork 上下文 + worktree 隔离 · 系统架构设计 · upstream: requirements.md · verdict: pass · mode: refactor</footer>
+</main>
+</div>
+
+<script type="module">/*
+ * zoom.js — design-visual-explainer 公共脚本
+ * 从 issues.html (feat-system-prompt-loader) 抽出，含 Mermaid zoom/pan/fit/expand + TOC scroll-spy。
+ * render.sh 通过占位符注释 INLINE:zoom.js 将本文件内联进产物 HTML 的 script[type=module]。
+ *
+ * 依赖：mermaid@11 + @mermaid-js/layout-elk（CDN ESM import）。
+ * CSS 契约：.diagram-shell 及内部 .mermaid-wrap/.mermaid-viewport/.mermaid-canvas/.diagram-source/.zoom-label
+ *          + [data-action] 按钮（zoom-in/out/fit/one/expand）— 类名与 design.css 绑定，勿改名。
+ */
+import mermaid from 'https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.esm.min.mjs';
+import elkLayouts from 'https://cdn.jsdelivr.net/npm/@mermaid-js/layout-elk/dist/mermaid-layout-elk.esm.min.mjs';
+
+const config = { fitPadding: 28, minHeight: 360, maxHeightPx: 960, maxHeightVh: 0.84, maxInitialZoom: 1.8, minZoom: 0.08, maxZoom: 6.5, zoomStep: 0.14, readabilityFloor: 0.58 };
+const clamp = (n, lo, hi) => Math.max(lo, Math.min(hi, n));
+let activeDrag = null;
+addEventListener('mousemove', (e) => activeDrag?.onMove(e));
+addEventListener('mouseup', () => { activeDrag?.onEnd(); activeDrag = null; });
+const isDark = matchMedia('(prefers-color-scheme: dark)').matches;
+
+mermaid.registerLayoutLoaders(elkLayouts);
+mermaid.initialize({
+  startOnLoad: false, theme: 'base', look: 'classic', layout: 'elk',
+  themeVariables: {
+    fontFamily: "'Bricolage Grotesque', 'PingFang SC', system-ui, sans-serif", fontSize: '14px',
+    primaryColor: isDark ? '#115e59' : '#ccfbf1', primaryBorderColor: isDark ? '#2dd4bf' : '#0d9488', primaryTextColor: isDark ? '#ccfbf1' : '#134e3a',
+    secondaryColor: isDark ? '#1e293b' : '#fef3c7', secondaryBorderColor: isDark ? '#fbbf24' : '#b45309', secondaryTextColor: isDark ? '#fef3c7' : '#451a03',
+    lineColor: isDark ? '#5eead4' : '#5f8a85',
+  }
+});
+
+function initDiagram(shell) {
+  const wrap = shell.querySelector('.mermaid-wrap');
+  const viewport = shell.querySelector('.mermaid-viewport');
+  const canvas = shell.querySelector('.mermaid-canvas');
+  const source = shell.querySelector('.diagram-source');
+  const label = shell.querySelector('.zoom-label');
+  if (!wrap || !viewport || !canvas || !source || !label) { console.error('initDiagram: missing elements', shell); return; }
+  let zoom = 1, fitMode = 'contain', panX = 0, panY = 0, svgW = 0, svgH = 0;
+  let sx = 0, sy = 0, spx = 0, spy = 0, touchDist = 0, touchCx = 0, touchCy = 0;
+  function constrainPan() { const vpW = viewport.clientWidth, vpH = viewport.clientHeight; const rW = svgW*zoom, rH = svgH*zoom, pad = config.fitPadding; panX = (rW+pad*2<=vpW)?(vpW-rW)/2:clamp(panX,vpW-rW-pad,pad); panY = (rH+pad*2<=vpH)?(vpH-rH)/2:clamp(panY,vpH-rH-pad,pad); }
+  function applyTransform() { const svg = canvas.querySelector('svg'); if (!svg||!svgW) return; constrainPan(); svg.style.width=(svgW*zoom)+'px'; svg.style.height=(svgH*zoom)+'px'; canvas.style.transform=`translate(${panX}px,${panY}px)`; label.textContent=Math.round(zoom*100)+'% \u2014 '+fitMode; }
+  function canPan() { return svgW*zoom+config.fitPadding*2>viewport.clientWidth || svgH*zoom+config.fitPadding*2>viewport.clientHeight; }
+  function computeSmartFit() { const vpW=viewport.clientWidth,vpH=viewport.clientHeight; const aW=Math.max(80,vpW-config.fitPadding*2),aH=Math.max(80,vpH-config.fitPadding*2); const contain=Math.min(aW/svgW,aH/svgH); let z=contain,mode='contain'; if(contain<config.readabilityFloor){const chartR=svgH/svgW,vpR=vpH/Math.max(vpW,1); if(chartR>=vpR){z=aW/svgW;mode='width-priority';}else{z=aH/svgH;mode='height-priority';}} return {zoom:clamp(z,config.minZoom,config.maxInitialZoom),mode}; }
+  function fitDiagram() { if(!svgW)return; const fit=computeSmartFit(); zoom=fit.zoom; fitMode=fit.mode; panX=(viewport.clientWidth-svgW*zoom)/2; panY=(viewport.clientHeight-svgH*zoom)/2; applyTransform(); }
+  function setOneToOne() { zoom=clamp(1,config.minZoom,config.maxZoom); fitMode='1:1'; panX=(viewport.clientWidth-svgW*zoom)/2; panY=(viewport.clientHeight-svgH*zoom)/2; applyTransform(); }
+  function zoomAround(factor,cx,cy) { const next=clamp(zoom*factor,config.minZoom,config.maxZoom); const ratio=next/zoom; panX=cx-ratio*(cx-panX); panY=cy-ratio*(cy-panY); zoom=next; fitMode='custom'; applyTransform(); }
+  function readSvgNaturalSize(svg) { let w=0,h=0; if(svg.viewBox?.baseVal?.width>0){w=svg.viewBox.baseVal.width;h=svg.viewBox.baseVal.height;} if(!w){w=parseFloat(svg.getAttribute('width'))||0;h=parseFloat(svg.getAttribute('height'))||0;} if(!w){const b=svg.getBBox();w=b.width;h=b.height;} if(!w){const r=svg.getBoundingClientRect();w=r.width||1000;h=r.height||700;} if(!svg.getAttribute('viewBox'))svg.setAttribute('viewBox',`0 0 ${w} ${h}`); return {w,h}; }
+  function setAdaptiveHeight() { if(!svgW)return; const usableW=Math.max(280,wrap.getBoundingClientRect().width-2); const idealH=(svgH/svgW)*usableW+config.fitPadding*2; const maxVp=Math.floor(innerHeight*config.maxHeightVh); const hardMax=Math.min(config.maxHeightPx,Math.max(config.minHeight+40,maxVp)); wrap.style.height=Math.round(clamp(idealH,config.minHeight,hardMax))+'px'; }
+  function openInNewTab() { const svg=canvas.querySelector('svg'); if(!svg)return; const clone=svg.cloneNode(true); clone.style.width=''; clone.style.height=''; const bg=isDark?'#0a1414':'#f6f8f8'; const html=`<!DOCTYPE html><html><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Diagram</title><style>body{margin:0;min-height:100vh;display:flex;align-items:center;justify-content:center;background:${bg};padding:40px;box-sizing:border-box}svg{max-width:100%;max-height:90vh;height:auto}</style></head><body>${clone.outerHTML}</body></html>`; open(URL.createObjectURL(new Blob([html],{type:'text/html'})),'_blank'); }
+  async function render() { try { const code=source.textContent.trim(); if(!code){label.textContent='Error: Empty source';return;} const id='diagram-'+Date.now()+'-'+Math.random().toString(36).slice(2,8); const {svg}=await mermaid.render(id,code); canvas.innerHTML=svg; const svgNode=canvas.querySelector('svg'); if(!svgNode){label.textContent='Error: No SVG';return;} const size=readSvgNaturalSize(svgNode); svgW=size.w; svgH=size.h; svgNode.removeAttribute('width'); svgNode.removeAttribute('height'); svgNode.style.maxWidth='none'; svgNode.style.display='block'; setAdaptiveHeight(); fitDiagram(); } catch(err){ console.error('Mermaid render failed:',err); label.textContent='Error: '+(err.message||'Render failed'); } }
+  const actions = { 'zoom-in':()=>zoomAround(1+config.zoomStep,viewport.clientWidth/2,viewport.clientHeight/2), 'zoom-out':()=>zoomAround(1/(1+config.zoomStep),viewport.clientWidth/2,viewport.clientHeight/2), 'zoom-fit':fitDiagram, 'zoom-one':setOneToOne, 'zoom-expand':openInNewTab };
+  Object.entries(actions).forEach(([a,h])=>wrap.querySelector(`[data-action="${a}"]`)?.addEventListener('click',h));
+  viewport.addEventListener('dblclick',fitDiagram);
+  viewport.addEventListener('wheel',(e)=>{ if(e.ctrlKey||e.metaKey){e.preventDefault();const rect=viewport.getBoundingClientRect();const f=e.deltaY<0?1+config.zoomStep:1/(1+config.zoomStep);zoomAround(f,e.clientX-rect.left,e.clientY-rect.top);return;} if(canPan()){e.preventDefault();panX-=e.deltaX;panY-=e.deltaY;applyTransform();} },{passive:false});
+  viewport.addEventListener('mousedown',(e)=>{ if(e.target.closest('.zoom-controls')||!canPan())return; wrap.classList.add('is-panning'); sx=e.clientX;sy=e.clientY;spx=panX;spy=panY;e.preventDefault(); activeDrag={onMove:(ev)=>{panX=spx+(ev.clientX-sx);panY=spy+(ev.clientY-sy);applyTransform();},onEnd:()=>wrap.classList.remove('is-panning')}; });
+  viewport.addEventListener('touchstart',(e)=>{ if(e.touches.length===1){sx=e.touches[0].clientX;sy=e.touches[0].clientY;spx=panX;spy=panY;} else if(e.touches.length===2){const dx=e.touches[0].clientX-e.touches[1].clientX,dy=e.touches[0].clientY-e.touches[1].clientY;touchDist=Math.sqrt(dx*dx+dy*dy);const r=viewport.getBoundingClientRect();touchCx=(e.touches[0].clientX+e.touches[1].clientX)/2-r.left;touchCy=(e.touches[0].clientY+e.touches[1].clientY)/2-r.top;} },{passive:true});
+  viewport.addEventListener('touchmove',(e)=>{ if(e.touches.length===1&&canPan()){if(touchDist>0){sx=e.touches[0].clientX;sy=e.touches[0].clientY;spx=panX;spy=panY;touchDist=0;}e.preventDefault();panX=spx+(e.touches[0].clientX-sx);panY=spy+(e.touches[0].clientY-sy);applyTransform();}else if(e.touches.length===2&&touchDist>0){e.preventDefault();const dx=e.touches[0].clientX-e.touches[1].clientX,dy=e.touches[0].clientY-e.touches[1].clientY;const d=Math.sqrt(dx*dx+dy*dy);zoomAround(d/touchDist,touchCx,touchCy);touchDist=d;} },{passive:false});
+  new ResizeObserver(()=>{if(svgW){setAdaptiveHeight();fitDiagram();}}).observe(wrap);
+  render();
+}
+document.querySelectorAll('.diagram-shell').forEach(initDiagram);
+
+/* TOC scroll-spy：高亮当前 section 对应的 TOC 链接 */
+(function() {
+  const toc = document.getElementById('toc'); if (!toc) return;
+  const links = toc.querySelectorAll('a'); const sections = [];
+  links.forEach(link => { const el = document.getElementById(link.getAttribute('href').slice(1)); if (el) sections.push({ el, link }); });
+  sections.forEach(s => new IntersectionObserver(entries => { entries.forEach(entry => { if (entry.isIntersecting) { links.forEach(l => l.classList.remove('active')); s.link.classList.add('active'); if (innerWidth <= 1000) s.link.scrollIntoView({ behavior: 'smooth', block: 'nearest', inline: 'center' }); } }); }, { rootMargin: '-10% 0px -80% 0px' }).observe(s.el));
+  links.forEach(link => link.addEventListener('click', e => { e.preventDefault(); const el = document.getElementById(link.getAttribute('href').slice(1)); if (el) { el.scrollIntoView({ behavior: 'smooth', block: 'start' }); history.replaceState(null, '', '#' + el.id); } }));
+})();
+</script>
+</body>
+</html>

@@ -12,6 +12,7 @@ import {
   createTrackedItem,
   handleOnErrorThreshold,
   handleStart,
+  isPromptable,
   isStaleContextError,
   markStaleItemsAbandoned,
   type TrackerActionContext,
@@ -204,6 +205,19 @@ describe("markStaleItemsAbandoned", () => {
     expect(state.items[1]?.status).toBe("error");
     expect(state.items[2]?.status).toBe("completed");
     expect(state.items[3]?.status).toBe("abandoned");
+  });
+
+  it("fork 到含 item 的分支：分支 turn < loadedAtTurn 时不 abandon（负数 turnsSinceLoad）", () => {
+    // PR #79 副作用：currentTurnIndex 改用 getBranch（当前分支相对），
+    // fork 到含 item 的分支时 turn 计数可能小于 loadedAtTurn（全局计数），
+    // turnsSinceLoad 为负 → 永不 abandon。这保留了可恢复性（符合预期）。
+    const state = makeState(
+      [makeItem({ id: 1, status: "loaded", loadedAtTurn: 50 })],
+      5, // 分支内只有 5 个 turn，但 item 在全局 turn 50 加载
+    );
+    const changed = markStaleItemsAbandoned(state, 20);
+    expect(changed).toBe(false);
+    expect(state.items[0]?.status).toBe("loaded");
   });
 });
 
@@ -466,5 +480,22 @@ describe("isActive filter 规约", () => {
     ];
     const active = items.filter((item) => !isTerminalStatus(item.status));
     expect(active.map((i) => i.id)).toEqual([1, 2, 4]);
+  });
+});
+
+// ── isPromptable 规约（PR #79: before_agent_start 只提示 loaded/error）──
+
+describe("isPromptable filter 规约", () => {
+  it("只提示 loaded/error，不提示 abandoned 和终态", () => {
+    const items = [
+      makeItem({ id: 1, status: "loaded" }),
+      makeItem({ id: 2, status: "error" }),
+      makeItem({ id: 3, status: "completed" }),
+      makeItem({ id: 4, status: "abandoned" }),
+      makeItem({ id: 5, status: "recorded" }),
+      makeItem({ id: 6, status: "cancelled" }),
+    ];
+    const promptable = items.filter(isPromptable);
+    expect(promptable.map((i) => i.id)).toEqual([1, 2]);
   });
 });

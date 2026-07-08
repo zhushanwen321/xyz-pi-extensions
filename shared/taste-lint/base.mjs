@@ -80,6 +80,24 @@ export default [
     plugins: { taste: tastePlugin, 'simple-import-sort': simpleImportSort },
     rules: tasteRules,
   },
+  // 测试文件：describe/it 回调天然包含大量用例声明，max-lines-per-function 的 300 行限制
+  // 不适用（规则本意是防逻辑复杂，非防测试用例多）。社区标准做法是对测试文件豁免。
+  // 生产代码仍受 300 行约束。结构问题由 review 把关。
+  {
+    files: ['**/__tests__/**/*.ts', '**/*.test.ts', '**/vitest.config.ts'],
+    rules: {
+      'max-lines-per-function': 'off',
+    },
+  },
+  // mock 桩文件：常含字面量数据表（Unicode 码点区间、固定返回值等）与桩实现，
+  // no-magic-numbers 与 max-lines-per-function 不适用（数据非逻辑）。
+  {
+    files: ['**/mocks/**/*.ts'],
+    rules: {
+      'max-lines-per-function': 'off',
+      'no-magic-numbers': 'off',
+    },
+  },
   {
     ignores: ['**/node_modules/**', '.superpowers/**', '.xyz-harness/**', '**/*.d.ts'],
   },

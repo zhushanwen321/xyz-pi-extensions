@@ -106,25 +106,33 @@ function buildOptionLines(
 		const prefix = isSelected ? t.fg("accent", ">") : " ";
 
 		if (isOther) {
+			// 标记位宽度必须与普通选项一致，否则编号列错位：
+			//   单选 check = 1 列，多选 box = 3 列。
+			//   此前单选 freeform 占位用 "  "(2列)、多选非 freeform 用 check(1列)，
+			//   两种情况下 Other 编号都与普通选项错位。
 			if (state.mode === "freeform") {
-				// 原地编辑：与普通选项的 [ ] 框 + 编号视觉对齐（单选无勾选语义则留空）。
-				// lead = "> [ ] N. "，输入文本跟在编号后，与其他选项整体一致。
-				const box = q.multiSelect ? t.fg("dim", "[ ]") : "  ";
+				const marker = q.multiSelect ? t.fg("dim", "[ ]") : " ";
 				const num = i + 1;
-				const lead = `${prefix} ${box} ${t.fg("muted", `${num}. `)}`;
+				const lead = `${prefix} ${marker} `;
 				const avail = Math.max(1, width - visibleWidth(lead));
-				// 文本 + 末尾光标 █ 整体软换行（空 input 时仅光标，wrapTextWithAnsi("█") 单行）
-				const styled = `${t.fg("text", editorText)}${t.fg("accent", "█")}`;
+				// 编号 + 文本 + 末尾光标 █ 整体软换行（空 input 时仅编号 + 光标，wrapTextWithAnsi 单行）
+				const styled = `${t.fg("muted", `${num}. `)}${t.fg("text", editorText)}${t.fg("accent", "█")}`;
 				addWrappedInput(add, lead, styled, avail, MAX_EDITOR_LINES);
 			} else {
 				const hasFreeText = state.freeTextValue !== null;
-				const check = hasFreeText ? t.fg("success", "✓") : " ";
+				const marker = q.multiSelect
+					? (hasFreeText ? t.fg("success", "[✓]") : t.fg("dim", "[ ]"))
+					: (hasFreeText ? t.fg("success", "✓") : " ");
 				const labelColor = isSelected ? "accent" : "muted";
 				const num = i + 1;
-				add(`${prefix} ${check} ${t.fg(labelColor, `${num}. ${opt.label}`)}`);
+				add(`${prefix} ${marker} ${t.fg(labelColor, `${num}. ${opt.label}`)}`);
 				if (hasFreeText) {
-					// 已保存 freeText 预览：软换行展示，最多 MAX_EDITOR_LINES 行（不再单行截断）
-					const lead = "     "; // 5 列缩进，与上方 label 行对齐
+					// 预览缩进对齐到 label 起始列：prefix + sp + marker + sp + "N." + sp。
+					// 随 num 位数与单/多选 marker 宽度动态变化，硬编码会错位。
+					const numStr = `${num}.`;
+					const lead = " ".repeat(
+						visibleWidth(prefix) + 1 + visibleWidth(marker) + 1 + numStr.length + 1,
+					);
 					const avail = Math.max(1, width - visibleWidth(lead));
 					const styled = t.fg("dim", `"${state.freeTextValue ?? ""}"`);
 					addWrappedInput(add, lead, styled, avail, MAX_EDITOR_LINES);
@@ -137,8 +145,8 @@ function buildOptionLines(
 			const num = i + 1;
 			add(`${prefix} ${box} ${t.fg(labelColor, `${num}. ${opt.label}`)}`);
 			if (opt.description && !hideDescriptions) {
-				const wrapped = wrapTextWithAnsi(t.fg("muted", opt.description), width - 7);
-				for (const line of wrapped) add(`       ${line}`);
+				const wrapped = wrapTextWithAnsi(t.fg("muted", opt.description), width - 10);
+				for (const line of wrapped) add(`          ${line}`);
 			}
 		} else {
 			const isConfirmed = state.selectedIndex === i;
@@ -147,8 +155,8 @@ function buildOptionLines(
 			const num = i + 1;
 			add(`${prefix} ${check} ${t.fg(labelColor, `${num}. ${opt.label}`)}`);
 			if (opt.description && !hideDescriptions) {
-				const wrapped = wrapTextWithAnsi(t.fg("muted", opt.description), width - 5);
-				for (const line of wrapped) add(`     ${line}`);
+				const wrapped = wrapTextWithAnsi(t.fg("muted", opt.description), width - 8);
+				for (const line of wrapped) add(`        ${line}`);
 			}
 		}
 	}

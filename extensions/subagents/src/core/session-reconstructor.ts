@@ -24,8 +24,8 @@ import type {
   AgentUsage,
   ExecutionMode,
   ExecutionStatus,
+  InternalToolCall,
   Turn,
-  TurnContentBlock,
 } from "../types.ts";
 import { extractLabelFromArgs } from "./execution-record.ts";
 
@@ -85,6 +85,16 @@ export interface SubagentIdentityData {
   mode: ExecutionMode;
   task: string;
   startedAt: number;
+  /** 根 Pi session ID（session 隔离过滤用）。旧文件可能缺失。 */
+  rootSessionId?: string;
+  /** 直接父 subagent record ID。旧文件缺失 → undefined（顶层）。 */
+  parentRecordId?: string;
+  /** subagent 递归深度。旧文件缺失 → 0（顶层）。 */
+  depth?: number;
+  /** [MF#4] 本 session 的 fork 深度（session-runner 写入 parentForkDepth+1）。旧文件可能缺失。 */
+  forkDepth?: number;
+  /** @deprecated 兼容旧文件：旧 identity entry 写的是 parentSessionId，读取时 fallback 到 rootSessionId。 */
+  parentSessionId?: string;
 }
 
 /** SDK jsonl entry（getEntries() 返回，header 已排除）。 */
@@ -98,6 +108,8 @@ interface JsonlEntry {
   modelId?: string;
   /** thinking_level_change entry 的字段。 */
   thinkingLevel?: string;
+  /** entry 级别的时间戳（ISO 字符串，SDK 逐行写入）。供 endedAt 推导。 */
+  timestamp?: string;
 }
 
 // ============================================================
@@ -115,6 +127,14 @@ export interface ReconstructedRecord {
   mode: ExecutionMode;
   task: string;
   startedAt: number;
+  /** 根 Pi session ID（session 隔离过滤用）。旧文件可能缺失。 */
+  rootSessionId: string | undefined;
+  /** 直接父 subagent record ID。旧文件缺失 → undefined（顶层）。 */
+  parentRecordId: string | undefined;
+  /** subagent 递归深度。旧文件缺失 → 0（顶层）。 */
+  depth: number;
+  /** [MF#4] 本 session 的 fork 深度（来自 identity custom entry；旧文件为 undefined）。 */
+  forkDepth: number | undefined;
   sessionFile: string;
   // ── 可变状态（来自 message entries）──
   status: ExecutionStatus;
@@ -124,6 +144,8 @@ export interface ReconstructedRecord {
   lastError: string | undefined;
   model: string;
   thinkingLevel: string | undefined;
+  /** 最后一条 entry 的时间戳（ms）。供 finalize/crashed 重建填 endedAt，避免耗时无限增长。 */
+  endedAt: number | undefined;
   /** 各 turn text 拼接的完整正文（镜像 getFullText）。 */
   result: string | undefined;
   /** 来自最后一条 error/aborted assistant message（无则 undefined）。 */
@@ -138,10 +160,8 @@ export interface ReconstructedRecord {
 
 /** turn_end 摘要截断长度（镜像 execution-record.ts TURN_SUMMARY_MAX）。 */
 const TURN_SUMMARY_MAX = 80;
-/** thinking/text 活动行 label 截断长度（镜像 execution-record.ts ACTIVITY_LABEL_MAX）。 */
-const ACTIVITY_LABEL_MAX = 60;
 
-/** 从 turns[] 派生 eventLog（镜像 execution-record.ts getEventLog，从 content 派生）。 */
+/** 从 turns[] 派生 eventLog（镜像 execution-record.ts getEventLog，但接受最小结构）。 */
 function deriveEventLog(
   turns: Turn[],
   lastError: string | undefined,
@@ -149,30 +169,17 @@ function deriveEventLog(
 ): AgentEventLogEntry[] {
   const log: AgentEventLogEntry[] = [];
   for (const turn of turns) {
-    const turnText = turn.content
-      .filter((b): b is Extract<TurnContentBlock, { type: "text" }> => b.type === "text")
-      .map((b) => b.text).join("");
-    // 镜像 getEventLog：thinking 每个 turn 产出（历史推理保留），text 闭合 turn 不产出
-    // （已由 turn_end summary 承载，避免膨胀）。重建的均为 closed turn，无 running 态 text。
-    for (const block of turn.content) {
-      if (block.type === "toolCall") {
-        const label = extractLabelFromArgs(block.name, block.arguments);
-        const ts = block.startedTs;
-        log.push({ type: "tool_start", label, ts, status: "running" });
-        if (block._status !== "running") {
-          log.push({ type: "tool_end", label, ts, status: block._status });
-        }
-      } else if (block.type === "thinking" && block.thinking) {
-        log.push({
-          type: "thinking",
-          label: block.thinking.slice(0, ACTIVITY_LABEL_MAX),
-          ts: turn.closedTs ?? startedAt,
-        });
+    for (const tc of turn.toolCalls) {
+      const label = extractLabelFromArgs(tc.toolName, tc.args);
+      const ts = tc.startedTs;
+      log.push({ type: "tool_start", label, ts, status: "running" });
+      if (tc._status !== "running") {
+        log.push({ type: "tool_end", label, ts, status: tc._status });
       }
     }
     if (turn.closed) {
-      const summary = turnText.length > 0
-        ? (turnText.length > TURN_SUMMARY_MAX ? turnText.slice(0, TURN_SUMMARY_MAX) : turnText)
+      const summary = turn.text.length > 0
+        ? (turn.text.length > TURN_SUMMARY_MAX ? turn.text.slice(0, TURN_SUMMARY_MAX) : turn.text)
         : "turn";
       log.push({ type: "turn_end", label: summary, ts: turn.closedTs ?? startedAt });
     }
@@ -185,7 +192,7 @@ function deriveEventLog(
 
 /** 空 turn（镜像 execution-record.ts 的 emptyTurn，但本模块独立——避免循环依赖）。 */
 function emptyTurn(): Turn {
-  return { content: [], usageDelta: undefined, closed: false };
+  return { text: "", thinking: "", toolCalls: [], usageDelta: undefined, closed: false };
 }
 
 /** JsonlUsage → AgentUsage（cost 取 cost.total，与 session-runner 扁平化一致）。 */
@@ -222,18 +229,18 @@ function isIdentityData(data: unknown): data is SubagentIdentityData {
     typeof d.task === "string" &&
     typeof d.startedAt === "number"
   );
-}
-
-/**
+}/**
  * 待匹配的 toolCall（assistant 发起，等 toolResult 回填）。
  * 记录在 assistant Turn 上，toolResult 到达时按 toolCallId 找到并填充。
  */
 interface PendingToolCall {
   toolCallId: string;
-  /** 所属 Turn（toolResult 按 id 回填时更新此 placeholder block 的 _status/result）。 */
+  toolName: string;
+  args: unknown;
+  /** 所属 Turn（toolResult 回填时推进这个 Turn 的 toolCalls）。 */
   turn: Turn;
-  /** content 里的 toolCall block 占位（toolResult 到达时原地补全 _status/result）。 */
-  blockPlaceholder: Extract<TurnContentBlock, { type: "toolCall" }>;
+  /** assistant message timestamp（作为 InternalToolCall.startedTs）。 */
+  startedTs: number;
 }
 
 // ============================================================
@@ -326,39 +333,39 @@ export function reconstructFromFile(sessionFile: string): ReconstructedRecord | 
   let totalTokens = 0;
   /** 最后一条 assistant message 的 stopReason（推导终态 status）。 */
   let lastStopReason: string | undefined;
+  /** 最后一条 entry 的时间戳（ms），推导 endedAt（避免重建 record 耗时随墙钟无限增长）。 */
+  let lastEntryTsMs: number | undefined;
 
   for (const entry of entries) {
+    // entry 级别 timestamp（ISO）→ ms。优先用 entry 级别（每条都有），message.timestamp 作兼底。
+    if (typeof entry.timestamp === "string") {
+      const ms = Date.parse(entry.timestamp);
+      if (!Number.isNaN(ms)) lastEntryTsMs = ms;
+    }
     if (entry.type !== "message") continue;
     const msg = entry.message;
     if (!msg) continue;
+    if (typeof msg.timestamp === "number") {
+      lastEntryTsMs = msg.timestamp;
+    }
 
     if (msg.role === "assistant") {
       const turn = emptyTurn();
       turns.push(turn);
 
-      // 单源：assistant message.content 直接透传进 turn.content（text/thinking/toolCall 同构）。
-      // toolCall block 带 _status:running 骨架（_status/result 由后续 toolResult 按 id 补全）。
       for (const block of msg.content) {
         if (block.type === "text") {
-          turn.content.push({ type: "text", text: block.text });
+          turn.text += block.text;
         } else if (block.type === "thinking") {
-          turn.content.push({ type: "thinking", thinking: block.thinking });
+          turn.thinking += block.thinking;
         } else if (block.type === "toolCall") {
           pending.push({
             toolCallId: block.id,
+            toolName: block.name,
+            args: block.arguments,
             turn,
-            blockPlaceholder: {
-              type: "toolCall" as const,
-              id: block.id,
-              name: block.name,
-              arguments: block.arguments,
-              result: undefined,
-              isError: false,
-              _status: "running" as const,
-              startedTs: msg.timestamp,
-            },
+            startedTs: msg.timestamp,
           });
-          turn.content.push(pending[pending.length - 1]!.blockPlaceholder);
         }
       }
 
@@ -378,14 +385,19 @@ export function reconstructFromFile(sessionFile: string): ReconstructedRecord | 
         lastError = undefined;
       }
     } else if (msg.role === "toolResult") {
-      // 按 id 找到 content 里对应的 toolCall block，补全 result/_status（原地更新，保持 block 顺序）。
       const idx = pending.findIndex((p) => p.toolCallId === msg.toolCallId);
       if (idx >= 0) {
         const p = pending[idx];
         pending.splice(idx, 1);
-        p.blockPlaceholder.result = { content: msg.content, details: msg.details };
-        p.blockPlaceholder.isError = msg.isError ?? false;
-        p.blockPlaceholder._status = msg.isError ? "failed" : "done";
+        const tc: InternalToolCall = {
+          toolName: p.toolName,
+          args: p.args,
+          result: { content: msg.content, details: msg.details },
+          isError: msg.isError ?? false,
+          _status: msg.isError ? "failed" : "done",
+          startedTs: p.startedTs,
+        };
+        p.turn.toolCalls.push(tc);
       }
       // 未配对（孤儿 toolResult）→ 丢弃。
     }
@@ -401,12 +413,7 @@ export function reconstructFromFile(sessionFile: string): ReconstructedRecord | 
 
   const turnCount = turns.length;
   const resultText = turns
-    .map((t) =>
-      t.content
-        .filter((b): b is Extract<TurnContentBlock, { type: "text" }> => b.type === "text")
-        .map((b) => b.text)
-        .join(""),
-    )
+    .map((t) => t.text)
     .filter((t) => t.length > 0)
     .join("\n\n");
 
@@ -419,8 +426,14 @@ export function reconstructFromFile(sessionFile: string): ReconstructedRecord | 
   const status: ExecutionStatus =
     lastStopReason === "error" || lastStopReason === "aborted" ? "failed" : "done";
 
+  // rootSessionId 归一化：新文件读 rootSessionId，旧文件 fallback parentSessionId。
+  const rootSessionId = identity.rootSessionId ?? identity.parentSessionId;
   return {
     ...identity,
+    rootSessionId,
+    parentRecordId: identity.parentRecordId,
+    depth: identity.depth ?? 0,
+    forkDepth: identity.forkDepth,
     sessionFile,
     status,
     turns,
@@ -429,6 +442,7 @@ export function reconstructFromFile(sessionFile: string): ReconstructedRecord | 
     lastError,
     model,
     thinkingLevel,
+    endedAt: lastEntryTsMs,
     result: resultText.length > 0 ? resultText : undefined,
     error: lastError,
     eventLog,

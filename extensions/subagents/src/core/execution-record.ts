@@ -2,14 +2,13 @@
 //
 // 唯一执行状态对象 + 唯一创建/更新/完成/投影入口。
 //
-// 单源设计（2026-06 重构）：record.turns[].content 是 SDK message.content 的直接镜像
-// （text/thinking/toolCall 同构 block）。eventLog / result 文本均从 content 派生——
-// （text/thinking 现在是 eventLog 条目，与 tool 同源——getCurrentActivity 从 turns[] 派生，
-//   不再有独立的 currentActivity 存储字段）。
-// 不再 delta 累积（源头每次给完整 message 快照，message_update 整体覆盖 content）。
+// 收口设计（2026-06-22 重构）：
+//   一次执行的完整内容（text/thinking/toolCalls/usage）按 turn 收口在 record.turns[]。
+//   eventLog / currentActivity / result 文本均从 turns[] 派生（getEventLog /
+//   getCurrentActivity / getFullText），不再独立存储切片或缓冲。
 //
 //   createRecord    唯一创建入口（model 创建时必填，消灭 poll 路径 model 丢失）
-//   updateFromEvent 唯一事件更新入口（message_update 覆盖 content，tool 按 id 关联）
+//   updateFromEvent 唯一事件更新入口（累积进 turns[]，消灭闭包旁路累积器）
 //   completeRecord  唯一完成入口（冻结状态）
 //   project/snapshot 唯一投影入口（两路径字段一致）
 //
@@ -21,14 +20,15 @@ import type {
   AgentResult,
   AgentUsage,
   AgentUsageTotal,
+  DisplayItem,
   ExecutionMode,
   ExecutionRecord,
+  ExecutionStatus,
+  InternalToolCall,
   RecordSnapshot,
   SubagentToolDetails,
   ToolCall,
-  ToolCallResult,
   Turn,
-  TurnContentBlock,
 } from "../types.ts";
 
 // ============================================================
@@ -127,9 +127,9 @@ function addUsage(prev: AgentUsage | undefined, next: AgentUsage): AgentUsage {
 // 创建（唯一入口）
 // ============================================================
 
-/** 创建一个空 turn（content 空，未闭合）。 */
+/** 创建一个空 turn（text/thinking 空，无 toolCalls，未闭合）。 */
 function emptyTurn(): Turn {
-  return { content: [], usageDelta: undefined, closed: false };
+  return { text: "", thinking: "", toolCalls: [], usageDelta: undefined, closed: false };
 }
 
 /**
@@ -147,6 +147,12 @@ export function createRecord(
     mode: ExecutionMode;
     task: string;
     startedAt: number;
+    /** 根 Pi session ID（session 隔离过滤用）。递归链上所有层同值。 */
+    rootSessionId?: string;
+    /** 直接父 subagent record ID。顶层为 undefined。 */
+    parentRecordId?: string;
+    /** subagent 递归深度。顶层=0。 */
+    depth?: number;
     controller?: AbortController;
   },
 ): ExecutionRecord {
@@ -158,6 +164,9 @@ export function createRecord(
     mode: identity.mode,
     task: identity.task,
     startedAt: identity.startedAt,
+    rootSessionId: identity.rootSessionId,
+    parentRecordId: identity.parentRecordId,
+    depth: identity.depth ?? 0,
 
     // 状态（实时更新）
     status: "running",
@@ -196,29 +205,23 @@ function currentTurn(record: ExecutionRecord): Turn {
 }
 
 /**
- * 在 record.turns[] 范围内倒序找仍 running 的 toolCall block（按 id 精确匹配，兜底按名）。
- *
- * 单源设计：toolCall 现在是 turn.content 的元素（不再是独立 toolCalls 数组）。
- * id 精确关联 tool_execution_end（SDK tool_execution_*.toolCallId === ToolCall.id），
- * 比旧按名匹配更健壮（同名 tool 无歧义）。兜底按名：SDK 极端情况下 id 缺失时仍能配对。
+ * 在 record.turns[] 范围内倒序找最后一个同名且仍 running 的 toolCall。
  *
  * 扫描所有 turn（非仅当前 turn）——SDK 在 turn_end 后仍可能补发滞后的 tool_end，
- * 仅扫当前 turn 会漏配对。返回 [turn, blockIndex]；未找到返回 undefined。
+ * 仅扫当前 turn 会漏配对、误 push 幽灵 ToolCall。跨 turn 扫描兜底滞后事件。
+ *
+ * 返回 [turn, index]；未找到返回 undefined。
  */
-function findRunningToolCallBlock(
+function findRunningToolCall(
   record: ExecutionRecord,
-  toolCallId: string | undefined,
   toolName: string,
 ): readonly [Turn, number] | undefined {
   for (let t = record.turns.length - 1; t >= 0; t--) {
     const turn = record.turns[t];
     if (turn === undefined) continue;
-    for (let i = turn.content.length - 1; i >= 0; i--) {
-      const block = turn.content[i];
-      if (block?.type !== "toolCall" || block._status !== "running") continue;
-      // 优先 id 精确匹配；id 缺失时兜底按 name
-      if ((toolCallId !== undefined && block.id === toolCallId) ||
-          (toolCallId === undefined && block.name === toolName)) {
+    for (let i = turn.toolCalls.length - 1; i >= 0; i--) {
+      const tc = turn.toolCalls[i];
+      if (tc?._status === "running" && tc.toolName === toolName) {
         return [turn, i] as const;
       }
     }
@@ -227,14 +230,10 @@ function findRunningToolCallBlock(
 }
 
 /**
- * 从 AgentEvent 更新 record。所有数据收口进 record.turns[].content。
- *   - message_update：用 SDK message.content 快照整体覆盖 currentTurn().content
- *     （text/thinking 直接来自快照，无需 delta 累积——单源设计的核心）
- *   - tool_start：往 currentTurn().content 追加 running 的 toolCall block（带 id + startedTs）。
- *     注意：message_update 的快照可能已含同名 toolCall 骨架，但缺 _status/result；
- *     tool_start 的 running block 与快照 block 按 id 去重（避免重复行）。
- *   - tool_end：跨 turn 按 id 找 running toolCall block，补全 result/isError/_status
- *     （兜底按名）。匹配失败则 push 已完成 block（防数据丢失）。
+ * 从 AgentEvent 更新 record。所有数据收口进 record.turns[]。
+ *   - text/thinking：流式累积进 currentTurn()（完整内容，非切片）
+ *   - tool_start/end：push 进 currentTurn().toolCalls（含完整 result）
+ *     tool_end 跨 turn 扫描找 running 同名 toolCall（兜底滞后事件）
  *   - turn_end：闭合当前 turn，记 closedTs（真实墙钟，供 getEventLog）；
  *     正常闭合清 lastError（瞬态 error 恢复后不应误判 success=false）
  *   - message_end：usage 增量存进末 turn.usageDelta（直接写末 turn，不开新 turn）；
@@ -248,86 +247,47 @@ function findRunningToolCallBlock(
  */
 export function updateFromEvent(record: ExecutionRecord, event: AgentEvent): void {
   switch (event.type) {
-    // ── message_update：SDK message.content 快照整体覆盖 currentTurn.content ──
-    // 单源核心：text/thinking/toolCall 同构 block 来自完整快照，不再 delta 累积。
-    // toolCall block 的 _status/result 由独立的 tool_start/tool_end 事件维护——
-    // 快照覆盖时保留已有 toolCall block 的 _status/result（按 id 合并），避免丢失运行态。
-    case "message_update": {
-      const turn = currentTurn(record);
-      // 收集现有 toolCall block 的运行态（按 id），供快照覆盖后回填 _status/result
-      const existingToolState = new Map<string, { _status: "running" | "done" | "failed"; result?: ToolCallResult; isError?: boolean; startedTs: number }>();
-      for (const b of turn.content) {
-        if (b.type === "toolCall") {
-          existingToolState.set(b.id, { _status: b._status, result: b.result, isError: b.isError, startedTs: b.startedTs });
-        }
-      }
-      turn.content = event.content.map((block) => {
-        if (block.type === "text") return { type: "text" as const, text: block.text };
-        if (block.type === "thinking") return { type: "thinking" as const, thinking: block.thinking };
-        // toolCall：回填已有运行态（_status/result/startedTs），缺失则默认 running
-        const existing = existingToolState.get(block.id);
-        return {
-          type: "toolCall" as const,
-          id: block.id,
-          name: block.name,
-          arguments: block.arguments,
-          _status: existing?._status ?? "running",
-          result: existing?.result,
-          isError: existing?.isError ?? false,
-          startedTs: existing?.startedTs ?? Date.now(),
-        };
-      });
+    // ── text / thinking：流式累积进当前 turn ──
+    case "text_delta": {
+      currentTurn(record).text += event.delta;
+      return;
+    }
+    case "thinking_delta": {
+      currentTurn(record).thinking += event.delta;
       return;
     }
 
-    // ── tool_start：往 content 追加 running 的 toolCall block（带 id + startedTs）──
+    // ── tool_start：push 一个 running 的 InternalToolCall（带 startedTs）──
     case "tool_start": {
-      // 先按 id 查现有 content 是否已有同 toolCall（message_update 快照已含骨架）——
-      // 有则只补 startedTs（若缺），无则追加。避免重复 block。
-      const turn = currentTurn(record);
-      const existing = turn.content.find(
-        (b): b is Extract<TurnContentBlock, { type: "toolCall" }> =>
-          b.type === "toolCall" && b.id === event.toolCallId,
-      );
-      if (existing) {
-        if (existing.startedTs === 0) existing.startedTs = Date.now();
-        existing._status = "running";
-        return;
-      }
-      turn.content.push({
-        type: "toolCall",
-        id: event.toolCallId,
-        name: event.toolName,
-        arguments: event.args,
+      const tc: InternalToolCall = {
+        toolName: event.toolName,
+        args: event.args,
         result: undefined,
         isError: false,
         _status: "running",
         startedTs: Date.now(),
-      });
+      };
+      currentTurn(record).toolCalls.push(tc);
       return;
     }
 
-    // ── tool_end：跨 turn 按 id 找 running toolCall block，补全 result/isError/_status ──
+    // ── tool_end：跨 turn 找 running 同名 toolCall，补全 result/isError/_status ──
     case "tool_end": {
-      const matched = findRunningToolCallBlock(record, event.toolCallId, event.toolName);
+      const matched = findRunningToolCall(record, event.toolName);
       if (matched !== undefined) {
         const [turn, i] = matched;
-        const block = turn.content[i];
-        if (block?.type === "toolCall") {
-          block.arguments = event.args ?? block.arguments;
-          block.result = event.result;
-          block.isError = event.isError ?? false;
-          block._status = event.isError ? "failed" : "done";
-        }
+        const tc = turn.toolCalls[i]!;
+        tc.args = event.args ?? tc.args;
+        tc.result = event.result;
+        tc.isError = event.isError ?? false;
+        tc._status = event.isError ? "failed" : "done";
         return;
       }
-      // 匹配失败（SDK 发了 tool_end 但无对应 tool_start/content block，如外部注入的工具）：
-      // 直接 push 一个已完成的 toolCall block，避免数据丢失。
-      currentTurn(record).content.push({
-        type: "toolCall",
-        id: event.toolCallId,
-        name: event.toolName,
-        arguments: event.args,
+      // 匹配失败（SDK 发了 tool_end 但无对应 tool_start，如外部注入的工具）：
+      // 直接 push 一个已完成的 InternalToolCall，避免数据丢失。
+      currentTurn(record).toolCalls.push({
+        toolName: event.toolName,
+        args: event.args,
         result: event.result,
         isError: event.isError ?? false,
         _status: event.isError ? "failed" : "done",
@@ -411,45 +371,18 @@ export function updateFromEvent(record: ExecutionRecord, event: AgentEvent): voi
  */
 export function getEventLog(record: ExecutionRecord): AgentEventLogEntry[] {
   const log: AgentEventLogEntry[] = [];
-  for (let ti = 0; ti < record.turns.length; ti++) {
-    const turn = record.turns[ti]!;
-    const isLastTurn = ti === record.turns.length - 1;
-    const isRunningTurn = isLastTurn && !turn.closed && record.status === "running";
-    // content 顺序遍历：text/thinking/toolCall 同构产出条目（单源——与 tool 一样保留为历史，
-    // 不再只在 running 态显示后刷掉）。text/thinking 取首行摘要避免膨胀（与 turn_end summary 同策略）。
-    for (const block of turn.content) {
-      if (block.type === "toolCall") {
-        const label = extractLabelFromArgs(block.name, block.arguments);
-        const ts = block.startedTs;
-        log.push({ type: "tool_start", label, ts, status: "running" });
-        if (block._status !== "running") {
-          log.push({ type: "tool_end", label, ts, status: block._status });
-        }
-      } else if (block.type === "thinking" && block.thinking) {
-        log.push({
-          type: "thinking",
-          label: block.thinking.slice(0, ACTIVITY_LABEL_MAX),
-          ts: turn.closedTs ?? Date.now(),
-        });
-      } else if (block.type === "text" && block.text) {
-        // running 态的最后一个 text block 用完整首行（实时进度）；
-        // 已闭合 turn 的 text 不重复产出（其内容已由 turn_end summary + result 文本承载，
-        // 避免 eventLog 膨胀 + 与 turn_end label 重复）。
-        if (isRunningTurn) {
-          log.push({
-            type: "text",
-            label: block.text.slice(0, ACTIVITY_LABEL_MAX),
-            ts: Date.now(),
-          });
-        }
+  for (const turn of record.turns) {
+    for (const tc of turn.toolCalls) {
+      const label = extractLabelFromArgs(tc.toolName, tc.args);
+      const ts = tc.startedTs;
+      log.push({ type: "tool_start", label, ts, status: "running" });
+      if (tc._status !== "running") {
+        log.push({ type: "tool_end", label, ts, status: tc._status });
       }
     }
     if (turn.closed) {
-      const turnText = turn.content
-        .filter((b): b is Extract<TurnContentBlock, { type: "text" }> => b.type === "text")
-        .map((b) => b.text).join("");
-      const summary = turnText.length > 0
-        ? (turnText.length > TURN_SUMMARY_MAX ? turnText.slice(0, TURN_SUMMARY_MAX) : turnText)
+      const summary = turn.text.length > 0
+        ? (turn.text.length > TURN_SUMMARY_MAX ? turn.text.slice(0, TURN_SUMMARY_MAX) : turn.text)
         : "turn";
       log.push({ type: "turn_end", label: summary, ts: turn.closedTs ?? record.startedAt });
     }
@@ -461,41 +394,115 @@ export function getEventLog(record: ExecutionRecord): AgentEventLogEntry[] {
 }
 
 /**
+ * [STEP3] 从 turns[] 派生 displayItems（对齐 nicobailon getDisplayItems）。
+ *
+ * 与 getEventLog 的区别：产出可渲染单元（toolCall 含完整 name+args，text 含正文），
+ * 而非离散事件。renderResult compact 用此数据 + formatToolCall 生成与 nicobailon
+ * 一致的 `→ formatToolCall` 行格式。
+ *
+ * 派生规则（与 nicobailon getDisplayItems(messages) 等价）：
+ *   - 遍历 turns[]，每个 turn：先 text（如果有），再 toolCalls
+ *   - toolCall：{ type:"toolCall", name, args, status }
+ *   - text：{ type:"text", text }（取首行，避免撑爆 compact）
+ *   - 跳过 thinking（与 nicobailon 一致，不在 compact 展示推理）
+ *
+ * 参数类型放宽为 `{ turns: readonly Turn[] }` 结构子集——ExecutionRecord 和
+ * ReconstructedRecord 都满足，磁盘重建路径（record-store）可复用此函数派生
+ * displayItems，而非给空数组（否则终态 record 详情看不到 text）。
+ */
+export function getDisplayItems(record: { turns: readonly Turn[] }): DisplayItem[] {
+  const items: DisplayItem[] = [];
+  for (const turn of record.turns) {
+    // assistant 正文（与 nicobailon 顺序一致：先 text 后 toolCall）
+    if (turn.text.length > 0) {
+      items.push({ type: "text", text: turn.text });
+    }
+    for (const tc of turn.toolCalls) {
+      items.push({
+        type: "toolCall",
+        name: tc.toolName,
+        args: (tc.args ?? {}) as Record<string, unknown>,
+        status: tc._status,
+      });
+    }
+  }
+  return items;
+}
+
+/**
+ * 从 turns[] 末尾推导当前活动行（running 时）。
+ *
+ *   优先级：最后一个未闭合 turn 的末尾 running toolCall → thinking → text → undefined
+ *
+ * 仅 status==="running" 时返回；terminal 态返回 undefined。
+ *
+ * 注意：返回的 type 联合（"tool"|"text"|"thinking"）是手写的，未通过类型守卫从
+ * AgentEvent 派生——它映射的是累积的 turn 状态（InternalToolCall._status + turn.thinking/text），
+ * 而非单个事件。若未来新增 turn 内容模式（如 reasoning_summary），须同步扩展本函数，
+ * 否则会静默返回 undefined（活动行运行中途消失）。updateFromEvent 的 switch 有 never 穷尽
+ * 检查，但本函数没有，依赖人工同步。
+ */
+export function getCurrentActivity(
+  record: ExecutionRecord,
+): { type: "tool" | "text" | "thinking"; label: string } | undefined {
+  if (record.status !== "running") return undefined;
+  const turn = record.turns[record.turns.length - 1];
+  if (turn === undefined || turn.closed) return undefined;
+
+  // 1. 倒序找最后一个 running 的 toolCall
+  for (let i = turn.toolCalls.length - 1; i >= 0; i--) {
+    const tc = turn.toolCalls[i];
+    if (tc?._status === "running") {
+      return { type: "tool", label: extractLabelFromArgs(tc.toolName, tc.args) };
+    }
+  }
+  // 2. 正在 thinking
+  if (turn.thinking) {
+    return { type: "thinking", label: turn.thinking.slice(0, ACTIVITY_LABEL_MAX) };
+  }
+  // 3. 正在输出 text
+  if (turn.text) {
+    return { type: "text", label: turn.text.slice(0, ACTIVITY_LABEL_MAX) };
+  }
+  return undefined;
+}
+
+/**
  * 聚合所有 turn 的 text 为完整文本（替代旧 collectResponseText）。
  *
- * 单一数据源：text 完全来自 record.turns[].content 的 text block（SDK message 快照）。
+ * 单一数据源：不再读 session.messages，text 完全来自 record.turns[] 的流式累积。
  * 多 turn 用空行分隔（每个 turn 是一段独立的 assistant 输出）。
+ *
+ * 语义对齐旧 collectResponseText：后者只取最后一条 assistant message 的 text。
+ * turns[] 收口后，每条 assistant message 对应一个 turn，故 join 所有非空 turn 文本
+ * 与「拼接所有 assistant message」语义一致。单 turn 场景两者完全等价。
  */
 export function getFullText(record: ExecutionRecord): string {
   return record.turns
-    .map((t) =>
-      t.content
-        .filter((b): b is Extract<TurnContentBlock, { type: "text" }> => b.type === "text")
-        .map((b) => b.text)
-        .join(""),
-    )
+    .map((t) => t.text)
     .filter((text) => text.length > 0)
     .join("\n\n");
 }
 
 /**
- * 聚合所有 turn 的 toolCall block（扁平化），并 strip 内部字段。
+ * 聚合所有 turn 的 toolCalls（扁平化），并 strip InternalToolCall 的内部字段。
  * 供 collectResult / schema enforcement 读，替代旧闭包 toolCalls 旁路。
  *
  * 返回 ToolCall[]（不含 _status / startedTs）——跨边界导出形状清洁，
  * 避免内部状态机字段泄漏到 AgentResult.toolCalls / 持久化层。
  */
 export function getAllToolCalls(record: ExecutionRecord): ToolCall[] {
-  return record.turns.flatMap((t) =>
-    t.content
-      .filter((b): b is Extract<TurnContentBlock, { type: "toolCall" }> => b.type === "toolCall")
-      .map((b) => ({
-        toolName: b.name,
-        args: b.arguments,
-        result: b.result,
-        isError: b.isError,
-      })),
-  );
+  return record.turns.flatMap((t) => t.toolCalls.map(stripInternal));
+}
+
+/** 把 InternalToolCall 映射回纯净的 ToolCall（丢弃 _status / startedTs）。 */
+function stripInternal(tc: InternalToolCall): ToolCall {
+  return {
+    toolName: tc.toolName,
+    args: tc.args,
+    result: tc.result,
+    isError: tc.isError,
+  };
 }
 
 /**
@@ -529,10 +536,14 @@ export function getTotalUsage(record: ExecutionRecord): AgentUsageTotal | undefi
 /**
  * status 状态机的 CAS 互斥锁。仅当 `record.status === "running"` 时改为 target
  * 并返回 true，否则返回 false。**status 状态机本身就是互斥锁**——终态
- * （done/failed/cancelled）不可逆，check-then-set 在 JS 单线程事件循环里天然原子。
+ * （done/failed/cancelled/crashed）不可逆，check-then-set 在 JS 单线程事件循环里天然原子。
  *
  * 用途：executor 的收尾竞争。cancelBackground 与 background detached 完成回调
  * 都调 tryTransition 抢锁：抢到负责完整收尾，没抢到闭嘴不做事。
+ *
+ * target 仅限正常执行流的三终态。crashed 不作 target——它由重建路径推断
+ * （alive marker 存在但 session 文件无终态），不走 CAS；重建路径用 markReconstructedStatus
+ * 直接赋值。收窄 target 类型可在编译期拒绍误用 tryTransition(record, "crashed")。
  */
 export function tryTransition(
   record: ExecutionRecord,
@@ -541,6 +552,20 @@ export function tryTransition(
   if (record.status !== "running") return false;
   record.status = target;
   return true;
+}
+
+/**
+ * 重建专用收口：跳过 CAS 直接赋值 status。
+ *
+ * 仅用于 session-reconstructor 从 session.jsonl 重建终态 record 时——
+ * 重建的 record 没有 running 状态需要保护，直接赋值即可。
+ * 禁止在正常执行流程中使用此函数（应使用 tryTransition）。
+ */
+export function markReconstructedStatus(
+  record: { status: ExecutionStatus },
+  status: ExecutionStatus,
+): void {
+  record.status = status;
 }
 
 /**
@@ -572,8 +597,7 @@ export function computeElapsedSeconds(record: { startedAt: number; endedAt?: num
 }
 
 /**
- * 投影到 SubagentToolDetails。elapsedSeconds/eventLog 均现算派生。
- * 单源设计：eventLog 已含 thinking/text 条目（不再有 currentActivity 独立出口）。
+ * 投影到 SubagentToolDetails。elapsedSeconds/currentActivity/eventLog 均现算派生。
  */
 export function project(record: ExecutionRecord): SubagentToolDetails {
   return {
@@ -586,10 +610,13 @@ export function project(record: ExecutionRecord): SubagentToolDetails {
     totalTokens: record.totalTokens,
     elapsedSeconds: computeElapsedSeconds(record),
     eventLog: getEventLog(record),
+    displayItems: getDisplayItems(record),
     result: record.result,
     error: record.error,
+    currentActivity: getCurrentActivity(record),
     parsedOutput: record.agentResult?.parsedOutput,
     sessionFile: record.sessionFile,
+    patchFile: record.patchFile,
   };
 }
 

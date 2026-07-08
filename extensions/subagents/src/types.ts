@@ -7,7 +7,7 @@
 //   - Runtime 编排 Core，产出 Details/Record 给 TUI
 //   - TUI 只读 Record/Details 快照，永不持有可变引用
 
-import type { AgentConfig, ModelInfo, ModelRegistryLike, ResolvedModel } from "./core/model-resolver.ts";
+import type { ModelInfo, ModelRegistryLike } from "./core/model-resolver.ts";
 
 // ============================================================
 // 全局常量
@@ -30,8 +30,8 @@ export const DEFAULT_AGENT_NAME = "general-purpose";
 // 执行状态机
 // ============================================================
 
-/** 唯一执行状态。所有路径（sync/bg/poll）共用。 */
-export type ExecutionStatus = "running" | "done" | "failed" | "cancelled";
+/** 唯一执行状态。所有路径（sync/bg/poll）共用。crashed 为进程崩溃终态（重建推断）。 */
+export type ExecutionStatus = "running" | "done" | "failed" | "cancelled" | "crashed";
 
 /** 执行模式。sync = 调用方 await；background = 调用方立即拿 handle 返回。 */
 export type ExecutionMode = "sync" | "background";
@@ -43,15 +43,14 @@ export type ExecutionMode = "sync" | "background";
 /**
  * Pi session.subscribe 上报的事件。Runtime 把它喂给 updateFromEvent。
  *
- * 单源设计：text/thinking 不再作为碎片 delta 上报——SDK 源头每次 emit 的是完整
- * message.content 快照，故 message_update 携带完整 content（text/thinking/toolCall 同构），
- * 整体覆盖 currentTurn.content。tool_start/tool_end 带 toolCallId，用 id 精确关联
- * （替代旧按名匹配），由独立的 tool_execution 事件补全 result/_status。
+ * 设计：AgentEvent 携带 updateFromEvent 收口进 record 所需的**全部数据**——
+ * tool_end 带 result（供 turn.toolCalls 存完整 ToolCall），无需翻译层旁路累积。
  */
 export type AgentEvent =
-  | { type: "tool_start"; toolCallId: string; toolName: string; args?: unknown }
-  | { type: "tool_end"; toolCallId: string; toolName: string; args?: unknown; result?: ToolCallResult; isError?: boolean }
-  | { type: "message_update"; content: SdkContentBlock[] }
+  | { type: "tool_start"; toolName: string; args?: unknown }
+  | { type: "tool_end"; toolName: string; args?: unknown; result?: ToolCallResult; isError?: boolean }
+  | { type: "text_delta"; delta: string }
+  | { type: "thinking_delta"; delta: string }
   | { type: "turn_end"; summary?: string }
   | { type: "message_end"; usage?: AgentUsage; error?: string }
   | { type: "compaction" }
@@ -77,20 +76,36 @@ export interface AgentUsageTotal extends AgentUsage {
 /**
  * eventLog 条目（getEventLog 派生产出的元素）。所有字段 readonly。
  *
- * 单源设计：text/thinking/toolCall 都是 SDK message.content 的同构 block，
- * 统一作为 eventLog 条目派生——不再有 currentActivity 这个独立出口。
- *   - tool_start/tool_end：toolCall block 的 running/terminal 态（同 label 配对折叠成 1 行）
- *   - thinking：running turn 末尾的 thinking block（dim 显示，反映实时推理）
- *   - text：running turn 末尾的 text block（反映实时输出）
- *   - turn_end：turn 边界（summary 取自 text block）
- *   - error：运行期 error
+ * text_output / thinking 类型已移除——它们是 100 字切片的碎片副产物，
+ * 现在完整内容收口在 record.turns[] 里，eventLog 只承载离散语义事件
+ * （tool 调用 / turn 边界 / error）。
  */
 export interface AgentEventLogEntry {
-  readonly type: "tool_start" | "tool_end" | "turn_end" | "error" | "thinking" | "text";
+  readonly type: "tool_start" | "tool_end" | "turn_end" | "error";
   readonly label: string;
   /** 事件发生的墙钟时间戳（Date.now()，ms）。由 getEventLog 从 turns[] 派生时记录。 */
   readonly ts: number;
   readonly status?: "running" | "done" | "failed";
+}
+
+/**
+ * [STEP3] displayItem：从 turns[] 派生的展示项（对齐 nicobailon getDisplayItems）。
+ *
+ * 与 eventLog 的区别：eventLog 承载离散语义事件（tool_start/tool_end/turn_end），
+ * displayItem 承载「可渲染单元」（toolCall 含完整 name+args 供 formatToolCall 格式化；
+ * text 含 assistant 正文）。renderResult compact 分支改用 displayItems 后，
+ * 行格式与 nicobailon 完全一致（→ formatToolCall）。
+ */
+export interface DisplayItem {
+  readonly type: "toolCall" | "text";
+  /** toolCall：tool 名称（bash/read/edit...）；text：无。 */
+  readonly name?: string;
+  /** toolCall：tool 原始 args（供 formatToolCall 提取路径/命令）；text：无。 */
+  readonly args?: Record<string, unknown>;
+  /** toolCall：执行状态（running 时无✓/✗标记）；text：正文文本。 */
+  readonly status?: "running" | "done" | "failed";
+  /** text：assistant 正文（compact 时取首行/截断）。 */
+  readonly text?: string;
 }
 
 // ============================================================
@@ -100,9 +115,6 @@ export interface AgentEventLogEntry {
 /**
  * SDK AgentSessionEvent 的最小可用子集（duck-typed，避免强耦合 SDK 类型）。
  * 由 session-runner 内部消费，驱动累积器和事件翻译。
- *
- * message_update 的 `message.content` 是 SDK 的完整 AssistantMessage 快照（text/thinking/
- * toolCall 同构 block 数组）——单源设计的核心数据，直接镜像进 turn.content，无需 delta 累积。
  */
 export type SdkEvent = {
   type: string;
@@ -115,21 +127,10 @@ export type SdkEvent = {
     usage?: AgentUsage & { cost?: { total: number } };
     stopReason?: string;
     errorMessage?: string;
-    /** SDK AssistantMessage.content 快照（message_update 时带，text/thinking/toolCall 同构）。 */
-    content?: SdkContentBlock[];
   };
   assistantMessageEvent?: { type?: string; delta?: string };
   reason?: string;
 };
-
-/**
- * SDK message.content block 的最小消费子集（与 TurnContentBlock 的纯净部分对齐）。
- * 不含 _status/result（那些由 tool_execution_end 独立事件补全，不来自 message 快照）。
- */
-export type SdkContentBlock =
-  | { type: "text"; text: string }
-  | { type: "thinking"; thinking: string }
-  | { type: "toolCall"; id: string; name: string; arguments?: unknown };
 
 /** tool 调用结果（tool_execution_end 时累积，含 structured-output 的 details）。 */
 export interface ToolCallResult {
@@ -160,7 +161,7 @@ export interface ToolCall {
  *   running = tool_start 已收到但 tool_end 未到；
  *   done/failed = tool_end 已到。
  *
- * 仅存在于 ExecutionRecord.turns[].content 的 toolCall block（Core 内部可变状态）。
+ * 仅存在于 ExecutionRecord.turns[].toolCalls（Core 内部可变状态）。
  * 跨边界导出（getAllToolCalls → AgentResult.toolCalls / 持久化）由 getAllToolCalls
  * 映射回 ToolCall（丢弃 _status / startedTs），保证导出形状清洁。
  */
@@ -171,49 +172,21 @@ export interface InternalToolCall extends ToolCall {
 }
 
 /**
- * Turn.content 的元素：SDK message.content block 的镜像（text/thinking/toolCall 同构）。
- *
- *   - text/thinking：直接来自 SDK message 快照，无需 delta 累积（源头每次给完整快照）
- *   - toolCall：骨架来自 SDK message 快照（id/name/arguments），_status/result 由独立的
- *     tool_execution_end 事件用 id 精确关联补全
- *
- * 与 SDK TextContent/ThinkingContent/ToolCall 对齐，但 toolCall 追加 _status/result/startedTs
- * 内部状态（对齐旧 InternalToolCall，只存在于 Core 内部 turn.content，导出时 strip）。
- */
-export type TurnContentBlock =
-  | { type: "text"; text: string }
-  | { type: "thinking"; thinking: string }
-  | {
-      type: "toolCall";
-      /** SDK ToolCall.id——用 id 精确关联 tool_execution_end（替代按名匹配）。 */
-      id: string;
-      name: string;
-      arguments?: unknown;
-      result?: ToolCallResult;
-      isError?: boolean;
-      _status: "running" | "done" | "failed";
-      /** tool_start 到达时的墙钟时间戳。getEventLog 派生 tool 条目 ts 用。 */
-      startedTs: number;
-    };
-
-/**
  * 一个 turn 的完整内容（ExecutionRecord.turns[] 的元素）。
  *
- * 单源设计：`content` 是 SDK message.content 的直接镜像——text/thinking/toolCall 是
- * 同一个数组里的同构 block（与 Pi 主对话区 assistant-message.ts 同构渲染）。
- * 不再用 text/thinking/toolCalls 三字段分别累积（那是自造的并行状态机，与 SDK 源头
- * text/thinking/toolcall 同质 emit 的事实相悖，且导致 text/thinking 走 currentActivity
- * 出口、tool 走 eventLog 出口，不同步）。
+ * 收口设计：text/thinking 流式累积**完整内容**（非 100 字切片），
+ * toolCalls 存完整 ToolCall（含 result + _status 内部状态）。turn_end 到达后 closed=true，
+ * 下次 text/thinking/tool 时开新 turn。
  *
- * toolCall block 带 id（SDK ToolCall 自带），用 id 精确关联 tool_execution_end
- * （替代旧 findRunningToolCall 的按名匹配）。_status/result 由 tool_execution_end 异步补全
- * （content 快照只管 text/thinking/toolCall 骨架，与 InternalToolCall 同理）。
- *
- * eventLog / result 均从 content 派生，不再独立存储。
+ * eventLog / currentActivity / result 均从 turns[] 派生，不再独立存储。
  */
 export interface Turn {
-  /** SDK message.content 镜像：text/thinking/toolCall 同构有序 block。 */
-  content: TurnContentBlock[];
+  /** 本 turn assistant 正文（text_delta 流式累积，完整）。 */
+  text: string;
+  /** 本 turn 推理（thinking_delta 流式累积，完整）。 */
+  thinking: string;
+  /** 本 turn 工具调用（InternalToolCall：含完整 result + _status 进行中标记）。 */
+  toolCalls: InternalToolCall[];
   /** 本 turn message_end 的 token 增量（聚合得 totalUsage）。 */
   usageDelta?: AgentUsage;
   /** turn_end 是否已到达。false=正在进行；true=已闭合，下次内容开新 turn。 */
@@ -254,6 +227,73 @@ export interface AgentResult {
  *
  * TUI 永远拿 RecordSnapshot（.slice() 快照），不直接持此可变对象。
  */
+/**
+ * worktree handle 值对象。仅 worktree:true 时持有——worktree 是独立维度，
+ * 需显式开启（且要求 fork:true），fork alone 不创建 worktree。
+ * Object.freeze 守卫保证不可变。
+ */
+export interface WorktreeHandle {
+  /** checkout 目录（子 agent 工作目录，tmpdir 下）。 */
+  readonly path: string;
+  readonly branch: string;
+  readonly baseCommit: string;
+  /** 主仓库根目录（cleanup/scan 需要，不再靠路径反推）。 */
+  readonly mainCwd: string;
+}
+
+/** alive marker：子进程存活标记，用于心跳检测和 crash 推断。 */
+export interface AliveMarker {
+  readonly pid: number;
+  readonly id: string;
+  readonly startedAt: number;
+}
+
+/** git diff patch 结果。 */
+export interface PatchResult {
+  readonly patchFile: string;
+  readonly failed: boolean;
+  /** patch 是否实际写入 patchFile。true=diff 非空且写盘成功；false=空 diff 或写失败。
+   *  调用方据此回填 record.patchFile，避免悬空路径（`git apply` 不存在的文件）。 */
+  readonly written: boolean;
+}
+
+/** resolveSessionContext 纯函数的入参（#3 SessionContextResolver）。 */
+export interface SessionResolveInput {
+  fork?: boolean;
+  cwd?: string;
+  mainCwd: string;
+  mainSessionFile?: string;
+  parentForkDepth?: number;
+  /** agent 配置目录（getSubagentSessionDir 需要）。 */
+  agentDir: string;
+  /** worktree checkout 路径（来自 WorktreeHandle.path，作为 effectiveCwd）。 */
+  worktreePath?: string;
+}
+
+/** resolveSessionContext 纯函数的返回值。 */
+export interface ResolvedSessionContext {
+  readonly shouldFork: boolean;
+  readonly forkSource: string | undefined;
+  readonly effectiveCwd: string;
+  readonly sessionDir: string;
+}
+
+/** fork depth 超限错误。 */
+export class ForkDepthExceededError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "ForkDepthExceededError";
+  }
+}
+
+/** worktree 有未提交变更错误。 */
+export class DirtyWorktreeError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "DirtyWorktreeError";
+  }
+}
+
 export interface ExecutionRecord {
   /** 唯一 ID（sync: "run-N"，bg: "bg-N-xxx"）。 */
   readonly id: string;
@@ -265,6 +305,12 @@ export interface ExecutionRecord {
   readonly mode: ExecutionMode;
   readonly task: string;
   readonly startedAt: number;
+  /** 根 Pi session ID（session 隔离过滤用）。递归链上所有层 record 同值。 */
+  readonly rootSessionId: string | undefined;
+  /** 直接父 subagent record ID（层级树构建用）。顶层 record 为 undefined。 */
+  readonly parentRecordId: string | undefined;
+  /** subagent 递归深度。顶层（主 session 直接创建）=0，每层嵌套 +1。 */
+  readonly depth: number;
 
   // ── 状态（实时更新）──
   status: ExecutionStatus;
@@ -285,6 +331,12 @@ export interface ExecutionRecord {
 
   /** session jsonl 文件名。session 创建成功后由 session-runner.run() 回填（窗口期内 undefined）。 */
   sessionFile?: string;
+
+  /** [MF#3] fork+worktree 模式下子 agent 改动的 patch 文件路径（worktree 外，供调用方应用）。 */
+  patchFile?: string;
+
+  /** worktree 隔离时的 handle（仅 worktree:true 时存在；fork alone 无此字段）。 */
+  worktreeHandle?: WorktreeHandle;
 
   // ── 控制（仅 background 持有）──
   controller: AbortController | undefined;
@@ -312,12 +364,18 @@ export interface SubagentToolDetails {
   totalTokens: number;
   elapsedSeconds: number;
   eventLog: AgentEventLogEntry[];
+  /** [STEP3] 从 turns[] 派生的展示项（对齐 nicobailon getDisplayItems）。 */
+  displayItems: DisplayItem[];
   result?: string;
   error?: string;
+  /** running 时的当前活动行（tool/thinking/text 优先级）。 */
+  currentActivity?: { type: "tool" | "text" | "thinking"; label: string };
   /** schema 模式下，structured-output tool 的 result.details（对齐 workflow agent-pool）。 */
   parsedOutput?: unknown;
   /** session jsonl 文件名（不含目录）。窗口期内可能 undefined（session 尚未创建成功）。 */
   sessionFile?: string;
+  /** [MF#3] fork+worktree 模式下子 agent 改动的 patch 文件路径（worktree 外，供调用方应用）。 */
+  patchFile?: string;
 }
 
 // ============================================================
@@ -351,15 +409,15 @@ export interface ExecuteOptions {
   onUpdate?: (details: SubagentToolDetails) => void;
   /** background 完成回调（sync 不调）。 */
   onComplete?: (record: RecordSnapshot) => void;
-  /**
-   * Per-call 工作目录（ADR-029 决策 1）。缺省回退 service.cwd（主 session cwd）。
-   *
-   * 用于 worktree 隔离：传入 worktree 绝对路径，subagent 的 createAgentSession /
-   * ResourceLoader / SessionManager / bash 工具都绑定到该目录，实现文件系统隔离。
-   * 不同 cwd 的 subagent 各自独立（SessionManager 按 cwd 建独立 session 目录，
-   * branchCache 按 cwd 缓存），无并发隔离风险。
-   */
+  /** 是否继承父会话上下文（fork 模式，只继承上下文）。 */
+  fork?: boolean;
+  /** 文件系统隔离：true=创建新 git worktree（要求 fork:true），WorktreeHandle=复用外部已创建的；undefined=不隔离（parent cwd）。 */
+  worktree?: boolean | WorktreeHandle;
+  /** 覆盖执行 cwd（默认 mainCwd）。 */
   cwd?: string;
+  // 注：fork 深度不从外部传入（曾暴露 parentForkDepth，改用 ALS 后 execute 内部从调用链派生，
+  // 公开字段成为死字段误导调用方，已移除）。深度限制检查见 session-runner.ts 内部 RunOptions.parentForkDepth
+  // （与历史残留的 types.ts RunOptions 同名不同 interface——后者已删除）。
 }
 
 /**
@@ -452,18 +510,36 @@ export type SubagentToolResult =
 export interface SubagentRecord {
   id: string;
   agent: string;
+  /** 任务提示词（详情面板置顶展示）。磁盘/内存源均有。 */
+  task: string;
   status: ExecutionStatus;
   mode: ExecutionMode;
   startedAt: number;
+  /** 根 Pi session ID（session 隔离过滤用）。递归链上所有层 record 同值。 */
+  rootSessionId: string | undefined;
+  /** 直接父 subagent record ID（层级树构建用）。顶层 record 为 undefined。 */
+  parentRecordId: string | undefined;
+  /** subagent 递归深度。顶层 =0，每层嵌套 +1。 */
+  depth: number;
   endedAt: number | undefined;
   turns: number;
   totalTokens: number;
   model: string;
   thinkingLevel: string | undefined;
   eventLog: AgentEventLogEntry[];
+  /** [STEP3] 从 turns[] 派生的展示项（对齐 nicobailon getDisplayItems）。 */
+  displayItems: DisplayItem[];
+  /** running 时的当前活动行（仅内存源；磁盘重建无此数据）。streaming 可观测性用。 */
+  currentActivity?: { type: "tool" | "text" | "thinking"; label: string };
   result?: string;
   error?: string;
   sessionFile?: string;
+  /** [MF#3] fork+worktree 模式下子 agent 改动的 patch 文件路径（worktree 外，供调用方应用）。 */
+  patchFile?: string;
+  /** 外部 Pi 实例（进程隔离模式下由外部启动的子进程）。 */
+  externalInstance?: AliveMarker;
+  /** fork 模式下的 worktree handle。 */
+  worktreeHandle?: WorktreeHandle;
 }
 
 // ============================================================
@@ -485,7 +561,7 @@ export interface SubagentsGlobalConfig {
 /**
  * 资源发现契约（<agentDir>/subagents/discovery.json）。
  * 宿主（如 xyz-agent GUI）启动 pi 前写入，subagents 在 session_start 与 resources_discover 时读取。
- * 文件缺失/字段缺失时各数组视为空，走默认行为（零破坏）。详见 ADR-028。
+ * 文件缺失/字段缺失时各数组视为空，走默认行为（零破坏）。详见 ADR-025。
  */
 export interface DiscoveryConfig {
   version: number;
@@ -574,15 +650,23 @@ export interface ResourceLoaderOptions {
   additionalSkillPaths?: string[];
 }
 
+/** SessionManager 实例的最小接口（duck-typed，fork 路径消费 SDK 静态方法的返回值）。 */
+export interface SessionManagerLike {
+  getLeafId(): string | null;
+  createBranchedSession(leafId: string): string | undefined;
+  getSessionFile(): string | undefined;
+  getSessionId(): string;
+}
+
 /** Pi SDK 动态 import 的形状（getSdk() 获取）。 */
 export interface SdkLike {
   DefaultResourceLoader: new (opts: ResourceLoaderOptions) => ResourceLoaderLike;
   SessionManager: {
-    inMemory(cwd?: string): unknown;
-    create(cwd: string, sessionDir?: string): unknown;
+    inMemory(cwd?: string): SessionManagerLike;
+    create(cwd: string, sessionDir?: string): SessionManagerLike;
+    open(sessionFile: string, sessionDir?: string, cwdOverride?: string): SessionManagerLike;
+    /** [MF#1] fork 静态方法：从源 session 文件 fork 到目标 cwd，返回 SessionManager。 */
+    forkFrom(sourcePath: string, targetCwd: string, sessionDir?: string): SessionManagerLike;
   };
   createAgentSession: (opts: CreateAgentSessionArgs) => Promise<{ session: AgentSessionLike }>;
 }
-
-export type { AgentConfig, ResolvedModel };
-export type { ModelRegistryLike };

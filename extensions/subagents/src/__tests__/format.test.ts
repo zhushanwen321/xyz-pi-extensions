@@ -1,28 +1,19 @@
 // src/__tests__/format.test.ts
+import { visibleWidth } from "@earendil-works/pi-tui";
 import { describe, expect, it } from "vitest";
 
 import {
   formatElapsedSeconds,
   formatTokens,
-  formatToolEventPairs,
   padToVisible,
   sanitizeLabel,
   segFillColored,
   shortId,
   spinnerGlyph,
   statusGlyph,
-  tailFixedLines,
   truncLine,
+  wrapText,
 } from "../tui/format.ts";
-import type { AgentEventLogEntry } from "../types.ts";
-
-// 最小 theme stub：formatToolEventPairs 经 ThemeLike 只调 fg（✓/✗ 着色）。
-const theme = {
-  fg: (_tag: string, text: string) => `<${_tag}>${text}</>`,
-  bg: (_tag: string, text: string) => text,
-  bold: (text: string) => text,
-  underline: (text: string) => text,
-} as const;
 
 // ============================================================
 // formatTokens
@@ -214,7 +205,9 @@ describe("truncLine", () => {
 
   it("truncates with ellipsis when exceeding width", () => {
     const result = truncLine("hello world", 8);
+    // 纯文本截断不发 \x1b[0m（全局重置会破坏外层背景色）
     expect(result.endsWith("…")).toBe(true);
+    expect(result).not.toContain("\x1b[0m");
     // visible width should be 8 (7 chars + ellipsis)
   });
 
@@ -222,212 +215,91 @@ describe("truncLine", () => {
     // 你好世界 = 8 visible columns; truncate to 5 → 2 chars (4 cols) + …
     const result = truncLine("你好世界", 5);
     expect(result.endsWith("…")).toBe(true);
+    expect(result).not.toContain("\x1b[0m");
   });
 
   it("handles emoji correctly", () => {
     const result = truncLine("😀😁😂🤣😃", 3);
     expect(result.endsWith("…")).toBe(true);
+    expect(result).not.toContain("\x1b[0m");
   });
 
   it("reapplies active ANSI styles before ellipsis (no background break)", () => {
     // red text that exceeds width → ellipsis should have red re-applied
     const input = "\x1b[31mhello world this is long\x1b[0m";
     const result = truncLine(input, 10);
-    expect(result.endsWith("…")).toBe(true);
+    expect(result.endsWith("…\x1b[0m")).toBe(true);
     // The ellipsis should be preceded by the active red style (re-applied)
     // Check that the last grapheme sequence includes the red SGR before …
-    expect(result).toMatch(/\x1b\[31m…$/);
+    expect(result).toMatch(/\x1b\[31m…\x1b\[0m$/);
   });
 
   it("clears style stack on reset code", () => {
     // text with reset in the middle → after reset, no style re-applied
     const input = "\x1b[31mab\x1b[0mcdefghijk";
     const result = truncLine(input, 6);
+    // reset 后 activeStyles 为空 → 截断不发 \x1b[0m
     expect(result.endsWith("…")).toBe(true);
   });
-});
 
-// ============================================================
-// formatToolEventPairs — tool_start/tool_end 配对折叠成单行
-// ============================================================
-describe("formatToolEventPairs", () => {
-  /** 构造 tool_start 条目。 */
-  const ts = (label: string, ts = 1000): AgentEventLogEntry =>
-    ({ type: "tool_start", label, ts, status: "running" });
-  /** 构造 tool_end 条目（done/failed）。 */
-  const te = (label: string, status: "done" | "failed" = "done", ts = 1000): AgentEventLogEntry =>
-    ({ type: "tool_end", label, ts, status });
-  /** 构造 turn_end 条目。 */
-  const turnEnd = (label = "turn", ts = 2000): AgentEventLogEntry =>
-    ({ type: "turn_end", label, ts });
-  /** 构造 error 条目。 */
-  const err = (label: string, ts = 3000): AgentEventLogEntry =>
-    ({ type: "error", label, ts });
-
-  it("已完成 tool(start+end) → 折叠成 1 行，含 ✓，不输出单独 start 行", () => {
-    const out = formatToolEventPairs([ts("read x.ts"), te("read x.ts")], theme);
-    expect(out).toHaveLength(1);
-    expect(out[0]).toContain("tool: read x.ts");
-    expect(out[0]).toContain("success");
-    expect(out[0]).toContain("✓");
+  it("flattens newlines to spaces (single-line rendering safety)", () => {
+    // 多行 prompt / turn.text 含 \n，单行渲染时 \n 会意外换行破坏行对齐。
+    // truncLine 作为单行渲染入口必须剥离 \n（用空格替代保留词边界）。
+    const multiLine = "只读任务：分析核心逻辑。\n项目根：/Users/test\n输出：报告";
+    const result = truncLine(multiLine, 80);
+    expect(result).not.toContain("\n");
+    expect(result).toContain("只读任务");
+    expect(result).toContain("项目根");
   });
 
-  it("failed tool → 折叠成 1 行含 ✗", () => {
-    const out = formatToolEventPairs([ts("bash rm"), te("bash rm", "failed")], theme);
-    expect(out).toHaveLength(1);
-    expect(out[0]).toContain("✗");
-    expect(out[0]).toContain("error");
-  });
-
-  it("running tool(只有 start 无 end) → 1 行无尾标", () => {
-    const out = formatToolEventPairs([ts("edit a.ts")], theme);
-    expect(out).toHaveLength(1);
-    expect(out[0]).toBe("tool: edit a.ts");
-    // 无 ✓/✗
-    expect(out[0]).not.toContain("✓");
-    expect(out[0]).not.toContain("✗");
-  });
-
-  it("孤儿 tool_end(无对应 start) → 1 行含尾标", () => {
-    // SDK 滞后/外部注入：只发 tool_end
-    const out = formatToolEventPairs([te("external tool")], theme);
-    expect(out).toHaveLength(1);
-    expect(out[0]).toContain("✓");
-  });
-
-  it("turn_end 原样保留（不折叠）", () => {
-    const out = formatToolEventPairs([turnEnd("result text")], theme);
-    expect(out).toHaveLength(1);
-    // turn_end 渲染成 ── turn ──（dim 色），不含 turn 文本 label
-    expect(out[0]).toContain("turn");
-  });
-
-  it("error 条目原样保留（含 ✗）", () => {
-    const out = formatToolEventPairs([err("crashed")], theme);
-    expect(out).toHaveLength(1);
-    expect(out[0]).toContain("crashed");
-    expect(out[0]).toContain("✗");
-  });
-
-  it("多 tool + turn_end 混合：行数 = tool 数 + turn_end 数（不翻倍）", () => {
-    // turn 1: read(完成) + bash(完成)；turn_end
-    const entries = [
-      ts("read a.ts"), te("read a.ts"),
-      ts("bash ls"), te("bash ls"),
-      turnEnd(),
-    ];
-    const out = formatToolEventPairs(entries, theme);
-    // 2 个 tool 各 1 行 + 1 个 turn_end = 3 行（旧实现会是 5 行：2*2 tool + 1 turn）
-    expect(out).toHaveLength(3);
-    expect(out[0]).toContain("read a.ts");
-    expect(out[1]).toContain("bash ls");
-  });
-
-  it("多 turn 跨界：相邻配对不跨 turn_end 误合并", () => {
-    // turn1 的 tool_start 后跟 turn_end（而非 tool_end），再开 turn2 的 tool_end（孤儿）
-    const entries = [
-      ts("read a.ts"),          // turn1 running tool（无 end）
-      turnEnd(),
-      te("read a.ts"),          // turn2 孤儿 end（label 同 turn1 的 start，但中间有 turn_end 隔开）
-    ];
-    const out = formatToolEventPairs(entries, theme);
-    // 相邻判定：start 后紧跟 turn_end 不是 tool_end → start 单独输出（无尾标）；
-    // 孤儿 end 单独输出（含 ✓）。共 3 行，不误合并成 1 行。
-    expect(out).toHaveLength(3);
-    expect(out[0]).toBe("tool: read a.ts");    // running start，无尾标
-    expect(out[2]).toContain("✓");              // 孤儿 end
-  });
-
-  it("空数组 → 空数组", () => {
-    expect(formatToolEventPairs([], theme)).toEqual([]);
-  });
-
-  it("窗口切片后 start/end 被切断：保守各输出 1 行（不跨窗口误合并）", () => {
-    // 完整：[start A, end A, start B, end B]，slice(-1) 只剩 [end B]
-    const full = [ts("A"), te("A"), ts("B"), te("B")];
-    const window = full.slice(-1);
-    const out = formatToolEventPairs(window, theme);
-    // 窗口里只有孤儿 end B → 1 行含 ✓，不会因找不到 start 而丢
-    expect(out).toHaveLength(1);
-    expect(out[0]).toContain("✓");
+  it("flattens \r\n sequences", () => {
+    const crlf = "line1\r\nline2\r\nline3";
+    const result = truncLine(crlf, 80);
+    expect(result).not.toContain("\r");
+    expect(result).not.toContain("\n");
   });
 });
 
 // ============================================================
-// tailFixedLines — 固定高度滚动窗口（对齐 bash 行数稳定）
+// wrapText
 // ============================================================
-describe("tailFixedLines", () => {
-  it("超过 height → 取尾部 height 行", () => {
-    const out = tailFixedLines(["a", "b", "c", "d"], 3, "⎿ ", theme);
-    expect(out).toEqual(["b", "c", "d"]);
+describe("wrapText", () => {
+  it("returns text as-is when shorter than width", () => {
+    expect(wrapText("hello", 80)).toEqual(["hello"]);
   });
 
-  it("正好 height → 原样返回", () => {
-    const out = tailFixedLines(["a", "b", "c"], 3, "⎿ ", theme);
-    expect(out).toEqual(["a", "b", "c"]);
+  it("wraps long text into multiple lines (no truncation)", () => {
+    const text = "abcdefghij"; // 10 chars
+    const lines = wrapText(text, 4);
+    // 每行最多 4 列，10 字符 → 3 行（4+4+2），不截断不省略号
+    expect(lines.join("")).toBe("abcdefghij");
+    for (const l of lines.slice(0, -1)) {
+      expect(visibleWidth(l)).toBeLessThanOrEqual(4);
+    }
   });
 
-  it("不足 height → pad 到 height 行（pad 行含 prefix，与活动行缩进对齐）", () => {
-    const out = tailFixedLines(["a"], 3, "⎿ ", theme);
-    expect(out).toHaveLength(3);
-    expect(out[0]).toBe("a");
-    // pad 行 = theme.fg("dim", prefix) = "<dim>⎿ </>"
-    expect(out[1]).toBe("<dim>⎿ </>");
-    expect(out[2]).toBe("<dim>⎿ </>");
+  it("preserves original newlines as paragraph breaks", () => {
+    const text = "第一行\n第二行";
+    const lines = wrapText(text, 80);
+    expect(lines).toEqual(["第一行", "第二行"]);
   });
 
-  it("空数组 → 全 pad", () => {
-    const out = tailFixedLines([], 3, "⎿ ", theme);
-    expect(out).toHaveLength(3);
-    expect(out.every((l) => l === "<dim>⎿ </>")).toBe(true);
+  it("wraps CJK text correctly (2 columns each)", () => {
+    // 你好世界你好世界 = 8 CJK chars = 16 columns, wrap to 4 columns
+    const text = "你好世界你好世界";
+    const lines = wrapText(text, 4);
+    // 每行最多 4 列 = 2 CJK chars, 共 4 行
+    expect(lines).toHaveLength(4);
+    expect(lines.join("")).toBe(text);
   });
 
-  it("height <= 0 → 空数组", () => {
-    expect(tailFixedLines(["a", "b"], 0, "⎿ ", theme)).toEqual([]);
-    expect(tailFixedLines(["a", "b"], -1, "⎿ ", theme)).toEqual([]);
+  it("handles width <= 0 by returning original", () => {
+    expect(wrapText("hello", 0)).toEqual(["hello"]);
   });
 
-  it("height 1 + 多行 → 仅末行（活动流末尾是最新活动）", () => {
-    const out = tailFixedLines(["old", "newer", "newest"], 1, "⎿ ", theme);
-    expect(out).toEqual(["newest"]);
-  });
-});
-
-// ============================================================
-// formatToolEventPairs — thinking/text 条目（单源后进 eventLog）
-// ============================================================
-describe("formatToolEventPairs: thinking/text", () => {
-  it("thinking 条目 → `thinking: {label}` 整行 dim", () => {
-    const out = formatToolEventPairs(
-      [{ type: "thinking", label: "pondering", ts: 1000 }],
-      theme,
-    );
-    expect(out).toHaveLength(1);
-    expect(out[0]).toContain("<dim>thinking: pondering</>");
-  });
-
-  it("text 条目 → `text: {label}`（非 dim）", () => {
-    const out = formatToolEventPairs(
-      [{ type: "text", label: "writing output", ts: 1000 }],
-      theme,
-    );
-    expect(out).toHaveLength(1);
-    expect(out[0]).toContain("text: writing output");
-    expect(out[0]).not.toContain("<dim>");
-  });
-
-  it("tool + thinking 混合：各自 1 行，thinking 不被折叠", () => {
-    const out = formatToolEventPairs(
-      [
-        { type: "tool_start", label: "read x.ts", ts: 1000, status: "running" },
-        { type: "tool_end", label: "read x.ts", ts: 1000, status: "done" },
-        { type: "thinking", label: "analyzing", ts: 2000 },
-      ],
-      theme,
-    );
-    expect(out).toHaveLength(2);
-    expect(out[0]).toContain("read x.ts");
-    expect(out[1]).toContain("thinking: analyzing");
+  it("preserves empty lines from blank paragraphs", () => {
+    const text = "a\n\nb";
+    expect(wrapText(text, 80)).toEqual(["a", "", "b"]);
   });
 });
 
@@ -440,8 +312,9 @@ describe("shortId", () => {
     expect(shortId("run-42")).toBe("run-42");
   });
 
-  it("strips timestamp from background id (bg-N-<ts> → bg-N)", () => {
-    expect(shortId("bg-1-1719500000000")).toBe("bg-1");
-    expect(shortId("bg-99-1719500123456")).toBe("bg-99");
+  it("strips timestamp from background id (bg-tag-seq-<ts> → bg-tag-seq)", () => {
+    // 真实格式：bg-${6位hex tag}-${seq}-${Date.now()}（subagent-service.ts:422）
+    expect(shortId("bg-f6f731-10-1719500000000")).toBe("bg-f6f731-10");
+    expect(shortId("bg-abc123-99-1719500123456")).toBe("bg-abc123-99");
   });
 });

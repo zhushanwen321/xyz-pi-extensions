@@ -139,6 +139,55 @@ describe("subagent tool contract [MANDATORY]", () => {
     );
   });
 
+  // [MF#5] fork/worktree/cwd 参数传递链路契约（acceptance #8）：
+  // tool execute → startHandler(service, startParam) → service.execute({fork, worktree, cwd, ...})。
+  // 回归保护：subagent-actions.ts startHandler L152-166 把 input.fork/worktree/cwd 透传给
+  // service.execute。若任一字段在 handler 内漏传（如重构改名/删行），子 agent 静默丢失隔离模式。
+  // 此测试锁住「startParam.fork/worktree/cwd → service.execute 同名参数」端到端透传。
+  it("execute plumbs startParam.fork/worktree/cwd to service.execute (chain contract)", async () => {
+    let capturedExecute: ((...args: never[]) => Promise<unknown>) | undefined;
+    const pi = mockExtensionApi({
+      registerTool: (tool: unknown) => {
+        capturedExecute = (tool as { execute: (...args: never[]) => Promise<unknown> }).execute;
+      },
+    });
+    registerSubagentTool(pi);
+    expect(capturedExecute).toBeDefined();
+
+    mockServiceExecute.mockReset();
+    mockServiceExecute.mockResolvedValue({
+      mode: "background",
+      subagentId: "bg-fork-wt",
+      sessionFile: "/test/session.jsonl",
+    });
+
+    await capturedExecute!(
+      "call-fork-wt",
+      {
+        action: "start",
+        startParam: {
+          task: "isolated work",
+          fork: true,
+          worktree: true,
+          cwd: "/x",
+        },
+      },
+      undefined,
+      undefined,
+      undefined,
+    );
+
+    // service.execute 收到完整的 fork/worktree/cwd 三参数透传
+    expect(mockServiceExecute).toHaveBeenCalledTimes(1);
+    expect(mockServiceExecute).toHaveBeenCalledWith(
+      expect.objectContaining({
+        fork: true,
+        worktree: true,
+        cwd: "/x",
+      }),
+    );
+  });
+
   // sync 路径返回的 content[0].text 是 LLM 解析的 JSON。此契约测试锁定：
   //   - JSON shape 含 syncResponse（≡ SubagentToolDetails）
   //   - syncResponse.mode === "sync"（SyncResponse 字面量收窄，非 "background"）

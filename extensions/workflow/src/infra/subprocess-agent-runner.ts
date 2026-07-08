@@ -20,6 +20,7 @@
 
 import type { AgentRunner } from "../engine/models/ports.js";
 import type { AgentCallOpts, AgentResult } from "../engine/models/types.js";
+import { formatFailureContext } from "./format-helpers.js";
 import { makeEmptyPipeline } from "./jsonl-parser.js";
 import { buildArgs, resolveInvocation, runPiProcess } from "./pi-runner.js";
 
@@ -93,12 +94,18 @@ export class SubprocessAgentRunner implements AgentRunner {
       const durationMs = Date.now() - startedAt;
 
  // schema 要求 structured-output 但未调用 → 失败（盲点修复，FR-1.4）
+ // [HISTORICAL] error 字段必须带上 exitCode + stderr：abort/崩溃/spawn 失败都会让
+ // pipeline 无任何 tool_call（pi 被 SIGKILL 时 pipeline.hasToolCall=false 且 parsedOutput=undefined），
+ // 此分支会命中。旧实现只返回 "Agent did not call structured-output tool"，丢弃了 stderr 里
+ // 的 "Operation aborted, sending SIGKILL" / 真实崩溃信息，导致 abort 类失败被误判为
+ // "LLM 拒绝调 tool"。教训来源：daily-news-impact 三轮根因分析全被此误导信息带偏。
       if (opts.schema && pipeline.parsedOutput === undefined) {
+        const ctx = formatFailureContext(exitCode, stderr);
         if (!pipeline.hasToolCall) {
           return {
             content: pipeline.output,
             durationMs,
-            error: "Agent did not call structured-output tool",
+            error: `Agent did not call structured-output tool${ctx}`,
             toolCalls: pipeline.toolCalls,
           };
         }
@@ -106,7 +113,7 @@ export class SubprocessAgentRunner implements AgentRunner {
           return {
             content: pipeline.output,
             durationMs,
-            error: "Agent completed without calling structured-output tool",
+            error: `Agent completed without calling structured-output tool${ctx}`,
             toolCalls: pipeline.toolCalls,
           };
         }
@@ -140,3 +147,4 @@ export class SubprocessAgentRunner implements AgentRunner {
     }
   }
 }
+

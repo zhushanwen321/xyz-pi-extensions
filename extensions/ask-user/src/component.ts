@@ -384,9 +384,25 @@ export class AskUserComponent implements Component {
 			this.tui.requestRender();
 			return;
 		}
-		// Printable char
-		if (data.length === 1 && data >= " ") {
-			this.editorText += data;
+		// Printable char(s) — handle both single keystrokes and multi-char paste.
+		// Terminals deliver pasted text as a single data chunk; iterating each char
+		// ensures the full paste is captured instead of silently dropping everything
+		// after the first character.
+		// 先剥离 bracketed paste 标记序列：启用该模式的终端会把粘贴内容包裹在
+		// \x1b[200~ ... \x1b[201~ 中。下面的 `c >= " "` 守卫会滤掉 ESC(\x1b)，
+		// 但序列里的可见字符（[200~/[201~）会残留混进编辑器文本，必须显式剥离。
+		const cleaned = data.replace(/\x1b\[200~|\x1b\[201~/g, "");
+		// for...of 按 code point 迭代：代理对（如 😀 U+1F600）作为一个 c（length===2）出现，
+		// 因此不能用 `c.length === 1` 守卫——那会把所有 BMP 之外的字符（emoji、部分 CJK 扩展）全过滤。
+		// 只保留 `c >= " "`（code point 比较），过滤控制字符（< 空格 U+0020）。
+		let changed = false;
+		for (const c of cleaned) {
+			if (c >= " ") {
+				this.editorText += c;
+				changed = true;
+			}
+		}
+		if (changed) {
 			this.invalidate();
 			this.tui.requestRender();
 			return;
