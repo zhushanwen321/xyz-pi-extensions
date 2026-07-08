@@ -1,7 +1,7 @@
 /**
  * replan action — append-only plan.json 同步（改进项 3 根治）。
  *
- * 场景：plan gate pass 后 plan.json 与 _cw.db 成为两个独立真相源。dev 中发现需
+ * 场景：plan gate pass 后 plan.json 与 _cw.json 成为两个独立真相源。dev 中发现需
  * 追加 wave/testCase，或 review 后合并 wave，plan.json 变了但 DB 没同步——
  * 导致 wave 残留 / testCase 缺失阻塞 gate。
  *

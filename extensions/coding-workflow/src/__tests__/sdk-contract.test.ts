@@ -130,9 +130,9 @@ describe("coding-workflow SDK contract [MANDATORY]", () => {
     registerCodingWorkflowTool(pi);
     expect(capturedExecute).toBeDefined();
 
-    // create action：构造临时 workspace，让 CwStore 能建 _cw.db。
+    // create action：构造临时 workspace，让 CwStore 能建 _cw.json。
     // execute 内部会 new CwStore(resolveCwDbPath(workspacePath))，db 落
-    // ~/.pi/agent/cw/<encoded-cwd>/_cw.db（全局，见 index.ts resolveCwDbPath）。
+    // ~/.pi/agent/cw/<encoded-cwd>/_cw.json（全局，见 index.ts resolveCwDbPath）。
     const workspacePath = `/tmp/cw-sdk-contract-${Date.now()}`;
     const fs = await import("node:fs");
     const path = await import("node:path");

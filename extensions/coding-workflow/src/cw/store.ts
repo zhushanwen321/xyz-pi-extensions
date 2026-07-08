@@ -1,21 +1,40 @@
 /**
- * CwStore — _cw.db 持久化层（D-016 node:sqlite + 关系表模式，#1 方案 A 手写 DAO）。
+ * CwStore — JSON 文件持久化层（替代原 node:sqlite 方案）。
+ *
+ * 背景：pi 的 Bun 编译 binary 未实现 node:sqlite（oven-sh/bun #20412），
+ * 导致 extension 加载失败 + pi exit(1)。改为 JSON 文件持久化，零外部依赖，
+ * Bun runtime 完整支持 node:fs。
  *
  * 职责：
- *   - 封装 DatabaseSync 连接（D-016）
- *   - 事务（BEGIN/COMMIT/ROLLBACK）——sqlite 天生原子，渐进式提交每次 action 一个事务
- *   - 4 表 DAO（topic / wave / test_case / gate_history，§8.1 schema）
- *   - schema 演进：PRAGMA user_version（#11）
+ *   - JSON 文件读写（~/.pi/agent/cw/<encoded-cwd>/_cw.json）
+ *   - 内存事务：transaction 回调在深拷贝副本上操作，正常→原子落盘，异常→丢弃（ROLLBACK）
+ *   - 跨进程文件锁：lockfile + O_EXCL 原子创建（替代 sqlite 的 WAL + busy_timeout）
+ *   - 4 集合 DAO（topic / wave / test_case / gate_history，对应原 4 表）
+ *   - schema 演进：schemaVersion 字段（替代 PRAGMA user_version）
  *
- * 应用层操作逻辑模型 CwTopic（types.ts），DAO 负责 sqlite 行 ↔ CwTopic 转换。
- * 事务边界由 service 层（action handler）控制：每个 action 一个 transaction 包裹。
+ * 事务等价性（与原 sqlite 对比）：
+ *   - 原子性：内存深拷贝操作 → temp + fsync + rename 一次性落盘（POSIX rename 原子）
+ *   - 隔离性：文件锁串行化 + 内存副本隔离（同事务内 read-after-write 天然一致）
+ *   - 持久性：fsync(temp) + fsync(dir) 保证落盘
+ *   - 崩溃一致性：任一阶段 crash，磁盘上要么旧文件完整要么新文件完整
  *
- * 可测性（AC-1.5）：DatabaseSync 可注入 mock，DAO 是纯数据访问。
+ * 接口不变式：CwStore 的全部 public 方法签名与原 sqlite 版本一致，
+ * 上层（state-machine、actions、gates）零改动。
  */
 
-import { mkdirSync } from "node:fs";
+import {
+  closeSync,
+  existsSync,
+  fsyncSync,
+  mkdirSync,
+  openSync,
+  readFileSync,
+  renameSync,
+  unlinkSync,
+  writeFileSync,
+  writeSync,
+} from "node:fs";
 import { dirname } from "node:path";
-import { DatabaseSync, type SQLInputValue, type SQLOutputValue } from "node:sqlite";
 
 import type {
   Actual,
@@ -23,7 +42,6 @@ import type {
   CwStatus,
   CwTopic,
   Evidence,
-  Expected,
   GateHistoryEntry,
   GateHistorySeed,
   GateTier,
@@ -34,220 +52,191 @@ import type {
   WaveSeed,
 } from "./types.js";
 
-// ── schema 版本（PRAGMA user_version，#11） ──────────────────
+// ── schema 版本（替代 PRAGMA user_version） ──────────────────
 
 export const SCHEMA_VERSION = 4;
 
-// ── DDL（§8.1 architecture） ────────────────────────────────
+// ── JSON 文件结构（4 集合，对应原 4 表） ──────────────────────
 
 /**
- * user_version 迁移函数链（#11）。MIGRATIONS[i] 把 user_version 从 i 升到 i+1。
- * v0→v1 由 DDL（CREATE TABLE IF NOT EXISTS）完成，无显式迁移函数。
- * v1→v2 给 topic 表加 topic_dir 列（ROOT-01 修复：CW 需要记录每个 topic 的交付物目录）。
- * v2→v3 给 test_case 表加 requires_screenshot 列（P0：plan 阶段声明每条用例是否要求截图，
- * 避免 test.ts 无差别要求所有 lite case 都传 screenshotPath）。
- * v3→v4 给 test_case 表加 depends_on + parallel_group 列（ADR-029 决策 4：测试调度字段，
- * workflow 据此构造二维数组 wave 调度）。
- * 未来 schema 演进（如 full 接入）在此追加 ALTER TABLE 函数。
+ * TopicRecord — topic 集合的元素（对应原 topic 表）。
+ * 字段直接用领域模型命名（camelCase），无需 snake_case 转换。
  */
-const MIGRATIONS: Array<(db: DatabaseSync) => void> = [
-  // v0 → v1: 无（初始 schema 由 DDL 建立）
-  // v1 → v2: topic 表加 topic_dir 列（兼容旧库，NULL 允许，handler 用 resolveTopicDir fallback）
-  // 幂等保护：PRAGMA table_info 检测列已存在则跳过（防新库 DDL 已含列时重复 ALTER）
-  (db: DatabaseSync) => {
-    const cols = db.prepare("PRAGMA table_info(topic)").all() as Array<{ name: string }>;
-    if (!cols.some((c) => c.name === "topic_dir")) {
-      db.exec("ALTER TABLE topic ADD COLUMN topic_dir TEXT");
-    }
-  },
-  // v2 → v3: test_case 表加 requires_screenshot 列（兼容旧库，NULL 视为 false）
-  // 幂等保护：检测列已存在则跳过
-  (db: DatabaseSync) => {
-    const cols = db.prepare("PRAGMA table_info(test_case)").all() as Array<{ name: string }>;
-    if (!cols.some((c) => c.name === "requires_screenshot")) {
-      db.exec("ALTER TABLE test_case ADD COLUMN requires_screenshot INTEGER DEFAULT 0");
-    }
-  },
-  // v3 → v4: test_case 表加 depends_on + parallel_group 列（ADR-029 决策 4：测试调度）
-  // depends_on: JSON array of testCase.id（执行顺序依赖，workflow 拓扑排序）
-  // parallel_group: string（资源冲突规避分组，同组可并行）
-  // 幂等保护：检测列已存在则跳过
-  (db: DatabaseSync) => {
-    const cols = db.prepare("PRAGMA table_info(test_case)").all() as Array<{ name: string }>;
-    if (!cols.some((c) => c.name === "depends_on")) {
-      db.exec("ALTER TABLE test_case ADD COLUMN depends_on TEXT");
-    }
-    if (!cols.some((c) => c.name === "parallel_group")) {
-      db.exec("ALTER TABLE test_case ADD COLUMN parallel_group TEXT");
-    }
-  },
-];
-
-/**
- * 安全解析 sqlite TEXT 列里的 JSON。非字符串/空串/解析失败 → 返回 fallback。
- * 数据由本 store 写入（数据完整性自控），仅做防御性 parse。
- */
-function parseJsonField<T>(raw: SQLOutputValue | undefined, fallback: T): T {
-  if (typeof raw !== "string" || raw.length === 0) return fallback;
-  try {
-    return JSON.parse(raw) as T;
-  } catch {
-    return fallback;
-  }
+interface TopicRecord {
+  topicId: string;
+  slug: string;
+  tier: Tier;
+  objective: string;
+  workspacePath: string;
+  topicDir: string;
+  createdAt: string;
+  status: CwStatus;
+  planFormat?: "lite" | "mid-clarify" | "mid-detail";
+  coverage?: number;
+  gatePassed: Partial<Record<CwAction, boolean>>;
+  evidence?: Evidence;
 }
 
-/** updateTestCase 允许 patch 的字段→列名白名单（防 SQL 注入：列名不来自用户输入，T2.11）。 */
-type TestCasePatchField =
-  | "status"
-  | "actual"
-  | "screenshotPath"
-  | "commitHash"
-  | "judgedAt"
-  | "failureReason";
-
-const TEST_CASE_PATCH_COLUMNS: ReadonlyArray<[TestCasePatchField, string]> = [
-  ["status", "status"],
-  ["actual", "actual"],
-  ["screenshotPath", "screenshot_path"],
-  ["commitHash", "commit_hash"],
-  ["judgedAt", "judged_at"],
-  ["failureReason", "failure_reason"],
-];
-
-/** 把 patch 字段值编码为 sqlite 可绑定的字面值（对象→JSON 串，null/undefined→null）。 */
-function encodeTestCaseValue(value: unknown): SQLInputValue {
-  if (value === undefined || value === null) return null;
-  if (typeof value === "string" || typeof value === "number") return value;
-  return JSON.stringify(value);
+/** WaveRecord — wave 集合的元素（对应原 wave 表），含 topicId 外键。 */
+interface WaveRecord {
+  topicId: string;
+  id: string;
+  dependsOn: string[];
+  parallelGroup?: string;
+  committed: string | null;
+  changes: string[];
+  issues: string[];
 }
 
-const DDL = [
-  `CREATE TABLE IF NOT EXISTS topic (
-    topic_id TEXT PRIMARY KEY,
-    slug TEXT NOT NULL,
-    tier TEXT NOT NULL,
-    objective TEXT NOT NULL,
-    workspace_path TEXT NOT NULL,
-    created_at TEXT NOT NULL,
-    status TEXT NOT NULL,
-    plan_format TEXT,
-    coverage INTEGER,
-    gate_passed TEXT,
-    evidence TEXT
-  )`,
-  `CREATE TABLE IF NOT EXISTS wave (
-    topic_id TEXT NOT NULL,
-    id TEXT NOT NULL,
-    depends_on TEXT,
-    parallel_group TEXT,
-    committed TEXT,
-    changes TEXT,
-    issues TEXT,
-    PRIMARY KEY (topic_id, id),
-    FOREIGN KEY (topic_id) REFERENCES topic(topic_id)
-  )`,
-  `CREATE TABLE IF NOT EXISTS test_case (
-    topic_id TEXT NOT NULL,
-    id TEXT NOT NULL,
-    layer TEXT NOT NULL,
-    scenario TEXT NOT NULL,
-    steps TEXT NOT NULL,
-    expected TEXT,
-    assertion TEXT,
-    executor TEXT NOT NULL,
-    status TEXT NOT NULL,
-    actual TEXT,
-    screenshot_path TEXT,
-    commit_hash TEXT,
-    judged_at TEXT,
-    failure_reason TEXT,
-    requires_screenshot INTEGER DEFAULT 0,
-    depends_on TEXT,
-    parallel_group TEXT,
-    PRIMARY KEY (topic_id, id),
-    FOREIGN KEY (topic_id) REFERENCES topic(topic_id)
-  )`,
-  `CREATE TABLE IF NOT EXISTS gate_history (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    topic_id TEXT NOT NULL,
-    phase TEXT NOT NULL,
-    action TEXT NOT NULL,
-    gate TEXT NOT NULL,
-    tier TEXT NOT NULL,
-    result TEXT NOT NULL,
-    ts TEXT NOT NULL,
-    report TEXT,
-    progressive INTEGER,
-    FOREIGN KEY (topic_id) REFERENCES topic(topic_id)
-  )`,
-];
+/** TestCaseRecord — test_case 集合的元素（对应原 test_case 表），含 topicId 外键。 */
+interface TestCaseRecord {
+  topicId: string;
+  id: string;
+  layer: TestCase["layer"];
+  scenario: string;
+  steps: string;
+  expected?: { url?: string; text?: string };
+  assertion?: string;
+  executor: string;
+  status: TestCase["status"];
+  actual?: Actual;
+  screenshotPath?: string;
+  commitHash?: string;
+  judgedAt?: string;
+  failureReason?: string;
+  requiresScreenshot?: boolean;
+  dependsOn?: string[];
+  parallelGroup?: string;
+}
+
+/** GateHistoryRecord — gate_history 集合的元素（对应原 gate_history 表），含 topicId 外键。 */
+interface GateHistoryRecord {
+  id: number;
+  topicId: string;
+  phase: CwAction;
+  action: CwAction;
+  gate: string;
+  tier: GateTier;
+  result: "pass" | "fail";
+  ts: string;
+  report?: string;
+  progressive: boolean;
+}
+
+/** JSON 文件顶层结构。 */
+interface CwJsonFile {
+  schemaVersion: number;
+  topics: TopicRecord[];
+  waves: WaveRecord[];
+  testCases: TestCaseRecord[];
+  gateHistory: GateHistoryRecord[];
+}
+
+// ── 常量 ─────────────────────────────────────────────────────
+
+/** 文件锁退避重试上限（与原 sqlite busy_timeout=5000 对齐：100ms × 50 = 5s）。 */
+const LOCK_MAX_RETRIES = 50;
+const LOCK_RETRY_DELAY_MS = 100;
+/** stale lock 超时阈值：事务不应超过 30s，超时视为持有者进程已死。 */
+const LOCK_STALE_TIMEOUT_MS = 30_000;
+/** Atomics.wait 需要的 Int32Array 字节数。 */
+const INT32_BYTES = 4;
+
+// ── CwStore ──────────────────────────────────────────────────
 
 export class CwStore {
-  private db: DatabaseSync;
+  private dbPath: string;
+  private lockPath: string;
+  /** 内存缓存（事务内持有，事务外为 null）。 */
+  private fileData: CwJsonFile | null = null;
+  private inTransaction = false;
+  private lockHeld = false;
 
   constructor(dbPath: string) {
-    // SDK 契约：node:sqlite DatabaseSync 构造打开连接（D-016 实测：ESM import + 文件持久化 OK）。
-    // 父目录自动创建：全局路径（~/.pi/agent/cw/<encoded-cwd>/）首次使用时目录可能不存在，
-    // sqlite 不会自动建父目录。项目内路径（旧版 .xyz-harness/）也兼容——mkdirSync 已存在不报错。
+    this.dbPath = dbPath;
+    this.lockPath = dbPath + ".lock";
+    // 父目录自动创建（全局路径首次使用时目录可能不存在）。
     mkdirSync(dirname(dbPath), { recursive: true });
-    this.db = new DatabaseSync(dbPath);
-    // ADR-029 决策 6：WAL 模式 + busy_timeout，支持 workflow 内多 agent 并发调 cw。
-    // WAL：并发读不阻塞写，写不阻塞读（单写串行排队）。
-    // busy_timeout=5000：撞写锁时等待 5s 重试而非立即报 SQLITE_BUSY（覆盖短事务场景）。
-    // 必须在任何业务 SQL 之前执行（init 的 DDL 也受 WAL 并发保护）。
-    this.db.exec("PRAGMA journal_mode=WAL");
-    this.db.exec("PRAGMA busy_timeout=5000");
-    this.init();
   }
 
-  private init(): void {
-    // 接线：建表 + user_version 迁移链（#11，未来 ALTER TABLE 链）。
-    // DDL 保持 v1 初始结构，topic_dir 等新增列由迁移链加（ALTER ADD COLUMN）。
-    // 这样全新库与旧库都走迁移链，路径统一，避免“DDL 建列 + 迁移加列”冲突。
-    //
-    // ADR-029 决策 6 / 审查 robustness MUST_FIX：并发首次初始化竞态防护。
-    // workflow 内 N 个 agent 并发 new CwStore，全新 DB 时 N 个连接同时跑 init/migrations。
-    //幂等 check-then-add 是 TOCTOU，并发都会跳过 ADD。解法：BEGIN IMMEDIATE 立即获写锁，
-    // 并发初始化串行化（败者等 busy_timeout 后重试，获锁后重新读 user_version 发现已迁移，跳过）。
-    this.db.exec("BEGIN IMMEDIATE");
-    try {
-      for (const stmt of DDL) {
-        this.db.exec(stmt);
-      }
-      // 重读 user_version（可能并发他者已完成迁移）
-      const current = this.readUserVersion();
-      if (current < SCHEMA_VERSION) {
-        this.runMigrations(current, SCHEMA_VERSION);
-      }
-      this.db.exec("COMMIT");
-    } catch (err) {
-      this.db.exec("ROLLBACK");
-      throw err;
+  // ── 文件 IO ────────────────────────────────────────────────
+
+  /**
+   * 从磁盘读取 JSON 文件。文件不存在或解析失败时返回空库。
+   * 触发 schemaVersion 迁移（补默认值），迁移后落盘。
+   */
+  private loadFileData(): CwJsonFile {
+    if (!existsSync(this.dbPath)) {
+      return this.emptyFile();
     }
+    let data: CwJsonFile;
+    try {
+      const raw = readFileSync(this.dbPath, "utf-8");
+      data = JSON.parse(raw) as CwJsonFile;
+    } catch {
+      // 文件损坏（崩溃写入半个文件等极端情况）→ 回退空库。
+      // 原子写入（temp+rename）正常情况下不会出现半个文件，这里是终极兜底。
+      return this.emptyFile();
+    }
+    // schemaVersion 缺失或不是数字 → 视为 v0
+    if (typeof data.schemaVersion !== "number") {
+      data.schemaVersion = 0;
+    }
+    if (!Array.isArray(data.topics)) data.topics = [];
+    if (!Array.isArray(data.waves)) data.waves = [];
+    if (!Array.isArray(data.testCases)) data.testCases = [];
+    if (!Array.isArray(data.gateHistory)) data.gateHistory = [];
+
+    if (data.schemaVersion < SCHEMA_VERSION) {
+      this.migrate(data);
+    }
+    return data;
   }
 
-  /** 读 PRAGMA user_version（缺省 0）。 */
-  private readUserVersion(): number {
-    const row = this.db.prepare("PRAGMA user_version").get();
-    const v = row?.user_version;
-    return typeof v === "number" ? v : 0;
+  /** 空库初始值。 */
+  private emptyFile(): CwJsonFile {
+    return {
+      schemaVersion: SCHEMA_VERSION,
+      topics: [],
+      waves: [],
+      testCases: [],
+      gateHistory: [],
+    };
   }
 
   /**
-   * 按 user_version 顺序跑迁移函数链（#11）。
-   * MIGRATIONS[i] 把 user_version 从 i 升到 i+1。当前 SCHEMA_VERSION=1 链为空
-   * （v1 初始 schema 由 DDL 建），结构为未来 ALTER TABLE 留扩展点。
+   * schemaVersion 迁移（替代原 PRAGMA user_version + ALTER TABLE 链）。
+   * JSON 方案字段直接存在领域对象上，旧版本缺字段时补默认值。
+   *
+   * v0→v2: topic 补 topicDir（原 sqlite v1→v2 加 topic_dir 列）
+   * v0→v3: testCase 补 requiresScreenshot（原 v2→v3）
+   * v0→v4: testCase 补 dependsOn（原 v3→v4）
    */
-  private runMigrations(from: number, to: number): void {
-    for (let v = from; v < to; v++) {
-      const migrate = MIGRATIONS[v];
-      if (migrate) migrate(this.db);
+  private migrate(data: CwJsonFile): void {
+    const from = data.schemaVersion;
+
+    if (data.schemaVersion < 2) {
+      for (const t of data.topics) {
+        if (t.topicDir === undefined) t.topicDir = "";
+      }
     }
-    this.db.exec(`PRAGMA user_version = ${SCHEMA_VERSION};`);
-    this.logMigration(from, to);
+    if (data.schemaVersion < 3) {
+      for (const tc of data.testCases) {
+        if (tc.requiresScreenshot === undefined) tc.requiresScreenshot = false;
+      }
+    }
+    if (data.schemaVersion < 4) {
+      for (const tc of data.testCases) {
+        if (tc.dependsOn === undefined) tc.dependsOn = [];
+        // parallelGroup 缺失保持 undefined（与原 sqlite NULL → undefined 一致）
+      }
+    }
+
+    data.schemaVersion = SCHEMA_VERSION;
+    this.logMigration(from, SCHEMA_VERSION);
   }
 
-  /** 落结构化迁移日志（from→to，T2.28）。走 stderr 不污染 tool stdout。 */
+  /** 落结构化迁移日志（走 stderr 不污染 tool stdout）。 */
   private logMigration(from: number, to: number): void {
     const line = JSON.stringify({
       event: "cw-migration",
@@ -258,337 +247,502 @@ export class CwStore {
     process.stderr.write(`${line}\n`);
   }
 
-  // ── 事务（#1 AC-1.2 原子性） ────────────────────────────────
+  /**
+   * 原子写入磁盘（write temp → fsync → rename → fsync dir）。
+   * 任一阶段 crash，磁盘上要么旧文件完整要么新文件完整。
+   */
+  private flushToDisk(): void {
+    const json = JSON.stringify(this.fileData, null, 2);
+    const tmpPath = this.dbPath + ".tmp";
+
+    // 1. 写临时文件
+    writeFileSync(tmpPath, json, "utf-8");
+
+    // 2. fsync 临时文件（确保数据到磁盘，不止 OS page cache）
+    const tmpFd = openSync(tmpPath, "r");
+    try {
+      fsyncSync(tmpFd);
+    } finally {
+      closeSync(tmpFd);
+    }
+
+    // 3. rename 临时文件 → 正式文件（POSIX 原子操作）
+    renameSync(tmpPath, this.dbPath);
+
+    // 4. fsync 目录（确保 rename 的 dir entry 持久化）
+    const dirFd = openSync(dirname(this.dbPath), "r");
+    try {
+      fsyncSync(dirFd);
+    } finally {
+      closeSync(dirFd);
+    }
+  }
+
+  // ── 文件锁（跨进程排他） ───────────────────────────────────
 
   /**
- * 事务包裹：fn 抛错 → ROLLBACK 重抛；正常 → COMMIT。
- * sqlite 天生原子（D-016 实测：崩溃事务不污染）。
- *
- * ADR-029 决策 6 / 审查 robustness：SQLITE_BUSY 重试。
- * busy_timeout=5000 是第一道防线（撞写锁等 5s），但如果事务内跨 git 子进程调用
- * （dev.ts 的 GitValidator），持锁可能超 5s，对端 busy_timeout 超时后抛 SQLITE_BUSY。
- * 这里加第二道防线：捕获 SQLITE_BUSY，退避后重试整个事务（最多 3 次）。
- *
- * ⚠️ 不变式：fn 内不得持锁跨进程 IO（git/网络/磁盘扫描）。GitValidator 等慢操作
- * 应在 transaction() 外预跑，结果传入事务内只做快写。当前 dev/test handler 还在
- * 事务内调 git（历史代码），本重试是兑底，后续应重构为「先 git.validate 再事务写入」。
- */
-  transaction<T>(fn: () => T): T {
-    const MAX_BUSY_RETRY = 3;
-    const BASE_BACKOFF_MS = 200;
-    const BACKOFF_BASE = 2; // 指数退避底数：200ms * 2^attempt → 200/400/800ms
-    const INT32_BYTES = 4; // Atomics.wait 需要主 1 个 int32 的共享缓冲作等待载体
-    let lastErr: unknown;
-    for (let attempt = 0; attempt < MAX_BUSY_RETRY; attempt++) {
+   * 获取排他锁。lockfile + O_EXCL 原子创建，退避重试直到获锁或超时。
+   * stale lock 检测：持有者进程已死或超过 30s → 强制 break。
+   */
+  private acquireLock(): void {
+    for (let attempt = 0; attempt < LOCK_MAX_RETRIES; attempt++) {
       try {
-        this.db.exec("BEGIN");
+        // O_EXCL ('wx'): 原子创建，已存在则抛 EEXIST
+        const fd = openSync(this.lockPath, "wx");
         try {
-          const result = fn();
-          this.db.exec("COMMIT");
-          return result;
-        } catch (err) {
-          this.db.exec("ROLLBACK");
-          throw err;
+          writeSync(fd, `${process.pid}\n${Date.now()}\n`);
+        } finally {
+          closeSync(fd);
         }
-      } catch (err) {
-        lastErr = err;
-        const msg = err instanceof Error ? err.message : String(err);
-        // 只重试 SQLITE_BUSY（WAL 下并发写撞锁）；其他错误直接抛
-        if (msg.includes("SQLITE_BUSY") || msg.includes("database is locked")) {
-          // 指数退避：200ms / 400ms / 800ms
-          const backoff = BASE_BACKOFF_MS * Math.pow(BACKOFF_BASE, attempt);
-          Atomics.wait(new Int32Array(new SharedArrayBuffer(INT32_BYTES)), 0, 0, backoff);
+        this.lockHeld = true;
+        return;
+      } catch (e) {
+        const err = e as NodeJS.ErrnoException;
+        if (err.code === "EEXIST") {
+          // 锁文件已存在：检测 stale lock
+          if (this.isStaleLock()) {
+            this.breakStaleLock();
+            continue; // 重试创建
+          }
+          // 活锁：退避等待
+          this.sleep(LOCK_RETRY_DELAY_MS);
           continue;
         }
-        throw err;
+        // 其他错误（权限/磁盘满等）
+        throw e;
       }
     }
-    throw lastErr;
+    throw new Error(
+      `CwStore: failed to acquire lock after ${LOCK_MAX_RETRIES} retries (${this.lockPath})`,
+    );
+  }
+
+  /** 释放锁。 */
+  private releaseLock(): void {
+    if (!this.lockHeld) return;
+    try {
+      unlinkSync(this.lockPath);
+    } catch {
+      // best-effort：锁文件可能已被 stale lock 机制清理
+    }
+    this.lockHeld = false;
+  }
+
+  /** 检测锁文件是否 stale（持有者进程已死 或 超过 30s）。 */
+  private isStaleLock(): boolean {
+    try {
+      const content = readFileSync(this.lockPath, "utf-8").trim().split("\n");
+      const pid = Number(content[0]);
+      const ts = Number(content[1]);
+
+      // 超时判定（保险：事务不应超过 30s）
+      if (Number.isFinite(ts) && Date.now() - ts > LOCK_STALE_TIMEOUT_MS) {
+        return true;
+      }
+
+      // 进程探活（signal 0 = 不发信号，只检测进程是否存在）
+      if (Number.isFinite(pid) && pid > 0) {
+        return !this.isProcessAlive(pid);
+      }
+      return true; // PID 无效 → stale
+    } catch {
+      return true; // 读不到也当 stale
+    }
+  }
+
+  private isProcessAlive(pid: number): boolean {
+    try {
+      process.kill(pid, 0);
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
+  private breakStaleLock(): void {
+    try {
+      unlinkSync(this.lockPath);
+    } catch {
+      // best-effort
+    }
+  }
+
+  /** 同步退避等待（Atomics.wait 在主线程也有效，阻塞当前执行流）。 */
+  private sleep(ms: number): void {
+    Atomics.wait(new Int32Array(new SharedArrayBuffer(INT32_BYTES)), 0, 0, ms);
+  }
+
+  // ── 事务 ───────────────────────────────────────────────────
+
+  /**
+   * 事务包裹：fn 在内存深拷贝副本上操作，正常→原子落盘，异常→丢弃副本（ROLLBACK）。
+   *
+   * 等价原 sqlite 事务语义：
+   *   - 原子性：structuredClone 隔离 + flushToDisk 原子写入
+   *   - read-after-write：内存副本天然一致
+   *   - 并发串行化：acquireLock 排他
+   */
+  transaction<T>(fn: () => T): T {
+    // 重入保护：已在事务内时直接复用内存副本（避免死锁——自己等自己的锁）。
+    // executeWrite 的「事务外隐式事务」路径不会走到这里（它先检查 inTransaction），
+    // 但显式 transaction() 的嵌套调用会走到。action handler 当前不嵌套，此处是防御。
+    if (this.inTransaction && this.fileData) {
+      return fn();
+    }
+
+    this.acquireLock();
+    const snapshot = this.loadFileData();
+    this.fileData = structuredClone(snapshot);
+    this.inTransaction = true;
+
+    try {
+      const result = fn();
+      this.flushToDisk();
+      return result;
+    } catch (err) {
+      // ROLLBACK：丢弃内存副本，恢复为磁盘状态
+      this.fileData = snapshot;
+      throw err;
+    } finally {
+      this.inTransaction = false;
+      this.fileData = null;
+      this.releaseLock();
+    }
+  }
+
+  /**
+   * 获取当前活跃数据。
+   * - 事务内：返回 this.fileData（内存副本，read-after-write 一致）
+   * - 事务外：读磁盘
+   */
+  private getActiveData(): CwJsonFile {
+    if (this.inTransaction && this.fileData) {
+      return this.fileData;
+    }
+    return this.loadFileData();
+  }
+
+  /**
+   * 写方法的包装器：确保在事务上下文中执行写操作。
+   *
+   * - 事务内（显式 transaction）：直接执行 fn（复用内存副本，read-after-write 一致）
+   * - 事务外：自动开启隐式单次事务（加载磁盘 → 执行 fn → 原子落盘），
+   *   兼容原 sqlite 版本的「写方法可独立调用」模式（测试种子数据等场景）。
+   *
+   * 隐式事务的性能开销：每次写都读全量 JSON + 落盘。action handler 仍应用
+   * 显式 transaction() 批量写以避免多次 IO。
+   */
+  private executeWrite(fn: () => void): void {
+    if (this.inTransaction && this.fileData) {
+      fn();
+      return;
+    }
+    this.transaction(fn);
   }
 
   // ── topic DAO ──────────────────────────────────────────────
 
   insertTopic(topic: CwTopic): void {
-    // 接线：prepare + run，参数绑定。
-    const stmt = this.db.prepare(
-      `INSERT INTO topic (topic_id, slug, tier, objective, workspace_path, topic_dir, created_at, status, plan_format, coverage, gate_passed)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-    );
-    stmt.run(
-      topic.topicId,
-      topic.slug,
-      topic.tier,
-      topic.objective,
-      topic.workspacePath,
-      topic.topicDir,
-      topic.createdAt,
-      topic.status,
-      topic.planFormat ?? null,
-      topic.coverage ?? null,
-      JSON.stringify(topic.gatePassed),
-    );
+    this.executeWrite(() => {
+      // 唯一性约束（对应原 sqlite PRIMARY KEY）：topicId 重复时抛错
+      const exists = this.fileData!.topics.some(
+        (t) => t.topicId === topic.topicId,
+      );
+      if (exists) {
+        throw new Error(
+          `UNIQUE constraint failed: topic.topicId '${topic.topicId}'`,
+        );
+      }
+      const record: TopicRecord = {
+        topicId: topic.topicId,
+        slug: topic.slug,
+        tier: topic.tier,
+        objective: topic.objective,
+        workspacePath: topic.workspacePath,
+        topicDir: topic.topicDir,
+        createdAt: topic.createdAt,
+        status: topic.status,
+        planFormat: topic.planFormat,
+        coverage: topic.coverage,
+        gatePassed: topic.gatePassed,
+        evidence: topic.evidence,
+      };
+      this.fileData!.topics.push(record);
+    });
   }
 
   loadTopic(topicId: string): CwTopic | null {
-    // 接线：4 表分查 → assembleTopic 拼装逻辑模型。
-    const topicRow = this.selectTopicRow(topicId);
-    if (!topicRow) {
-      return null;
-    }
-    const waveRows = this.selectWaveRows(topicId);
-    const testCaseRows = this.selectTestCaseRows(topicId);
-    const gateHistoryRows = this.selectGateHistoryRows(topicId);
-    return this.assembleTopic(topicRow, waveRows, testCaseRows, gateHistoryRows);
+    const data = this.getActiveData();
+    const record = data.topics.find((t) => t.topicId === topicId);
+    if (!record) return null;
+    const waves = data.waves.filter((w) => w.topicId === topicId);
+    const testCases = data.testCases.filter((tc) => tc.topicId === topicId);
+    const gateHistory = data.gateHistory
+      .filter((g) => g.topicId === topicId)
+      .sort((a, b) => a.id - b.id);
+    return this.assembleTopic(record, waves, testCases, gateHistory);
   }
 
-  private selectTopicRow(topicId: string): unknown {
-    return this.db.prepare(`SELECT * FROM topic WHERE topic_id = ?`).get(topicId);
-  }
-
-  private selectWaveRows(topicId: string): unknown[] {
-    return this.db.prepare(`SELECT * FROM wave WHERE topic_id = ?`).all(topicId);
-  }
-
-  private selectTestCaseRows(topicId: string): unknown[] {
-    return this.db.prepare(`SELECT * FROM test_case WHERE topic_id = ?`).all(topicId);
-  }
-
-  private selectGateHistoryRows(topicId: string): unknown[] {
-    return this.db.prepare(`SELECT * FROM gate_history WHERE topic_id = ? ORDER BY id ASC`).all(topicId);
-  }
-
-  /** 行 → CwTopic 拼装（4 表 select 结果组装逻辑模型）。 */
+  /** Record → CwTopic 拼装（对应原 assembleTopic）。 */
   private assembleTopic(
-    topicRow: unknown,
-    waveRows: unknown[],
-    testCaseRows: unknown[],
-    gateHistoryRows: unknown[],
+    topic: TopicRecord,
+    waves: WaveRecord[],
+    testCases: TestCaseRecord[],
+    gateHistory: GateHistoryRecord[],
   ): CwTopic {
-    const tr = topicRow as Record<string, SQLOutputValue>;
-    const waves = (waveRows as Record<string, SQLOutputValue>[]).map((r) => this.mapWaveRow(r));
-    const testCases = (testCaseRows as Record<string, SQLOutputValue>[]).map((r) =>
-      this.mapTestCaseRow(r),
-    );
-    const gateHistory = (gateHistoryRows as Record<string, SQLOutputValue>[]).map((r) =>
-      this.mapGateHistoryRow(r),
-    );
     return {
       schemaVersion: SCHEMA_VERSION,
-      topicId: String(tr.topic_id),
-      slug: String(tr.slug),
-      tier: String(tr.tier) as Tier,
-      objective: String(tr.objective),
-      workspacePath: String(tr.workspace_path),
-      topicDir:
-        tr.topic_dir === null || tr.topic_dir === undefined
-          ? ""
-          : String(tr.topic_dir),
-      createdAt: String(tr.created_at),
-      status: String(tr.status) as CwStatus,
-      planFormat:
-        tr.plan_format === null ? undefined : (String(tr.plan_format) as CwTopic["planFormat"]),
-      waves,
-      testCases,
-      gateHistory,
-      gatePassed: parseJsonField<Partial<Record<CwAction, boolean>>>(tr.gate_passed, {}),
-      coverage: typeof tr.coverage === "number" ? tr.coverage : undefined,
-      evidence: parseJsonField<Evidence | undefined>(tr.evidence, undefined),
+      topicId: topic.topicId,
+      slug: topic.slug,
+      tier: topic.tier,
+      objective: topic.objective,
+      workspacePath: topic.workspacePath,
+      topicDir: topic.topicDir ?? "",
+      createdAt: topic.createdAt,
+      status: topic.status,
+      planFormat: topic.planFormat,
+      waves: waves.map((w) => this.mapWaveRecord(w)),
+      testCases: testCases.map((tc) => this.mapTestCaseRecord(tc)),
+      gateHistory: gateHistory.map((g) => this.mapGateHistoryRecord(g)),
+      gatePassed: topic.gatePassed ?? {},
+      evidence: topic.evidence,
+      coverage: topic.coverage,
     };
   }
 
-  private mapWaveRow(r: Record<string, SQLOutputValue>): Wave {
+  private mapWaveRecord(r: WaveRecord): Wave {
     return {
-      id: String(r.id),
-      dependsOn: parseJsonField<string[]>(r.depends_on, []),
-      parallelGroup: r.parallel_group === null ? undefined : String(r.parallel_group),
-      committed: r.committed === null ? null : String(r.committed),
-      changes: parseJsonField<string[]>(r.changes, []),
-      issues: parseJsonField<string[]>(r.issues, []),
+      id: r.id,
+      dependsOn: r.dependsOn ?? [],
+      parallelGroup: r.parallelGroup,
+      committed: r.committed ?? null,
+      changes: r.changes ?? [],
+      issues: r.issues ?? [],
     };
   }
 
-  private mapTestCaseRow(r: Record<string, SQLOutputValue>): TestCase {
+  private mapTestCaseRecord(r: TestCaseRecord): TestCase {
     return {
-      id: String(r.id),
-      layer: String(r.layer) as TestCase["layer"],
-      scenario: String(r.scenario),
-      steps: String(r.steps),
-      expected: parseJsonField<Expected | undefined>(r.expected, undefined),
-      assertion: r.assertion === null ? undefined : String(r.assertion),
-      executor: String(r.executor),
-      status: String(r.status) as TestCase["status"],
-      actual: parseJsonField<Actual | undefined>(r.actual, undefined),
-      screenshotPath: r.screenshot_path === null ? undefined : String(r.screenshot_path),
-      commitHash: r.commit_hash === null ? undefined : String(r.commit_hash),
-      judgedAt: r.judged_at === null ? undefined : String(r.judged_at),
-      failureReason: r.failure_reason === null ? undefined : String(r.failure_reason),
-      // v3 列：旧库迁移后 NULL/0 → false；新库写入时布尔转 0/1
-      requiresScreenshot: r.requires_screenshot === 1,
-      // v4 列（ADR-029 决策 4）：旧库迁移后 NULL → []/undefined；新库写入 JSON/字符串
-      dependsOn: parseJsonField<string[]>(r.depends_on, []),
-      parallelGroup: r.parallel_group === null ? undefined : String(r.parallel_group),
+      id: r.id,
+      layer: r.layer,
+      scenario: r.scenario,
+      steps: r.steps,
+      expected: r.expected,
+      assertion: r.assertion,
+      executor: r.executor,
+      status: r.status,
+      actual: r.actual,
+      screenshotPath: r.screenshotPath,
+      commitHash: r.commitHash,
+      judgedAt: r.judgedAt,
+      failureReason: r.failureReason,
+      requiresScreenshot: r.requiresScreenshot === true,
+      dependsOn: r.dependsOn ?? [],
+      parallelGroup: r.parallelGroup,
     };
   }
 
-  private mapGateHistoryRow(r: Record<string, SQLOutputValue>): GateHistoryEntry {
+  private mapGateHistoryRecord(r: GateHistoryRecord): GateHistoryEntry {
     return {
-      id: typeof r.id === "number" ? r.id : Number(r.id),
-      phase: String(r.phase) as CwAction,
-      action: String(r.action) as CwAction,
-      gate: String(r.gate),
-      tier: String(r.tier) as GateTier,
-      result: String(r.result) as "pass" | "fail",
-      ts: String(r.ts),
-      report: r.report === null ? undefined : String(r.report),
-      progressive: r.progressive === 1,
+      id: r.id,
+      phase: r.phase,
+      action: r.action,
+      gate: r.gate,
+      tier: r.tier,
+      result: r.result,
+      ts: r.ts,
+      report: r.report,
+      progressive: r.progressive,
     };
   }
 
   updateStatus(topicId: string, status: CwStatus): void {
-    // 接线：prepare + run。
-    this.db.prepare(`UPDATE topic SET status = ? WHERE topic_id = ?`).run(status, topicId);
+    this.executeWrite(() => {
+      const topic = this.fileData!.topics.find((t) => t.topicId === topicId);
+      if (topic) topic.status = status;
+    });
   }
 
   updateGatePassed(topicId: string, phase: CwAction, passed: boolean): void {
-    // 数据流：gate_passed 是 topic 表 JSON 列。读现值 → 改一 phase → JSON.stringify 写回。
-    const row = this.db.prepare(`SELECT gate_passed FROM topic WHERE topic_id = ?`).get(topicId);
-    const current = parseJsonField<Partial<Record<CwAction, boolean>>>(row?.gate_passed, {});
-    current[phase] = passed;
-    this.db.prepare(`UPDATE topic SET gate_passed = ? WHERE topic_id = ?`).run(
-      JSON.stringify(current),
-      topicId,
-    );
+    this.executeWrite(() => {
+      const topic = this.fileData!.topics.find((t) => t.topicId === topicId);
+      if (topic) {
+        topic.gatePassed = { ...topic.gatePassed, [phase]: passed };
+      }
+    });
   }
 
   setEvidence(topicId: string, evidence: Evidence): void {
-    // 接线：closeout 终态填充——evidence 整体序列化到 topic.evidence 列（closedAt/coverage/gateHistory 快照）。
-    // coverage 同时写独立列，便于按覆盖率直查（evidence JSON 是完整快照，coverage 列是冗余索引）。
-    this.db
-      .prepare(`UPDATE topic SET coverage = ?, evidence = ? WHERE topic_id = ?`)
-      .run(evidence.coverage ?? null, JSON.stringify(evidence), topicId);
+    this.executeWrite(() => {
+      const topic = this.fileData!.topics.find((t) => t.topicId === topicId);
+      if (topic) {
+        topic.coverage = evidence.coverage;
+        topic.evidence = evidence;
+      }
+    });
   }
 
   // ── wave DAO ───────────────────────────────────────────────
 
   insertWaves(topicId: string, waves: WaveSeed[]): void {
-    // 接线：loop + prepare + run（D-005 渐进式，plan/detail 解析后批量写）。
-    const stmt = this.db.prepare(
-      `INSERT INTO wave (topic_id, id, depends_on, parallel_group, committed, changes, issues)
-       VALUES (?, ?, ?, ?, NULL, ?, ?)`,
-    );
-    for (const w of waves) {
-      stmt.run(
-        topicId,
-        w.id,
-        JSON.stringify(w.dependsOn),
-        w.parallelGroup ?? null,
-        JSON.stringify(w.changes),
-        JSON.stringify(w.issues),
-      );
-    }
+    this.executeWrite(() => {
+      for (const w of waves) {
+        const record: WaveRecord = {
+          topicId,
+          id: w.id,
+          dependsOn: w.dependsOn,
+          parallelGroup: w.parallelGroup,
+          committed: null,
+          changes: w.changes,
+          issues: w.issues,
+        };
+        this.fileData!.waves.push(record);
+      }
+    });
   }
 
   setWaveCommitted(topicId: string, waveId: string, commitHash: string): void {
-    // 接线：dev action 逐条，GitValidator 通过后写 committed。
-    this.db.prepare(`UPDATE wave SET committed = ? WHERE topic_id = ? AND id = ?`).run(
-      commitHash,
-      topicId,
-      waveId,
-    );
+    this.executeWrite(() => {
+      const wave = this.fileData!.waves.find(
+        (w) => w.topicId === topicId && w.id === waveId,
+      );
+      if (wave) wave.committed = commitHash;
+    });
   }
 
   // ── test_case DAO ──────────────────────────────────────────
 
   insertTestCases(topicId: string, cases: TestCaseSeed[]): void {
-    // 接线：loop + prepare + run。
-    const stmt = this.db.prepare(
-      `INSERT INTO test_case (topic_id, id, layer, scenario, steps, expected, assertion, executor, status, requires_screenshot, depends_on, parallel_group)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?, ?)`,
-    );
-    for (const c of cases) {
-      stmt.run(
-        topicId,
-        c.id,
-        c.layer,
-        c.scenario,
-        c.steps,
-        c.expected ? JSON.stringify(c.expected) : null,
-        c.assertion ?? null,
-        c.executor,
-        c.requiresScreenshot ? 1 : 0,
-        // ADR-029 决策 4：测试调度字段。dependsOn 存 JSON 串，parallelGroup 存字符串
-        c.dependsOn ? JSON.stringify(c.dependsOn) : null,
-        c.parallelGroup ?? null,
-      );
-    }
-  }
-
-  updateTestCase(topicId: string, caseId: string, patch: Partial<TestCase>): void {
-    // 动态拼 SET 子句：按 patch 键查列名白名单，全参数绑定（防 SQL 注入，T2.11）。
-    const sets: string[] = [];
-    const binds: SQLInputValue[] = [];
-    for (const [field, col] of TEST_CASE_PATCH_COLUMNS) {
-      if (field in patch) {
-        sets.push(`${col} = ?`);
-        binds.push(encodeTestCaseValue(patch[field]));
+    this.executeWrite(() => {
+      for (const c of cases) {
+        const record: TestCaseRecord = {
+          topicId,
+          id: c.id,
+          layer: c.layer,
+          scenario: c.scenario,
+          steps: c.steps,
+          expected: c.expected,
+          assertion: c.assertion,
+          executor: c.executor,
+          status: "pending", // insertTestCases 默认 pending（与原 sqlite 一致）
+          requiresScreenshot: c.requiresScreenshot === true,
+          dependsOn: c.dependsOn,
+          parallelGroup: c.parallelGroup,
+        };
+        this.fileData!.testCases.push(record);
       }
-    }
-    if (sets.length === 0) return; // 无可更新字段，no-op
-    binds.push(topicId, caseId);
-    this.db
-      .prepare(`UPDATE test_case SET ${sets.join(", ")} WHERE topic_id = ? AND id = ?`)
-      .run(...binds);
+    });
   }
 
-  // ── replan DAO（append-only replan，改进项 3）──────────────
-  // replaceUncommittedWaves：保留已 committed 的 wave（committed IS NOT NULL），
-  // 删除未 committed 的残留 + INSERT 新 plan.json 的未 committed wave。
-  // 用于 replan handler 事务内同步 plan.json 到 DB。
+  /** updateTestCase 允许 patch 的字段白名单（对应原 TEST_CASE_PATCH_COLUMNS）。 */
+  updateTestCase(topicId: string, caseId: string, patch: Partial<TestCase>): void {
+    this.executeWrite(() => {
+      const tc = this.fileData!.testCases.find(
+        (c) => c.topicId === topicId && c.id === caseId,
+      );
+      if (!tc) return;
+
+      if ("status" in patch) tc.status = patch.status as TestCase["status"];
+      if ("actual" in patch) tc.actual = patch.actual;
+      if ("screenshotPath" in patch) tc.screenshotPath = patch.screenshotPath;
+      if ("commitHash" in patch) tc.commitHash = patch.commitHash;
+      if ("judgedAt" in patch) tc.judgedAt = patch.judgedAt;
+      if ("failureReason" in patch) tc.failureReason = patch.failureReason;
+    });
+  }
+
+  // ── replan DAO（append-only replan） ───────────────────────
+
+  /** 保留已 committed 的 wave，删除未 committed 的 + INSERT 新 plan.json 的未 committed wave。 */
   replaceUncommittedWaves(topicId: string, waves: WaveSeed[]): void {
-    this.db
-      .prepare(`DELETE FROM wave WHERE topic_id = ? AND committed IS NULL`)
-      .run(topicId);
-    this.insertWaves(topicId, waves);
+    this.executeWrite(() => {
+      const data = this.fileData!;
+      // 删除未 committed
+      data.waves = data.waves.filter(
+        (w) => w.topicId !== topicId || w.committed !== null,
+      );
+      // 插入新的（内层 executeWrite 检测到 inTransaction 直接执行）
+      for (const w of waves) {
+        data.waves.push({
+          topicId,
+          id: w.id,
+          dependsOn: w.dependsOn,
+          parallelGroup: w.parallelGroup,
+          committed: null,
+          changes: w.changes,
+          issues: w.issues,
+        });
+      }
+    });
   }
 
-  // replaceUnpassedTestCases：保留已 passed 的 testCase（status='passed'），
-  // 删除非 passed 的 + INSERT 新 plan.json 的非 passed case。
+  /** 保留已 passed 的 testCase，删除非 passed 的 + INSERT 新 plan.json 的非 passed case。 */
   replaceUnpassedTestCases(topicId: string, cases: TestCaseSeed[]): void {
-    this.db
-      .prepare(`DELETE FROM test_case WHERE topic_id = ? AND status != 'passed'`)
-      .run(topicId);
-    this.insertTestCases(topicId, cases);
+    this.executeWrite(() => {
+      const data = this.fileData!;
+      // 删除非 passed
+      data.testCases = data.testCases.filter(
+        (tc) => tc.topicId !== topicId || tc.status === "passed",
+      );
+      // 插入新的
+      for (const c of cases) {
+        data.testCases.push({
+          topicId,
+          id: c.id,
+          layer: c.layer,
+          scenario: c.scenario,
+          steps: c.steps,
+          expected: c.expected,
+          assertion: c.assertion,
+          executor: c.executor,
+          status: "pending",
+          requiresScreenshot: c.requiresScreenshot === true,
+          dependsOn: c.dependsOn,
+          parallelGroup: c.parallelGroup,
+        });
+      }
+    });
   }
 
   // ── gate_history DAO ───────────────────────────────────────
 
   appendGateHistory(topicId: string, entry: GateHistorySeed): void {
-    // 接线：每次 action finally 追加（§5.3；#4 AC-4.3）。
-    this.db.prepare(
-      `INSERT INTO gate_history (topic_id, phase, action, gate, tier, result, ts, report, progressive)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-    ).run(
-      topicId,
-      entry.phase,
-      entry.action,
-      entry.gate,
-      entry.tier,
-      entry.result,
-      new Date().toISOString(),
-      entry.report ?? null,
-      entry.progressive ? 1 : 0,
-    );
+    this.executeWrite(() => {
+      const data = this.fileData!;
+      // id 自增（对应原 sqlite AUTOINCREMENT）
+      const maxId = data.gateHistory.reduce((max, g) => Math.max(max, g.id), 0);
+      const record: GateHistoryRecord = {
+        id: maxId + 1,
+        topicId,
+        phase: entry.phase,
+        action: entry.action,
+        gate: entry.gate,
+        tier: entry.tier,
+        result: entry.result,
+        ts: new Date().toISOString(),
+        report: entry.report,
+        progressive: entry.progressive,
+      };
+      data.gateHistory.push(record);
+    });
   }
 
   loadGateHistory(topicId: string): GateHistoryEntry[] {
-    // 接线：第三重 guard 重算用，按 id 升序读全量，行→GateHistoryEntry 拼装。
-    return (this.selectGateHistoryRows(topicId) as Record<string, SQLOutputValue>[]).map((r) =>
-      this.mapGateHistoryRow(r),
-    );
+    const data = this.getActiveData();
+    return data.gateHistory
+      .filter((g) => g.topicId === topicId)
+      .sort((a, b) => a.id - b.id)
+      .map((g) => this.mapGateHistoryRecord(g));
   }
 
+  // ── lifecycle ──────────────────────────────────────────────
+
   close(): void {
-    // 接线：关 DatabaseSync 连接。
-    this.db.close();
+    // JSON 方案无持久连接（不像 sqlite 的 DatabaseSync 句柄）。
+    // 留空保持接口兼容——上层 index.ts 的 finally { deps.store.close() } 不需改。
+    // 若有未释放的锁（异常路径），兜底释放。
+    if (this.lockHeld) {
+      this.releaseLock();
+    }
   }
 }

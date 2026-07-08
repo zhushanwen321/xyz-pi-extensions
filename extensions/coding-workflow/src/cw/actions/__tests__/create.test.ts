@@ -17,7 +17,7 @@ import {
 } from "./_helpers.js";
 
 describe("handleCreate", () => {
-  it("T1.1 — tier=lite 建 topic：nextAction=plan/lite-plan，_cw.db tier=lite", () => {
+  it("T1.1 — tier=lite 建 topic：nextAction=plan/lite-plan，_cw.json tier=lite", () => {
     const ws = makeTmpWorkspace();
     const { deps, store } = makeDeps(ws);
 

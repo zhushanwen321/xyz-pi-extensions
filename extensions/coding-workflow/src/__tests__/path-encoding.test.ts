@@ -1,7 +1,7 @@
 // src/__tests__/path-encoding.test.ts
 //
 // 锁定 encodeCwd 契约：与 subagents（ADR-027）+ Pi SDK getDefaultSessionDir 三方同源。
-// 漂移会导致同一项目落到不同目录（_cw.db 找不到）。
+// 漂移会导致同一项目落到不同目录（_cw.json 找不到）。
 //
 // 用例与 subagents 的 path-encoding.test.ts 1:1 对齐——两处编码必须完全一致，
 // 这样 CW 的 `~/.pi/agent/cw/<encoded-cwd>/` 与 subagents 的 `~/.pi/agent/subagents/<encoded-cwd>/`

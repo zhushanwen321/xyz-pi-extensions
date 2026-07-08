@@ -10,7 +10,6 @@
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { DatabaseSync } from "node:sqlite";
 
 import { afterEach, vi } from "vitest";
 
@@ -34,7 +33,7 @@ afterEach(() => {
   }
 });
 
-/** 建一个临时目录（含 _cw.db + changes/ 子目录），返回绝对路径。 */
+/** 建一个临时目录（含 _cw.json + changes/ 子目录），返回绝对路径。 */
 export function makeTmpWorkspace(): string {
   const dir = mkdtempSync(join(tmpdir(), "cw-action-test-"));
   tmpDirsToClean.push(dir);
@@ -46,7 +45,7 @@ export function makeTmpWorkspace(): string {
 
 /** 用真实 CwStore + 真实 GateRunner/GitValidator 构造 ActionDeps（mock 由测试 spyOn 控制）。 */
 export function makeDeps(workspacePath: string): { deps: ActionDeps; store: CwStore } {
-  const store = new CwStore(join(workspacePath, "_cw.db"));
+  const store = new CwStore(join(workspacePath, "_cw.json"));
   const deps: ActionDeps = {
     store,
     git: new GitValidator(workspacePath),
@@ -56,7 +55,7 @@ export function makeDeps(workspacePath: string): { deps: ActionDeps; store: CwSt
   return { deps, store };
 }
 
-/** 关掉 store 连接（测试结束前调用，释放 sqlite 句柄）。 */
+/** 关掉 store（测试结束前调用，兜底释放可能残留的文件锁）。 */
 export function closeStore(store: CwStore): void {
   store.close();
 }
@@ -222,6 +221,3 @@ export function seedDevelopedTopic(
   });
   return opts.topicId;
 }
-
-/** 占位引用，防 ts 未使用 import 警告（DatabaseSync 在种子辅助里可能被未来扩展使用）。 */
-void DatabaseSync;

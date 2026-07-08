@@ -1,5 +1,5 @@
 /**
- * create action — 入口 action（UC-1）。锁 tier，建 topic 目录与 _cw.db。
+ * create action — 入口 action（UC-1）。锁 tier，建 topic 目录与 _cw.json。
  *
  * 关联：requirements UC-1（AC-1.1~1.4）；issues #1（CwStore 落地）。
  */
@@ -55,7 +55,7 @@ export function handleCreate(params: CreateParams, deps: ActionDeps): ActionResu
 
 function buildTopicId(slug: string): string {
   // 数据流：cw- + 日期前缀 + slug（requirements §2 目录约定）。
-  // topicId 用作 _cw.db 主键，与 topicDir（= .xyz-harness/{slug}/）解耦：
+  // topicId 用作 _cw.json 主键，与 topicDir（= .xyz-harness/{slug}/）解耦：
   // topicId 含 cw-{date}- 前缀便于全局识别；topicDir 用纯 slug 作目录名（agent 友好）。
   const ISO_DATE_PREFIX_LEN = 10; // YYYY-MM-DD
   const date = new Date().toISOString().slice(0, ISO_DATE_PREFIX_LEN);

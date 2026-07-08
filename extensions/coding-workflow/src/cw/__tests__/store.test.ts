@@ -1,21 +1,22 @@
 /**
- * store.ts 单测 — CwStore 真实 sqlite 层（real tier）。
+ * store.ts 单测 — CwStore JSON 文件持久化层。
  *
  * 覆盖 NFR 代码测试项（归本 Wave）：
- *   T2.11  SQL 参数化拒绝拼接（#1 安全 / AC-1.5）
- *   T2.12  多表写事务边界——中途抛错 ROLLBACK 无半写（#1 数据 / AC-1.2）
+ *   T2.12  事务边界——中途抛错 ROLLBACK 无半写（#1 数据 / AC-1.2）
  *   T2.13  事务 COMMIT 后 gateHistory 落库且绑定 topicId（#1 可观测）
- *   T2.27  user_version 迁移：旧 db（v0）打开新 CwStore 自动迁移 + 数据保留（#11 数据）
+ *   T2.27  schemaVersion 迁移：旧 JSON 打开新 CwStore 自动迁移 + 数据保留（#11 数据）
  *   T2.28  迁移日志含 from/to version（#11 可观测）
  *
  * 另含 assembleTopic / updateGatePassed / updateTestCase 三个叶子的直接验证
  * （round-trip + 字段 patch）——TDD 要求每个实现的叶子有对应测试。
+ *
+ * 原 sqlite 专属断言（SQL 注入 T2.11 / PRAGMA user_version / WAL busy_timeout）
+ * 已随 JSON 化移除或替换——JSON 不存在 SQL 注入，并发用文件锁替代 WAL。
  */
 
-import { mkdtempSync, rmSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
-import { DatabaseSync } from "node:sqlite";
+import { dirname, join } from "node:path";
 
 import { afterEach, describe, expect, it, vi } from "vitest";
 
@@ -24,10 +25,10 @@ import type { CwTopic, GateHistorySeed, TestCaseSeed, WaveSeed } from "../types.
 
 // ── helpers ──────────────────────────────────────────────────
 
-/** 每次返回一个新的临时 .db 文件路径（独立目录，互不污染）。 */
-function tmpDbPath(): string {
+/** 每次返回一个新的临时 .json 文件路径（独立目录，互不污染）。 */
+function tmpJsonPath(): string {
   const dir = mkdtempSync(join(tmpdir(), "cw-store-test-"));
-  return join(dir, "test.db");
+  return join(dir, "test.json");
 }
 
 /** 构造最小可写 CwTopic（insertTopic 入参形状）。 */
@@ -85,34 +86,38 @@ afterEach(() => {
     try {
       rmSync(d!, { recursive: true, force: true });
     } catch (e) {
-      void e; // best-effort 清理：tmp 目录由 OS 兜底，单次清理失败不阻断测试
+      void e; // best-effort 清理：tmp 目录由 OS 兜底
     }
   }
 });
 
 /** 记录临时目录以便 afterEach 清理。 */
-function trackTmpDir(path: string): string {
-  const dir = join(path, "..");
-  tmpDirsToClean.push(dir);
-  return path;
+function trackTmpDir(filePath: string): string {
+  tmpDirsToClean.push(dirname(filePath));
+  return filePath;
 }
 
 // ── assembleTopic round-trip（叶子直接验证） ─────────────────
 
-describe("CwStore.loadTopic — 行→CwTopic 拼装（assembleTopic 叶子）", () => {
+describe("CwStore.loadTopic — JSON round-trip（assembleTopic 叶子）", () => {
   it("insert 完整 topic + wave + testCase + gateHistory → loadTopic 等价回读", () => {
-    const store = new CwStore(":memory:");
+    const dbPath = trackTmpDir(tmpJsonPath());
+    const store = new CwStore(dbPath);
     const seed = makeTopic({ gatePassed: { plan: true } });
-    store.insertTopic(seed);
-    store.insertWaves(seed.topicId, [sampleWave]);
-    store.insertTestCases(seed.topicId, [sampleCase]);
-    store.appendGateHistory(seed.topicId, sampleGate);
+
+    // 所有写操作必须在事务内
+    store.transaction(() => {
+      store.insertTopic(seed);
+      store.insertWaves(seed.topicId, [sampleWave]);
+      store.insertTestCases(seed.topicId, [sampleCase]);
+      store.appendGateHistory(seed.topicId, sampleGate);
+    });
 
     const loaded = store.loadTopic(seed.topicId);
     expect(loaded).not.toBeNull();
     if (!loaded) return;
 
-    // topic 列
+    // topic 字段
     expect(loaded.topicId).toBe("t-1");
     expect(loaded.slug).toBe("demo");
     expect(loaded.tier).toBe("lite");
@@ -121,10 +126,10 @@ describe("CwStore.loadTopic — 行→CwTopic 拼装（assembleTopic 叶子）",
     expect(loaded.status).toBe("created");
     expect(loaded.planFormat).toBe("lite");
     expect(loaded.schemaVersion).toBe(SCHEMA_VERSION);
-    // gate_passed JSON 列读改写
+    // gate_passed 读改写
     expect(loaded.gatePassed).toEqual({ plan: true });
 
-    // wave：JSON 列 parse + committed null
+    // wave：committed null
     expect(loaded.waves).toHaveLength(1);
     const w = loaded.waves[0]!;
     expect(w.id).toBe("w1");
@@ -134,7 +139,7 @@ describe("CwStore.loadTopic — 行→CwTopic 拼装（assembleTopic 叶子）",
     expect(w.changes).toEqual(["src/a.ts"]);
     expect(w.issues).toEqual(["#1"]);
 
-    // testCase：expected JSON + status pending（insertTestCases 默认）
+    // testCase：expected + status pending（insertTestCases 默认）
     expect(loaded.testCases).toHaveLength(1);
     const c = loaded.testCases[0]!;
     expect(c.id).toBe("E1");
@@ -144,7 +149,7 @@ describe("CwStore.loadTopic — 行→CwTopic 拼装（assembleTopic 叶子）",
     expect(c.executor).toBe("vitest");
     expect(c.status).toBe("pending");
 
-    // gateHistory：progressive 0→false，ts/id 由 DB 生成
+    // gateHistory：progressive false，ts/id 自动生成
     expect(loaded.gateHistory).toHaveLength(1);
     const g = loaded.gateHistory[0]!;
     expect(g.phase).toBe("plan");
@@ -160,31 +165,35 @@ describe("CwStore.loadTopic — 行→CwTopic 拼装（assembleTopic 叶子）",
   });
 
   it("topic 不存在 → loadTopic 返回 null", () => {
-    const store = new CwStore(":memory:");
+    const store = new CwStore(trackTmpDir(tmpJsonPath()));
     expect(store.loadTopic("nonexistent")).toBeNull();
     store.close();
   });
 
-  it("gate_passed 为空对象/无列值时回退为 {}", () => {
-    const store = new CwStore(":memory:");
+  it("gate_passed 为空对象时回退为 {}", () => {
+    const dbPath = trackTmpDir(tmpJsonPath());
+    const store = new CwStore(dbPath);
     const seed = makeTopic({ gatePassed: {} });
-    store.insertTopic(seed);
+    store.transaction(() => store.insertTopic(seed));
     const loaded = store.loadTopic(seed.topicId);
     expect(loaded?.gatePassed).toEqual({});
     store.close();
   });
 });
 
-// ── updateGatePassed（JSON 读改写叶子） ──────────────────────
+// ── updateGatePassed（读改写叶子） ───────────────────────────
 
-describe("CwStore.updateGatePassed — JSON 读改写", () => {
+describe("CwStore.updateGatePassed — 读改写", () => {
   it("在现有 gatePassed 上追加一个 phase，不影响其他 phase", () => {
-    const store = new CwStore(":memory:");
+    const dbPath = trackTmpDir(tmpJsonPath());
+    const store = new CwStore(dbPath);
     const seed = makeTopic({ gatePassed: { plan: true } });
-    store.insertTopic(seed);
+    store.transaction(() => store.insertTopic(seed));
 
-    store.updateGatePassed(seed.topicId, "dev", true);
-    store.updateGatePassed(seed.topicId, "plan", false);
+    store.transaction(() => {
+      store.updateGatePassed(seed.topicId, "dev", true);
+      store.updateGatePassed(seed.topicId, "plan", false);
+    });
 
     const loaded = store.loadTopic(seed.topicId);
     expect(loaded?.gatePassed).toEqual({ plan: false, dev: true });
@@ -192,21 +201,26 @@ describe("CwStore.updateGatePassed — JSON 读改写", () => {
   });
 });
 
-// ── updateTestCase（动态 SET + 列名白名单叶子） ──────────────
+// ── updateTestCase（patch 白名单叶子） ───────────────────────
 
-describe("CwStore.updateTestCase — 动态 SET", () => {
+describe("CwStore.updateTestCase — patch 白名单", () => {
   it("patch status + actual + failureReason + screenshotPath + commitHash + judgedAt 全字段", () => {
-    const store = new CwStore(":memory:");
-    store.insertTopic(makeTopic());
-    store.insertTestCases("t-1", [sampleCase]);
+    const dbPath = trackTmpDir(tmpJsonPath());
+    const store = new CwStore(dbPath);
+    store.transaction(() => {
+      store.insertTopic(makeTopic());
+      store.insertTestCases("t-1", [sampleCase]);
+    });
 
-    store.updateTestCase("t-1", "E1", {
-      status: "failed",
-      actual: { url: "/login", text: "错误" },
-      failureReason: "url mismatch",
-      screenshotPath: "/tmp/shot.png",
-      commitHash: "abc123",
-      judgedAt: "2026-07-04T01:00:00.000Z",
+    store.transaction(() => {
+      store.updateTestCase("t-1", "E1", {
+        status: "failed",
+        actual: { url: "/login", text: "错误" },
+        failureReason: "url mismatch",
+        screenshotPath: "/tmp/shot.png",
+        commitHash: "abc123",
+        judgedAt: "2026-07-04T01:00:00.000Z",
+      });
     });
 
     const loaded = store.loadTopic("t-1");
@@ -221,43 +235,60 @@ describe("CwStore.updateTestCase — 动态 SET", () => {
   });
 
   it("patch 空（无白名单字段）→ 不抛、不改 status", () => {
-    const store = new CwStore(":memory:");
-    store.insertTopic(makeTopic());
-    store.insertTestCases("t-1", [sampleCase]);
+    const dbPath = trackTmpDir(tmpJsonPath());
+    const store = new CwStore(dbPath);
+    store.transaction(() => {
+      store.insertTopic(makeTopic());
+      store.insertTestCases("t-1", [sampleCase]);
+    });
 
-    expect(() => store.updateTestCase("t-1", "E1", {})).not.toThrow();
+    expect(() =>
+      store.transaction(() => store.updateTestCase("t-1", "E1", {})),
+    ).not.toThrow();
     const loaded = store.loadTopic("t-1");
     expect(loaded?.testCases[0]?.status).toBe("pending");
     store.close();
   });
 });
 
-// ── T2.11 SQL 参数化（#1 安全 / AC-1.5） ─────────────────────
+// ── topicId 当普通字符串存储（替代原 T2.11 SQL 注入测试） ────
 
-describe("T2.11 — SQL 参数化拒绝拼接（注入字符串当字面值）", () => {
-  it("含 SQL 注入语法的 topicId 作为字面值存储，表不被破坏", () => {
-    const store = new CwStore(":memory:");
-    const malicious = "'; DROP TABLE topic; --";
-    // 用恶意 topicId insert → 应被参数化当普通字符串存
-    store.insertTopic(makeTopic({ topicId: malicious }));
+describe("topicId 特殊字符当普通字符串存储（JSON 无注入风险）", () => {
+  it("含特殊字符的 topicId 作为字面值存储，不被解释执行", () => {
+    const dbPath = trackTmpDir(tmpJsonPath());
+    const store = new CwStore(dbPath);
+    const special = "'; DROP TABLE topic; --";
+    store.transaction(() =>
+      store.insertTopic(makeTopic({ topicId: special })),
+    );
 
-    // 同样恶意串读回 → 命中刚插入的行（证明是字面匹配，不是 SQL 拼接）
-    const loaded = store.loadTopic(malicious);
-    expect(loaded?.topicId).toBe(malicious);
+    // 同样串读回 → 命中刚插入的记录
+    const loaded = store.loadTopic(special);
+    expect(loaded?.topicId).toBe(special);
 
-    // topic 表仍在（未被 DROP）——再插一条正常 id 验证可写可读
-    store.insertTopic(makeTopic({ topicId: "safe-id", objective: "still here" }));
+    // 再插一条正常 id 验证可写可读（JSON 数组没被破坏）
+    store.transaction(() =>
+      store.insertTopic(
+        makeTopic({ topicId: "safe-id", objective: "still here" }),
+      ),
+    );
     expect(store.loadTopic("safe-id")?.objective).toBe("still here");
     store.close();
   });
 });
 
-// ── T2.12 多表写事务边界（#1 数据 / AC-1.2） ─────────────────
+// ── T2.12 事务边界（#1 数据 / AC-1.2） ──────────────────────
 
 describe("T2.12 — transaction 中途抛错 ROLLBACK 无半写", () => {
-  it("事务内 updateStatus 后抛错 → 状态回滚为原值", () => {
-    const store = new CwStore(":memory:");
-    store.insertTopic(makeTopic({ status: "created" })); // 初始 created
+  it("事务内 updateStatus 后抛错 → 状态回滚为原值（文件未变）", () => {
+    const dbPath = trackTmpDir(tmpJsonPath());
+    const store = new CwStore(dbPath);
+    store.transaction(() =>
+      store.insertTopic(makeTopic({ status: "created" })),
+    );
+
+    // 记录回滚前的文件内容快照
+    const beforeContent = readFileSync(dbPath, "utf-8");
 
     expect(() =>
       store.transaction(() => {
@@ -266,14 +297,19 @@ describe("T2.12 — transaction 中途抛错 ROLLBACK 无半写", () => {
       }),
     ).toThrow("boom mid-transaction");
 
-    // 回读：status 应仍是 created（未持久化半写）
+    // 回读：status 应仍是 created
     expect(store.loadTopic("t-1")?.status).toBe("created");
+    // 文件内容应完全不变（事务原子性：rollback 不落盘）
+    expect(readFileSync(dbPath, "utf-8")).toBe(beforeContent);
     store.close();
   });
 
   it("事务正常 COMMIT → 状态持久化", () => {
-    const store = new CwStore(":memory:");
-    store.insertTopic(makeTopic({ status: "created" }));
+    const dbPath = trackTmpDir(tmpJsonPath());
+    const store = new CwStore(dbPath);
+    store.transaction(() =>
+      store.insertTopic(makeTopic({ status: "created" })),
+    );
 
     store.transaction(() => {
       store.updateStatus("t-1", "planned");
@@ -285,13 +321,16 @@ describe("T2.12 — transaction 中途抛错 ROLLBACK 无半写", () => {
   });
 });
 
-// ── T2.13 事务 COMMIT 落 gateHistory 且绑定 topicId（#1 可观测） ─
+// ── T2.13 事务 COMMIT 落 gateHistory 且绑定 topicId ──────────
 
 describe("T2.13 — transaction COMMIT 后 gateHistory 落库绑定 topicId", () => {
   it("事务内 appendGateHistory → commit → loadGateHistory 命中且绑定正确 topicId", () => {
-    const store = new CwStore(":memory:");
-    store.insertTopic(makeTopic({ topicId: "t-1" }));
-    store.insertTopic(makeTopic({ topicId: "t-2", slug: "other" }));
+    const dbPath = trackTmpDir(tmpJsonPath());
+    const store = new CwStore(dbPath);
+    store.transaction(() => {
+      store.insertTopic(makeTopic({ topicId: "t-1" }));
+      store.insertTopic(makeTopic({ topicId: "t-2", slug: "other" }));
+    });
 
     store.transaction(() => {
       store.appendGateHistory("t-1", sampleGate);
@@ -302,7 +341,7 @@ describe("T2.13 — transaction COMMIT 后 gateHistory 落库绑定 topicId", ()
     expect(h1).toHaveLength(1);
     expect(h1[0]?.gate).toBe("check_plan");
     expect(h1[0]?.result).toBe("pass");
-    // t-2 无记录（证明 topic_id 绑定，未串台）
+    // t-2 无记录（证明 topicId 绑定，未串台）
     expect(store.loadGateHistory("t-2")).toHaveLength(0);
     // 不存在的 topic 也为空
     expect(store.loadGateHistory("never")).toHaveLength(0);
@@ -310,65 +349,72 @@ describe("T2.13 — transaction COMMIT 后 gateHistory 落库绑定 topicId", ()
   });
 });
 
-// ── T2.27 user_version 迁移 + 数据保留（#11 数据） ───────────
+// ── T2.27 schemaVersion 迁移 + 数据保留（#11 数据） ─────────
 
-describe("T2.27 — 旧 db（user_version=0）打开新 CwStore 自动迁移 + 数据保留", () => {
-  it("v0 库（无 user_version）→ 新 CwStore 升到 SCHEMA_VERSION 且已有数据不丢", () => {
-    const dbPath = trackTmpDir(tmpDbPath());
+describe("T2.27 — 旧 JSON（schemaVersion=0）打开新 CwStore 自动迁移 + 数据保留", () => {
+  it("v0 JSON → 新 CwStore 升到 SCHEMA_VERSION 且已有数据不丢", () => {
+    const dbPath = trackTmpDir(tmpJsonPath());
 
-    // 1. 模拟旧库：手写 v1 topic 表结构 + 插一行，user_version 保持默认 0
-    const raw = new DatabaseSync(dbPath);
-    raw.exec(`CREATE TABLE topic (
-      topic_id TEXT PRIMARY KEY, slug TEXT NOT NULL, tier TEXT NOT NULL, objective TEXT NOT NULL,
-      workspace_path TEXT NOT NULL, created_at TEXT NOT NULL, status TEXT NOT NULL,
-      plan_format TEXT, coverage INTEGER, gate_passed TEXT
-    )`);
-    raw
-      .prepare(
-        `INSERT INTO topic (topic_id, slug, tier, objective, workspace_path, created_at, status, gate_passed)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
-      )
-      .run(
-        "legacy-1",
-        "legacy",
-        "lite",
-        "legacy objective",
-        "/tmp/legacy",
-        "2026-01-01T00:00:00.000Z",
-        "created",
-        "{}",
-      );
-    const before = raw.prepare("PRAGMA user_version").get() as { user_version: number };
-    expect(before.user_version).toBe(0);
-    raw.close();
+    // 1. 模拟旧 JSON：手写 v0 结构（无 schemaVersion 或 schemaVersion=0）+ 一行 topic
+    const oldData = {
+      topics: [
+        {
+          topicId: "legacy-1",
+          slug: "legacy",
+          tier: "lite",
+          objective: "legacy objective",
+          workspacePath: "/tmp/legacy",
+          // 故意不写 topicDir（v0 缺失，迁移应补 ""）
+          createdAt: "2026-01-01T00:00:00.000Z",
+          status: "created",
+          gatePassed: {},
+        },
+      ],
+      waves: [],
+      testCases: [],
+      gateHistory: [],
+    };
+    // 用 writeFileSync 直接写（绕过 CwStore 的迁移，模拟旧文件）
+    writeFileSync(dbPath, JSON.stringify(oldData), "utf-8");
 
-    // 2. 新 CwStore 打开 → init 读 user_version=0 → 迁移链 → 升版本
+    // 2. 新 CwStore 的首次 loadFileData 触发迁移
     const store = new CwStore(dbPath);
 
-    // 3. 已有数据保留 + 可读
+    // 3. 已有数据保留 + 可读 + topicDir 补了默认值
     const loaded = store.loadTopic("legacy-1");
     expect(loaded?.objective).toBe("legacy objective");
     expect(loaded?.slug).toBe("legacy");
     expect(loaded?.status).toBe("created");
-
-    // 4. user_version 升到 SCHEMA_VERSION（经第二连接读，避免动 store 私有 db）
-    const verify = new DatabaseSync(dbPath);
-    const after = verify.prepare("PRAGMA user_version").get() as { user_version: number };
-    expect(after.user_version).toBe(SCHEMA_VERSION);
-    verify.close();
+    expect(loaded?.topicDir).toBe("");
 
     store.close();
   });
 });
 
-// ── T2.28 迁移日志 from/to version（#11 可观测） ─────────────
+// ── T2.28 迁移日志 from/to version（#11 可观测） ────────────
 
 describe("T2.28 — 迁移日志含 from/to version", () => {
   it("触发迁移时向 stderr 落 JSON 日志含 from=0 to=SCHEMA_VERSION", () => {
     const writeSpy = vi.spyOn(process.stderr, "write");
+    const dbPath = trackTmpDir(tmpJsonPath());
 
-    // 全新 :memory: 库，user_version 默认 0 → 构造时触发 0→1 迁移
-    const store = new CwStore(":memory:");
+    // 写一个 schemaVersion=0 的旧文件
+    writeFileSync(
+      dbPath,
+      JSON.stringify({
+        schemaVersion: 0,
+        topics: [],
+        waves: [],
+        testCases: [],
+        gateHistory: [],
+      }),
+      "utf-8",
+    );
+
+    // 构造时 loadFileData → 触发 0→4 迁移
+    const store = new CwStore(dbPath);
+    // loadFileData 是 lazy 的（在 loadTopic 或 transaction 时才调）
+    store.loadTopic("any");
     store.close();
 
     // 从所有 stderr.write 调用中筛出 cw-migration 事件
@@ -399,42 +445,23 @@ describe("T2.28 — 迁移日志含 from/to version", () => {
   });
 });
 
-// ============================================================
-// ADR-029 决策 6：WAL + busy_timeout 契约测试
-// ============================================================
+// ── ADR-029 决策 4：dependsOn + parallelGroup round-trip ─────
 
-describe("CwStore WAL + busy_timeout (ADR-029 decision 6)", () => {
-  it("构造后 journal_mode=WAL", () => {
-    const dbPath = tmpDbPath();
+describe("ADR-029 决策 4：测试调度字段", () => {
+  it("dependsOn + parallelGroup round-trip（write → read 等价）", () => {
+    const dbPath = trackTmpDir(tmpJsonPath());
     const store = new CwStore(dbPath);
-    const row = store["db"].prepare("PRAGMA journal_mode").get() as { journal_mode?: string } | undefined;
-    store.close();
-    // 内存库返回 "memory"，文件库返回 "wal"。两者都应不报错且可查询。
-    // 文件库（生产路径）必须是 wal。
-    expect(row?.journal_mode).toMatch(/^(wal|memory)$/);
-    if (dbPath.includes("test.db")) {
-      expect(row?.journal_mode).toBe("wal");
-    }
-  });
-
-  it("构造后 busy_timeout=5000", () => {
-    const store = new CwStore(":memory:");
-    const row = store["db"].prepare("PRAGMA busy_timeout").get() as { timeout?: number } | undefined;
-    store.close();
-    expect(row?.timeout).toBe(5000);
-  });
-
-  it("ADR-029 决策 4：dependsOn + parallelGroup round-trip（write → read 等价）", () => {
-    const store = new CwStore(":memory:");
     const seed = makeTopic();
-    store.insertTopic(seed);
+    store.transaction(() => store.insertTopic(seed));
     const caseWithScheduling: TestCaseSeed = {
       ...sampleCase,
       id: "E3",
       dependsOn: ["E1", "E2"],
       parallelGroup: "g-real",
     };
-    store.insertTestCases(seed.topicId, [caseWithScheduling]);
+    store.transaction(() =>
+      store.insertTestCases(seed.topicId, [caseWithScheduling]),
+    );
 
     const loaded = store.loadTopic(seed.topicId);
     expect(loaded).not.toBeNull();
@@ -446,11 +473,14 @@ describe("CwStore WAL + busy_timeout (ADR-029 decision 6)", () => {
     store.close();
   });
 
-  it("ADR-029 决策 4：缺省 dependsOn/parallelGroup → []/undefined（向后兼容）", () => {
-    const store = new CwStore(":memory:");
+  it("缺省 dependsOn/parallelGroup → []/undefined（向后兼容）", () => {
+    const dbPath = trackTmpDir(tmpJsonPath());
+    const store = new CwStore(dbPath);
     const seed = makeTopic();
-    store.insertTopic(seed);
-    store.insertTestCases(seed.topicId, [sampleCase]); // sampleCase 无 dependsOn/parallelGroup
+    store.transaction(() => store.insertTopic(seed));
+    store.transaction(() =>
+      store.insertTestCases(seed.topicId, [sampleCase]),
+    ); // sampleCase 无 dependsOn/parallelGroup
 
     const loaded = store.loadTopic(seed.topicId);
     expect(loaded).not.toBeNull();
@@ -458,6 +488,53 @@ describe("CwStore WAL + busy_timeout (ADR-029 decision 6)", () => {
     const tc = loaded.testCases[0]!;
     expect(tc.dependsOn).toEqual([]); // 缺省回退空数组
     expect(tc.parallelGroup).toBeUndefined(); // 缺省回退 undefined
+    store.close();
+  });
+});
+
+// ── 文件锁（跨进程并发安全，替代 sqlite WAL + busy_timeout） ─
+//
+// 注：同进程内嵌套同步事务会死锁（Atomics.wait 阻塞整个进程）。
+// 真实并发场景是跨进程（多个 pi 子进程各自的 CwStore 实例），
+// 文件锁（O_EXCL）正是为跨进程设计。此处验证锁的基本生命周期。
+
+describe("CwStore 文件锁（ADR-029 decision 6 等价）", () => {
+  it("事务期间锁文件存在，结束后被清理", () => {
+    const dbPath = trackTmpDir(tmpJsonPath());
+    const store = new CwStore(dbPath);
+
+    // 事务结束后锁文件应被删除
+    store.transaction(() => {
+      store.insertTopic(makeTopic());
+    });
+
+    expect(existsSync(dbPath + ".lock")).toBe(false);
+    // 数据文件应存在
+    expect(existsSync(dbPath)).toBe(true);
+    store.close();
+  });
+
+  it("stale lock（持有者进程已死）会被自动清理", () => {
+    const dbPath = trackTmpDir(tmpJsonPath());
+    const store = new CwStore(dbPath);
+
+    // 模拟 stale lock：手动写一个指向不存在 PID 的锁文件
+    writeFileSync(
+      dbPath + ".lock",
+      "999999999\n" + (Date.now() - 60000) + "\n", // PID 不存在 + 60s 前（超时）
+      "utf-8",
+    );
+
+    // 新事务应自动 break stale lock 并正常执行
+    store.transaction(() => {
+      store.insertTopic(makeTopic());
+    });
+
+    // stale lock 被清理后，新事务正常落盘
+    const loaded = store.loadTopic("t-1");
+    expect(loaded).not.toBeNull();
+    // 事务结束后锁文件再次被清理
+    expect(existsSync(dbPath + ".lock")).toBe(false);
     store.close();
   });
 });

@@ -118,7 +118,7 @@ export function checkPhaseCascade(action: CwAction, topic: CwTopic): GuardVerdic
 export function checkCacheConsistency(topic: CwTopic, store: CwStore): GuardVerdict {
   // 数据流：从 topic 的 waves/testCases/gateHistory 重算各 phase 的 gatePassed，与 topic 缓存字段逐项比对。
   // 不变式：缓存值必须 === 重算值；任一不一致 → cache_inconsistent（store 层 bug 指示，非恶意篡改——
-  // honest agent 不改 _cw.db；malicious agent 改缓存+证据即绕过，本 check 不防此路径，详见 decisions D-017）。
+  // honest agent 不改 _cw.json；malicious agent 改缓存+证据即绕过，本 check 不防此路径，详见 decisions D-017）。
   for (const phase of Object.keys(topic.gatePassed) as CwAction[]) {
     const cached = topic.gatePassed[phase];
     const recomputed = computeGatePassedFromStore(phase, topic, store);
@@ -261,7 +261,7 @@ export function buildNextAction(action: CwAction, topic: CwTopic): NextAction {
         action: "dev",
         skill: "coding-execute",
         guidance:
-          "plan gate 通过，waves/testCases 已写入 _cw.db。下一步：调 coding-execute skill 按 Wave 派发 subagent 执行，commit 后调 cw dev 提交 commitHash。",
+          "plan gate 通过，waves/testCases 已写入 _cw.json。下一步：调 coding-execute skill 按 Wave 派发 subagent 执行，commit 后调 cw dev 提交 commitHash。",
         waves: waveProgress(topic),
       };
     }
@@ -298,7 +298,7 @@ export function buildNextAction(action: CwAction, topic: CwTopic): NextAction {
         action: "dev",
         skill: "coding-execute",
         guidance:
-          "detail gate 通过，waves/testCases 已写入 _cw.db。下一步：调 coding-execute skill 按 Wave 派发 subagent 执行，commit 后调 cw dev 提交 commitHash。",
+          "detail gate 通过，waves/testCases 已写入 _cw.json。下一步：调 coding-execute skill 按 Wave 派发 subagent 执行，commit 后调 cw dev 提交 commitHash。",
         waves: waveProgress(topic),
       };
     }
@@ -376,7 +376,7 @@ export function buildNextAction(action: CwAction, topic: CwTopic): NextAction {
       // closeout gate 通过：topic 已关闭，无后续 action（终态不可逆，§4.4）
       return {
         guidance:
-          "topic 已关闭（closed）。本次编码流程结束，所有交付物已归档，_cw.db 进入终态。",
+          "topic 已关闭（closed）。本次编码流程结束，所有交付物已归档，_cw.json 进入终态。",
       };
     }
     case "replan": {

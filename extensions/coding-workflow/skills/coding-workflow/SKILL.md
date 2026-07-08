@@ -74,7 +74,7 @@ description: >-
 
 [MANDATORY] 启动 CW 前：
 
-- **workspacePath 可写**：CW 状态库 `_cw.db` 落全局目录 `~/.pi/agent/cw/<encoded-cwd>/`（不污染项目；encoded-cwd 规则同 subagents ADR-027）；交付物（plan.md/plan.json/clarify.json/detail.json）+ review 桩 + machine-check 报告在 `${workspacePath}/.xyz-harness/{slug}/` 下（`{slug}` = CW create slug；CW 不产桩，靠 skill 落盘到该目录）。
+- **workspacePath 可写**：CW 状态库 `_cw.json` 落全局目录 `~/.pi/agent/cw/<encoded-cwd>/`（不污染项目；encoded-cwd 规则同 subagents ADR-027）；交付物（plan.md/plan.json/clarify.json/detail.json）+ review 桩 + machine-check 报告在 `${workspacePath}/.xyz-harness/{slug}/` 下（`{slug}` = CW create slug；CW 不产桩，靠 skill 落盘到该目录）。
 - **git 仓库已初始化**（dev/test 需要）：`git rev-parse --git-dir` 能跑通。
 - **tier 已决策**：不确定先问用户，不默认（锁定后改不了）。
 

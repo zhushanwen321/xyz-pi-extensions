@@ -175,12 +175,12 @@ export function registerCodingWorkflowTool(pi: ExtensionAPI): void {
       "mid test = medium-coverage (trusts agent-declared status + GitValidator on commitHash).",
       "lite test 还要求 screenshotPath 指向已存在的截图文件（缺失即 failed），",
       "mid test 要求 commitHash + claimedStatus。",
-      "workspacePath 默认 process.cwd()，决定 _cw.db 全局位置",
-      "(~/.pi/agent/cw/<encoded-cwd>/_cw.db，encoded-cwd 规则同 subagents ADR-027)；",
-      "topicDir（交付物目录：plan.md/changes/machine-check-*.md）仍在项目内 .xyz-harness/{slug}/，_cw.db 不污染项目目录。",
+      "workspacePath 默认 process.cwd()，决定 _cw.json 全局位置",
+      "(~/.pi/agent/cw/<encoded-cwd>/_cw.json，encoded-cwd 规则同 subagents ADR-027)；",
+      "topicDir（交付物目录：plan.md/changes/machine-check-*.md）仍在项目内 .xyz-harness/{slug}/，_cw.json 不污染项目目录。",
       "monorepo/子目录场景需显式传 workspacePath，否则 topic 跨目录找不到。",
       "create 返回 topicId（格式 cw-{date}-{slug}），后续所有 action 必须传此 topicId；",
-      "跨 session 接续前从 _cw.db 或 .xyz-harness 取回。",
+      "跨 session 接续前从 _cw.json 或 .xyz-harness 取回。",
     ].join("\n"),
     executionMode: "sequential",
     promptGuidelines: [
@@ -201,15 +201,15 @@ export function registerCodingWorkflowTool(pi: ExtensionAPI): void {
         throw new Error("coding-workflow call aborted by signal.");
       }
       // composition root：从 params 推 workspacePath，构造 deps。
-      // dbPath 落 ~/.pi/agent/cw/<encoded-cwd>/_cw.db（全局，与 subagents ADR-027 同源约定）。
+      // dbPath 落 ~/.pi/agent/cw/<encoded-cwd>/_cw.json（全局，与 subagents ADR-027 同源约定）。
       // topicDir（交付物目录）仍在项目内 .xyz-harness/{slug}/——各 action handler loadTopic
       // 后用 topic.topicDir 构造 GateContext（ROOT-01 修复仍生效：交付物在项目内可读可写，
-      // 但 _cw.db 状态库不再污染项目目录）。
+      // 但 _cw.json 状态库不再污染项目目录）。
       //
       // ADR-029 dataflow D1 防护（2026-07）：worktree cwd 检测兜底。
       // workflow 内 agent 的 cwd 是 worktree 路径（如 .../.cw-wt/cw-dev-pool0-xxx）。
       // 若 agent 漏传 workspacePath，process.cwd() fallback 会 encodeCwd(worktree路径)
-      // → 打开一个空的独立 _cw.db，topic not found 且数据被隔离到错误 db。
+      // → 打开一个空的独立 _cw.json，topic not found 且数据被隔离到错误 db。
       // 检测 worktree 父目录约定（.cw-wt/），拒绝用 process.cwd() fallback，
       // 强制 agent 显式传 workspacePath 或设 CW_WORKSPACE_ROOT env。
       const fallbackCwd = process.cwd();
@@ -220,7 +220,7 @@ export function registerCodingWorkflowTool(pi: ExtensionAPI): void {
           throw new Error(
             "worktree cwd detected (" + fallbackCwd + ") but workspacePath not provided. " +
             "workflow agent 必须传 workspacePath=项目根，或 spawn 时设 CW_WORKSPACE_ROOT env。" +
-            "拒绝用 process.cwd() fallback（会打开错误的 _cw.db，数据被隔离）。",
+            "拒绝用 process.cwd() fallback（会打开错误的 _cw.json，数据被隔离）。",
           );
         }
         workspacePath = fallbackCwd;
@@ -254,21 +254,24 @@ export default function codingWorkflowExtension(pi: ExtensionAPI): void {
 // ── 全局存储路径解析（与 subagents/workflow 一致：~/.pi/agent/<scope>/<encoded-cwd>/） ──
 
 /**
- * 解析 _cw.db 全局路径。
+ * 解析 _cw.json 全局路径。
  *
- * `~/.pi/agent/cw/<encoded-cwd>/_cw.db`——encoded-cwd 由 `encodeCwd(workspacePath)`
+ * `~/.pi/agent/cw/<encoded-cwd>/_cw.json`——encoded-cwd 由 `encodeCwd(workspacePath)`
  * 生成（与 subagents ADR-027 同源：去掉开头分隔符、剩余 / \ : 替换为 -、首尾补 --）。
  *
  * scope 选 `cw`（不复用 `subagents/`）—— CW 的状态库与 subagents session 物理隔离，
- * 互不干扰。同一项目所有 topic 共享一个 _cw.db（topic_id 主键区分），不再每 topic 散一个。
+ * 互不干扰。同一项目所有 topic 共享一个 _cw.json（topicId 区分），不再每 topic 散一个。
  *
  * 全局存储而非项目内 `.xyz-harness/` 的理由：
  *   1. 与项目其它扩展一致（subagents/evolve-daily/workflow 都用全局）
- *   2. 不污染用户项目目录（sqlite 二进制无法 git diff，所谓「git 审计」是伪需求）
+ *   2. 不污染用户项目目录（JSON 无法 git diff，所谓「git 审计」是伪需求）
  *   3. 跨 session 续跑靠 homedir 稳定性，不依赖 cwd 是否被 git 追踪
+ *
+ * 注：原 sqlite 版本用 `_cw.json`，因 pi 的 Bun 编译 binary 未实现 node:sqlite
+ * 改为 JSON 持久化（详见 store.ts 头注释）。
  */
 function resolveCwDbPath(workspacePath: string): string {
-  return join(homedir(), ".pi", "agent", "cw", encodeCwd(workspacePath), "_cw.db");
+  return join(homedir(), ".pi", "agent", "cw", encodeCwd(workspacePath), "_cw.json");
 }
 
 // ── 渲染（content 文本，TUI 展示用） ─────────────────────────
@@ -294,7 +297,7 @@ const MUSTFIX_SUMMARY_MAX_LEN = 800;
  */
 function renderSummary(result: ActionResult): string {
   // topicId 显式输出：create 后 agent 必须拿到 topicId 才能调后续 action，
-  // 旧版只在 details 结构里有，TUI 文本不显示——agent 误以为要去 _cw.db 查。
+  // 旧版只在 details 结构里有，TUI 文本不显示——agent 误以为要去 _cw.json 查。
   // 所有 action 的 details 都含 topicId，统一在 head 显示。
   const head = `[cw] ${result.nextAction.action ?? "(done)"} — topicId=${result.topicId}` +
     ` status=${result.status} gateTier=${result.gateTier ?? "-"} guidance=${result.nextAction.guidance}`;

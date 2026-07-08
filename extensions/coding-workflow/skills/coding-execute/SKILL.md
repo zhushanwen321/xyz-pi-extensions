@@ -185,7 +185,7 @@ workflow run execute-full-workflow --args '{
 可通过 `tokens` 参数覆盖默认值（如需更多 budget）。
 
 ⚠️ **workspaceRoot 必须传项目根**（不是当前 cwd）。workflow 据此在 `{workspaceRoot}/.cw-wt/`
-建 worktree，并把 workspacePath 注入每个 agent 的 cw 调用（防 worktree cwd 打开错误 _cw.db）。
+建 worktree，并把 workspacePath 注入每个 agent 的 cw 调用（防 worktree cwd 打开错误 _cw.json）。
 
 ### workflow return 契约（主 agent 读取决策）
 

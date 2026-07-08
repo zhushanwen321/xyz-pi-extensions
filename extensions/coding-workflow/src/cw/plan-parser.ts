@@ -3,7 +3,7 @@
  *
  * 输入：plan.json / clarify.json / detail.json（skill 阶段产出，§12 architecture）。
  * 校验链：size/depth guard（T2.17/T2.29）→ format 字段 === tier 锁定值（D-003）→ typebox Value.Check 结构。
- * 输出：ParsedXxx，供 action handler 写入 _cw.db（waves/testCases）。
+ * 输出：ParsedXxx，供 action handler 写入 _cw.json（waves/testCases）。
  *
  * 真引 typebox Type + Value（Tier 2 证伪）。
  */

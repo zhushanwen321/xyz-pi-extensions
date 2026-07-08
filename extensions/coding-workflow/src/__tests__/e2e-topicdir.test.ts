@@ -148,7 +148,7 @@ afterEach(() => {
       // best-effort：tmp 目录由 OS 兜底。日志吞掉但记录避免完全静默。
       void e;
     }
-    // _cw.db 现落 ~/.pi/agent/cw/<encoded-cwd>/（全局，见 resolveCwDbPath），
+    // _cw.json 现落 ~/.pi/agent/cw/<encoded-cwd>/（全局，见 resolveCwDbPath），
     // tmp ws 清理外还要清 homedir 下的测试 db 遗留，否则 ~/.pi/agent/cw/ 积累一堆测试垃圾。
     const encoded = encodeCwd(ws);
     const globalCwDir = join(homedir(), ".pi", "agent", "cw", encoded);
@@ -161,7 +161,7 @@ afterEach(() => {
   }
 });
 
-/** 建临时项目根 + .xyz-harness/ 子目录（_cw.db 全局落在 ~/.pi/agent/cw/<encoded-ws>/，交付物仍在 {ws}/.xyz-harness/{slug}/）。 */
+/** 建临时项目根 + .xyz-harness/ 子目录（_cw.json 全局落在 ~/.pi/agent/cw/<encoded-ws>/，交付物仍在 {ws}/.xyz-harness/{slug}/）。 */
 function makeTmpWorkspace(): string {
   const ws = mkdtempSync(join(tmpdir(), "cw-e2e-topicdir-"));
   tmpWorkspaces.push(ws);
@@ -219,7 +219,7 @@ describe("E2E topicDir（TEST-DIVERGENCE-01）— 经 execute() composition root
 
     // 错误位置：plan.md 写在项目根（= 旧/错误 topicDir 指向的位置）
     writeValidPlanMd(ws);
-    // .xyz-harness/{slug}/ 下不写 plan.md（仅建目录让 _cw.db 的兄弟路径合法）
+    // .xyz-harness/{slug}/ 下不写 plan.md（仅建目录让 _cw.json 的兄弟路径合法）
     mkdirSync(join(ws, ".xyz-harness", slug), { recursive: true });
 
     const created = await execute("e2e-create-bad", {
@@ -252,7 +252,7 @@ describe("E2E topicDir（TEST-DIVERGENCE-01）— 经 execute() composition root
     expect(planned.content[0]?.text).toContain("plan.md 存在");
   });
 
-  it("_cw.db 全局存储：落 ~/.pi/agent/cw/<encoded-cwd>/，项目目录无污染", async () => {
+  it("_cw.json 全局存储：落 ~/.pi/agent/cw/<encoded-cwd>/，项目目录无污染", async () => {
     const execute = captureExecute();
     const ws = makeTmpWorkspace();
     const slug = "db-location-test";
@@ -265,12 +265,12 @@ describe("E2E topicDir（TEST-DIVERGENCE-01）— 经 execute() composition root
       workspacePath: ws,
     }, undefined);
 
-    // 1. _cw.db 落全局 ~/.pi/agent/cw/<encoded-ws>/_cw.db
-    const expectedGlobalDb = join(homedir(), ".pi", "agent", "cw", encodeCwd(ws), "_cw.db");
+    // 1. _cw.json 落全局 ~/.pi/agent/cw/<encoded-ws>/_cw.json
+    const expectedGlobalDb = join(homedir(), ".pi", "agent", "cw", encodeCwd(ws), "_cw.json");
     expect(existsSync(expectedGlobalDb)).toBe(true);
 
-    // 2. 项目目录无 _cw.db（旧版位置）
-    expect(existsSync(join(ws, ".xyz-harness", "_cw.db"))).toBe(false);
+    // 2. 项目目录无 _cw.json（旧版位置）
+    expect(existsSync(join(ws, ".xyz-harness", "_cw.json"))).toBe(false);
 
     // 3. 项目根无 cw 污染（无 changes/ 等）
     expect(readdirSync(ws).filter((f) => f !== ".xyz-harness")).toEqual([]);

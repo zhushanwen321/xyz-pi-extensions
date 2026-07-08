@@ -12,7 +12,7 @@ description: >-
 
 > **对应 CW action: `plan`**（coding-workflow tool）。本 skill 产出 plan.json，完成后调
 > `cw(action=plan, topicId, planJson)` 通过 CW plan gate。CW 解析 plan.json 的 waves/testCases
-> 写入 _cw.db，gate pass 后返回 nextAction（→ dev）。按 nextAction 推进，不自行决定下一步。
+> 写入 _cw.json，gate pass 后返回 nextAction（→ dev）。按 nextAction 推进，不自行决定下一步。
 
 为**不涉及架构改动的小功能**产出一份 plan.md，含 7 个章节：业务目标、技术改动点（文件级）、Wave 依赖拆分、**完整的测试验收设计**（单测清单 + E2E 清单 + 覆盖率 gate）、实现步骤（MANDATORY，plan extension 桥接依赖）。
 

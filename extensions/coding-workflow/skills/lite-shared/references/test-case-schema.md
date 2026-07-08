@@ -223,7 +223,7 @@ E2E 用例除上述边界外，**必须两层都有覆盖**（见「核心原则
 
 > **U\* 与 E\* 的验收路径不同**：
 > - **U\*（单测）**：不进 plan.json，仅写 plan.md「单测用例清单」章节。coding-execute 执行收尾机器门（check-execute.ts）读 plan.md 的 U* 清单 + test-runner 落盘的 test-results.json 逐条核对。
-> - **E\*（E2E）**：进 plan.json.testCases（CW `plan` action 入参 seed 到 _cw.db），CW test gate（test.ts lite 分支 judgeByExpected）重算验收。
+> - **E\*（E2E）**：进 plan.json.testCases（CW `plan` action 入参 seed 到 _cw.json），CW test gate（test.ts lite 分支 judgeByExpected）重算验收。
 >
 > 两者都进 coding-execute 的 todo 映射（下方表格），但机器验收走的门不同。
 
