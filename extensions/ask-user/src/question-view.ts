@@ -126,7 +126,7 @@ function buildOptionLines(
 				const marker = q.multiSelect
 					? (hasFreeText ? t.fg("success", "[✓]") : t.fg("dim", "[ ]"))
 					: (hasFreeText ? t.fg("success", "✓") : " ");
-				const labelColor = isSelected ? "accent" : "muted";
+				const labelColor = isSelected ? "accent" : "text";
 				const num = i + 1;
 				add(`${prefix} ${marker} ${t.fg(labelColor, `${num}. ${opt.label}`)}`);
 				if (hasFreeText) {
