@@ -404,6 +404,12 @@ export class AskUserComponent implements Component {
 		}
 
 		// keyId === undefined → 多字符粘贴 chunk → printable 提取（BC-1/BC-2/BC-3 保持）
+		// 未识别控制序列（OSC/DA/DCS/APC/unknown CSI）整体丢弃，不提取可见残渣。
+		// 排除 bracketed paste 标记防 C-PASTE 退化。依赖 StdinBuffer 序列拆分保证 data 整体性。
+		if (data.startsWith("\x1b") && !data.includes("\x1b[200~") && !data.includes("\x1b[201~")) {
+			return;
+		}
+
 		const cleaned = data.replace(/\x1b\[200~|\x1b\[201~/g, "");
 		let changed = false;
 		for (const c of cleaned) {

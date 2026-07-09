@@ -99,3 +99,13 @@ export const SUPER_LEFT = "\x1b[1;9D";
 export const SUPER_RIGHT = "\x1b[1;9C";
 export const CTRL_SHIFT_UP = "\x1b[1;6A";
 export const CTRL_SHIFT_DOWN = "\x1b[1;6B";
+
+// ── Unknown control sequences (terminal spontaneous, parseKey returns undefined) ──
+export const OSC_BEL = "\x1b]11;rgb:aa/bb/cc\x07"; // OSC, BEL 终止
+export const OSC_ST = "\x1b]11;rgb:aa/bb/cc\x1b\\"; // OSC, ST (ESC\\) 终止
+export const DA1 = "\x1b[?6c"; // DA1 响应
+export const DA2 = "\x1b[>0c"; // DA2 响应
+export const DCS = "\x1bP>|tmux 3.4\x1b\\"; // DCS XTVersion 响应
+export const APC = "\x1b_Gi=31\x1b\\"; // APC Kitty graphics 响应
+export const UNKNOWN_CSI = "\x1b[99~"; // 未知 CSI
+export const UNKNOWN_SS3 = "\x1bOZ"; // 未知 SS3

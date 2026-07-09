@@ -9,6 +9,7 @@ import {
 	ALT_LEFT,
 	ALT_RIGHT,
 	ALT_UP,
+	APC,
 	BKSP,
 	CTRL_DOWN,
 	CTRL_LEFT,
@@ -16,6 +17,9 @@ import {
 	CTRL_SHIFT_DOWN,
 	CTRL_SHIFT_UP,
 	CTRL_UP,
+	DA1,
+	DA2,
+	DCS,
 	DELETE,
 	DOWN,
 	END,
@@ -27,19 +31,23 @@ import {
 	LEFT,
 	mockTui,
 	multiQWithComment,
+	OSC_BEL,
+	OSC_ST,
 	PAGE_DOWN,
 	PAGE_UP,
 	RIGHT,
-	singleQ,
 	SHIFT_DOWN,
 	SHIFT_LEFT,
 	SHIFT_RIGHT,
 	SHIFT_UP,
+	singleQ,
 	stubTheme,
 	SUPER_DOWN,
 	SUPER_LEFT,
 	SUPER_RIGHT,
 	SUPER_UP,
+	UNKNOWN_CSI,
+	UNKNOWN_SS3,
 	UP,
 } from "./fixtures";
 
@@ -300,4 +308,188 @@ describe("AskUserComponent — key leak fix (C-ARROW / C-KEYMAP)", () => {
 			expect(editorLine).not.toContain(";");
 		});
 	}
+});
+
+describe("AskUserComponent — unknown control sequence leak fix (C-CSI)", () => {
+	it("C-CSI-1: unknown CSI sequence does not leak into editorText", () => {
+		const c = openFreeform([singleQ]);
+		c.handleInput(UNKNOWN_CSI);
+		c.handleInput("a");
+		c.handleInput("b");
+		const lines = c.render(60);
+		const editorLine = lines.find((l) => l.includes("█"));
+		expect(editorLine).toBeDefined();
+		expect(editorLine).toContain("ab");
+		expect(editorLine).not.toContain("[");
+		expect(editorLine).not.toContain("9");
+		expect(editorLine).not.toContain("~");
+	});
+
+	it("C-CSI-2: OSC11 background color response (BEL) does not leak", () => {
+		const c = openFreeform([singleQ]);
+		c.handleInput(OSC_BEL);
+		c.handleInput("x");
+		const lines = c.render(60);
+		const editorLine = lines.find((l) => l.includes("█"));
+		expect(editorLine).toBeDefined();
+		expect(editorLine).toContain("x");
+		expect(editorLine).not.toContain("]");
+		expect(editorLine).not.toContain("rgb");
+	});
+
+	it("C-CSI-3: OSC11 background color response (ST) does not leak", () => {
+		const c = openFreeform([singleQ]);
+		c.handleInput(OSC_ST);
+		c.handleInput("y");
+		const lines = c.render(60);
+		const editorLine = lines.find((l) => l.includes("█"));
+		expect(editorLine).toBeDefined();
+		expect(editorLine).toContain("y");
+		expect(editorLine).not.toContain("]");
+		expect(editorLine).not.toContain("rgb");
+	});
+
+	it("C-CSI-4: DA2 device attribute response does not leak", () => {
+		const c = openFreeform([singleQ]);
+		c.handleInput(DA2);
+		c.handleInput("m");
+		const lines = c.render(60);
+		const editorLine = lines.find((l) => l.includes("█"));
+		expect(editorLine).toBeDefined();
+		expect(editorLine).toContain("m");
+		expect(editorLine).not.toContain("[");
+	});
+
+	it("C-CSI-5: DA1 device attribute response does not leak", () => {
+		const c = openFreeform([singleQ]);
+		c.handleInput(DA1);
+		c.handleInput("n");
+		const lines = c.render(60);
+		const editorLine = lines.find((l) => l.includes("█"));
+		expect(editorLine).toBeDefined();
+		expect(editorLine).toContain("n");
+		expect(editorLine).not.toContain("?");
+	});
+
+	it("C-CSI-6: DCS XTVersion response does not leak", () => {
+		const c = openFreeform([singleQ]);
+		c.handleInput(DCS);
+		c.handleInput("d");
+		const lines = c.render(60);
+		const editorLine = lines.find((l) => l.includes("█"));
+		expect(editorLine).toBeDefined();
+		expect(editorLine).toContain("d");
+		expect(editorLine).not.toContain("tmux");
+	});
+
+	it("C-CSI-7: APC Kitty graphics response does not leak", () => {
+		const c = openFreeform([singleQ]);
+		c.handleInput(APC);
+		c.handleInput("e");
+		const lines = c.render(60);
+		const editorLine = lines.find((l) => l.includes("█"));
+		expect(editorLine).toBeDefined();
+		expect(editorLine).toContain("e");
+		expect(editorLine).not.toContain("G");
+	});
+
+	it("C-CSI-8: unknown SS3 sequence does not leak", () => {
+		const c = openFreeform([singleQ]);
+		c.handleInput(UNKNOWN_SS3);
+		c.handleInput("f");
+		const lines = c.render(60);
+		const editorLine = lines.find((l) => l.includes("█"));
+		expect(editorLine).toBeDefined();
+		expect(editorLine).toContain("f");
+		expect(editorLine).not.toContain("O");
+		expect(editorLine).not.toContain("Z");
+	});
+
+	it("C-CSI-9: multiple unknown sequences in a row do not leak", () => {
+		const c = openFreeform([singleQ]);
+		c.handleInput(UNKNOWN_CSI);
+		c.handleInput(DA2);
+		c.handleInput("ok");
+		const lines = c.render(60);
+		const editorLine = lines.find((l) => l.includes("█"));
+		expect(editorLine).toBeDefined();
+		expect(editorLine).toContain("ok");
+		expect(editorLine).not.toContain("[");
+	});
+
+	it("C-CSI-10: unknown CSI does not leak in comment editor", () => {
+		const c = openComment();
+		c.handleInput(UNKNOWN_CSI);
+		c.handleInput("ab");
+		const lines = c.render(60);
+		const textLine = lines.find((l) => l.includes("ab"));
+		expect(textLine).toBeDefined();
+		expect(textLine).toContain("ab");
+		const allText = lines.join("\n");
+		expect(allText).not.toMatch(/\[9/);
+	});
+
+	it("C-CSI-R1: plain text still appended correctly", () => {
+		const c = openFreeform([singleQ]);
+		c.handleInput("hello");
+		const lines = c.render(60);
+		const editorLine = lines.find((l) => l.includes("█"));
+		expect(editorLine).toContain("hello");
+	});
+
+	it("C-CSI-R2: emoji still appended correctly", () => {
+		const c = openFreeform([singleQ]);
+		c.handleInput("fix the 🐛 bug");
+		const lines = c.render(60);
+		const editorLine = lines.find((l) => l.includes("█"));
+		expect(editorLine).toContain("fix the 🐛 bug");
+	});
+
+	it("C-CSI-R3: Chinese text still appended correctly", () => {
+		const c = openFreeform([singleQ]);
+		c.handleInput("你好");
+		const lines = c.render(60);
+		const editorLine = lines.find((l) => l.includes("█"));
+		expect(editorLine).toContain("你好");
+	});
+
+	it("C-CSI-R4: bracketed paste still works", () => {
+		const c = openFreeform([singleQ]);
+		c.handleInput("\x1b[200~hello\x1b[201~");
+		const lines = c.render(60);
+		const editorLine = lines.find((l) => l.includes("█"));
+		expect(editorLine).toContain("hello");
+		expect(editorLine).not.toContain("[200~");
+	});
+
+	it("C-CSI-R5: arrow keys still no-op", () => {
+		const c = openFreeform([singleQ]);
+		c.handleInput(RIGHT);
+		c.handleInput(RIGHT);
+		c.handleInput(RIGHT);
+		c.handleInput("a");
+		c.handleInput("b");
+		const lines = c.render(60);
+		const editorLine = lines.find((l) => l.includes("█"));
+		expect(editorLine).toContain("ab");
+		expect(editorLine).not.toContain("[");
+	});
+
+	it("C-CSI-R6: backspace still works", () => {
+		const c = openFreeform([singleQ]);
+		c.handleInput("abc");
+		c.handleInput(BKSP);
+		const lines = c.render(60);
+		const editorLine = lines.find((l) => l.includes("█"));
+		expect(editorLine).toContain("ab");
+		expect(editorLine).not.toContain("abc");
+	});
+
+	it("C-CSI-R7: Esc still exits editor", () => {
+		const c = openFreeform([singleQ]);
+		c.handleInput("abc");
+		c.handleInput(ESC);
+		const lines = c.render(60);
+		expect(lines.some((l) => l.includes("█"))).toBe(false);
+	});
 });
