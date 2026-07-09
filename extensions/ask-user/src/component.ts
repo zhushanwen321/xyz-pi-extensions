@@ -1,5 +1,5 @@
 // src/component.ts
-import { type Component, matchesKey, truncateToWidth } from "@mariozechner/pi-tui";
+import { type Component, matchesKey, parseKey, truncateToWidth } from "@mariozechner/pi-tui";
 
 import { allOptions, renderQuestionView } from "./question-view";
 import { buildResult, renderSubmitView } from "./submit-view";
@@ -332,69 +332,84 @@ export class AskUserComponent implements Component {
 	}
 
 	private handleEditorInput(data: string, state: QuestionState, q: Question): void {
-		if (matchesKey(data, "escape")) {
-			if (state.mode === "comment") {
-				// AC-17: Esc in comment = skip comment, advance (keep existing commentValue)
+		// [#1] parseKey 白名单拦截 — 替代旧的 matchesKey 散调 + 兜底 printable 遍历
+		// parseKey 覆盖全终端协议（legacy/Kitty/modifyOtherKeys）；返回 undefined = 多字符粘贴 chunk
+		const keyId = parseKey(data);
+
+		if (keyId !== undefined) {
+			// parseKey 命中（special key / modifier 组合 / 单字符 printable）
+			if (matchesKey(data, "escape")) {
+				if (state.mode === "comment") {
+					// AC-17: Esc in comment = skip comment, advance (keep existing commentValue)
+					state.mode = "options";
+					this.editorText = "";
+					this.advance();
+					return;
+				}
+				// Esc in freeform editor = back to options (discard input)
+				state.mode = "options";
+				this.editorText = "";
+				this.invalidate();
+				this.tui.requestRender();
+				return;
+			}
+			if (matchesKey(data, "enter")) {
+				const text = this.editorText.trim();
+				if (state.mode === "freeform") {
+					if (text) {
+						state.freeTextValue = text;
+						state.selectedIndex = null;
+						state.mode = "options";
+						this.editorText = "";
+						// freeform 保存后走 afterConfirm（可能进 comment 模式）
+						this.afterConfirm(state, q);
+					} else {
+						// FR-6: 空 Enter 仅清除 freeTextValue、关闭编辑器回选项列表，不含确认语义（不置 confirmed）
+						state.freeTextValue = null;
+						state.mode = "options";
+						this.editorText = "";
+						// 对齐 toggleIndex 守卫：清空后若全无答案，重置 confirmed，维持 confirmed ⟹ 有答案 不变式
+						if ((q.multiSelect ? state.selectedIndices.size === 0 : state.selectedIndex === null) && state.freeTextValue === null) {
+							state.confirmed = false;
+						}
+						this.invalidate();
+						this.tui.requestRender();
+					}
+					return;
+				}
+				// comment mode：保存评论后直接前进（不再回头进 comment）
+				state.commentValue = text || null;
 				state.mode = "options";
 				this.editorText = "";
 				this.advance();
 				return;
 			}
-			// Esc in freeform editor = back to options (discard input)
-			state.mode = "options";
-			this.editorText = "";
-			this.invalidate();
-			this.tui.requestRender();
-			return;
-		}
-		if (matchesKey(data, "enter")) {
-			const text = this.editorText.trim();
-			if (state.mode === "freeform") {
-				if (text) {
-					state.freeTextValue = text;
-					state.selectedIndex = null;
-					state.mode = "options";
-					this.editorText = "";
-					// freeform 保存后走 afterConfirm（可能进 comment 模式）
-					this.afterConfirm(state, q);
-				} else {
-					// FR-6: 空 Enter 仅清除 freeTextValue、关闭编辑器回选项列表，不含确认语义（不置 confirmed）
-					state.freeTextValue = null;
-					state.mode = "options";
-					this.editorText = "";
-					// 对齐 toggleIndex 守卫：清空后若全无答案，重置 confirmed，维持 confirmed ⟹ 有答案 不变式
-					if ((q.multiSelect ? state.selectedIndices.size === 0 : state.selectedIndex === null) && state.freeTextValue === null) {
-						state.confirmed = false;
-					}
-					this.invalidate();
-					this.tui.requestRender();
-				}
+			if (matchesKey(data, "backspace")) {
+				this.editorText = this.editorText.slice(0, -1);
+				this.invalidate();
+				this.tui.requestRender();
 				return;
 			}
-			// comment mode：保存评论后直接前进（不再回头进 comment）
-			state.commentValue = text || null;
-			state.mode = "options";
-			this.editorText = "";
-			this.advance();
+			// Space: parseKey(" ") returns "space" (not a single printable char)
+			if (matchesKey(data, "space")) {
+				this.editorText += " ";
+				this.invalidate();
+				this.tui.requestRender();
+				return;
+			}
+			// Single printable ASCII (code 32-126): parseKey returns the char itself
+			if (keyId.length === 1 && keyId >= " " && keyId <= "~") {
+				this.editorText += keyId;
+				this.invalidate();
+				this.tui.requestRender();
+				return;
+			}
+			// Other special key (up/down/f1-f12/alt+x/ctrl+shift+right etc.) → no-op (不泄漏)
 			return;
 		}
-		if (matchesKey(data, "backspace")) {
-			this.editorText = this.editorText.slice(0, -1);
-			this.invalidate();
-			this.tui.requestRender();
-			return;
-		}
-		// Printable char(s) — handle both single keystrokes and multi-char paste.
-		// Terminals deliver pasted text as a single data chunk; iterating each char
-		// ensures the full paste is captured instead of silently dropping everything
-		// after the first character.
-		// 先剥离 bracketed paste 标记序列：启用该模式的终端会把粘贴内容包裹在
-		// \x1b[200~ ... \x1b[201~ 中。下面的 `c >= " "` 守卫会滤掉 ESC(\x1b)，
-		// 但序列里的可见字符（[200~/[201~）会残留混进编辑器文本，必须显式剥离。
+
+		// keyId === undefined → 多字符粘贴 chunk → printable 提取（BC-1/BC-2/BC-3 保持）
 		const cleaned = data.replace(/\x1b\[200~|\x1b\[201~/g, "");
-		// for...of 按 code point 迭代：代理对（如 😀 U+1F600）作为一个 c（length===2）出现，
-		// 因此不能用 `c.length === 1` 守卫——那会把所有 BMP 之外的字符（emoji、部分 CJK 扩展）全过滤。
-		// 只保留 `c >= " "`（code point 比较），过滤控制字符（< 空格 U+0020）。
 		let changed = false;
 		for (const c of cleaned) {
 			if (c >= " ") {

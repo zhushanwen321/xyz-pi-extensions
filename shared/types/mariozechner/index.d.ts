@@ -234,6 +234,7 @@ declare module "@mariozechner/pi-tui" {
 		wantsKeyRelease?: boolean;
 	}
 	export function matchesKey(key: any, binding: any): boolean;
+	export function parseKey(data: string): string | undefined;
 	export function truncateToWidth(text: string, maxWidth: number, ellipsis?: string, pad?: boolean): string; // signature mirrored from @mariozechner/pi-tui@>=0.78
 	export function wrapTextWithAnsi(text: string, width: number): string[];
 	export function visibleWidth(str: string): number;
