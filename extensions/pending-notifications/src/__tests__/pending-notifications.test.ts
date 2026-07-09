@@ -48,10 +48,12 @@ function createMockPi(): MockSetup {
 	};
 	const appendEntryMock = vi.fn();
 	const registerToolMock = vi.fn();
+	const sendMessageMock = vi.fn();
 
 	const pi = {
 		appendEntry: appendEntryMock,
 		registerTool: registerToolMock,
+		sendMessage: sendMessageMock,
 		on: vi.fn((event: string, handler: (event: unknown, ctx: ExtensionContext) => void | Promise<void>) => {
 			if (event === "session_start") handlers.sessionStart = handler;
 			if (event === "session_shutdown") handlers.sessionShutdown = handler;

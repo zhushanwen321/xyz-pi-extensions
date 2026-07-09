@@ -85,6 +85,14 @@ export default function pendingNotificationsExtension(pi: ExtensionAPI): void {
 			expiresAt: entry.expiresAt,
 			sessionId: entry.sessionId,
 		});
+
+		// [DEBUG] 注册成功时往 TUI 输出可见提示，便于验证 EventBus → entry 链路
+		// display:true 让 TUI 渲染，不传 triggerTurn 故不唤醒 agent turn
+		pi.sendMessage({
+			customType: "pending-debug",
+			content: `[pending-notifications] registered [${entry.type}] ${entry.name} (id=${entry.id})`,
+			display: true,
+		});
 	});
 
 	// ── EventBus 监听：pending:unregister ───────────────────
@@ -100,6 +108,13 @@ export default function pendingNotificationsExtension(pi: ExtensionAPI): void {
 			id: parsed.id,
 			reason: parsed.reason,
 			status,
+		});
+
+		// [DEBUG] 注销时往 TUI 输出可见提示
+		pi.sendMessage({
+			customType: "pending-debug",
+			content: `[pending-notifications] unregistered ${parsed.id} (reason=${parsed.reason})`,
+			display: true,
 		});
 	});
 
