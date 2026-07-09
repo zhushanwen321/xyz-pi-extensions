@@ -1,0 +1,710 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>修复 ask-user 方向键泄漏 + 键码路由重构 — 需求澄清</title>
+<style>
+  :root {
+    --bg: #fafaf7;
+    --bg-elev: #ffffff;
+    --fg: #1f2937;
+    --fg-dim: #6b7280;
+    --border: #e5e7eb;
+    --accent: #0d9488;
+    --accent-soft: #ccfbf1;
+    --warn: #c2410c;
+    --warn-soft: #fed7aa;
+    --code-bg: #f3f4f6;
+    --code-fg: #111827;
+    --shadow: 0 1px 2px rgba(0,0,0,0.04), 0 4px 12px rgba(0,0,0,0.06);
+    --font-body: "Source Han Serif SC", "Noto Serif CJK SC", "Songti SC", Georgia, serif;
+    --font-mono: "JetBrains Mono", "SF Mono", "Menlo", monospace;
+    --font-head: "Source Han Sans SC", "Noto Sans CJK SC", "PingFang SC", "Helvetica Neue", sans-serif;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #0f1115;
+      --bg-elev: #181b22;
+      --fg: #e5e7eb;
+      --fg-dim: #9ca3af;
+      --border: #2a2f3a;
+      --accent: #2dd4bf;
+      --accent-soft: #134e4a;
+      --warn: #fb923c;
+      --warn-soft: #7c2d12;
+      --code-bg: #1a1d24;
+      --code-fg: #e5e7eb;
+      --shadow: 0 1px 2px rgba(0,0,0,0.3), 0 4px 12px rgba(0,0,0,0.4);
+    }
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; padding: 0; }
+  body {
+    background: var(--bg);
+    color: var(--fg);
+    font-family: var(--font-body);
+    font-size: 16px;
+    line-height: 1.75;
+    -webkit-font-smoothing: antialiased;
+  }
+  .page { max-width: 980px; margin: 0 auto; padding: 48px 32px 96px; }
+
+  /* Header */
+  .header {
+    background: var(--bg-elev);
+    border: 1px solid var(--border);
+    border-left: 4px solid var(--accent);
+    border-radius: 8px;
+    padding: 28px 32px;
+    margin-bottom: 32px;
+    box-shadow: var(--shadow);
+  }
+  .header .eyebrow {
+    font-family: var(--font-head);
+    font-size: 12px;
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+    color: var(--accent);
+    font-weight: 600;
+    margin-bottom: 8px;
+  }
+  .header h1 {
+    font-family: var(--font-head);
+    font-size: 28px;
+    font-weight: 700;
+    margin: 0 0 12px 0;
+    line-height: 1.3;
+  }
+  .header .meta {
+    font-size: 13px;
+    color: var(--fg-dim);
+    font-family: var(--font-mono);
+  }
+  .header .meta span { margin-right: 16px; }
+
+  /* TL;DR */
+  .tldr {
+    background: var(--accent-soft);
+    border-radius: 8px;
+    padding: 18px 24px;
+    margin-bottom: 32px;
+    border-left: 3px solid var(--accent);
+  }
+  .tldr .tldr-label {
+    font-family: var(--font-head);
+    font-size: 12px;
+    font-weight: 700;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    color: var(--accent);
+    margin-bottom: 8px;
+  }
+  .tldr ul { margin: 0; padding-left: 20px; }
+  .tldr li { margin-bottom: 4px; }
+
+  /* Hero diagram */
+  .hero {
+    background: var(--bg-elev);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 24px;
+    margin-bottom: 40px;
+    box-shadow: var(--shadow);
+  }
+  .hero .hero-label {
+    font-family: var(--font-head);
+    font-size: 12px;
+    font-weight: 700;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    color: var(--fg-dim);
+    margin-bottom: 12px;
+  }
+  .hero .hero-title {
+    font-family: var(--font-head);
+    font-size: 18px;
+    font-weight: 600;
+    margin-bottom: 16px;
+    color: var(--fg);
+  }
+  .mermaid-wrap {
+    background: var(--bg);
+    border-radius: 6px;
+    padding: 24px;
+    overflow-x: auto;
+    min-width: 0;
+  }
+  .mermaid { text-align: center; }
+
+  /* TOC */
+  .toc {
+    background: var(--bg-elev);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 20px 28px;
+    margin-bottom: 40px;
+    position: sticky;
+    top: 16px;
+    box-shadow: var(--shadow);
+  }
+  .toc .toc-label {
+    font-family: var(--font-head);
+    font-size: 12px;
+    font-weight: 700;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    color: var(--fg-dim);
+    margin-bottom: 10px;
+  }
+  .toc ol {
+    margin: 0;
+    padding-left: 20px;
+    columns: 2;
+    column-gap: 32px;
+  }
+  .toc li { margin-bottom: 4px; font-size: 14px; }
+  .toc a {
+    color: var(--accent);
+    text-decoration: none;
+    font-family: var(--font-head);
+  }
+  .toc a:hover { text-decoration: underline; }
+
+  /* Sections */
+  section {
+    margin-bottom: 48px;
+    scroll-margin-top: 24px;
+  }
+  h2 {
+    font-family: var(--font-head);
+    font-size: 22px;
+    font-weight: 700;
+    margin: 0 0 20px 0;
+    padding-bottom: 10px;
+    border-bottom: 2px solid var(--accent);
+    color: var(--fg);
+  }
+  h3 {
+    font-family: var(--font-head);
+    font-size: 17px;
+    font-weight: 600;
+    margin: 28px 0 12px 0;
+    color: var(--fg);
+  }
+  h4 {
+    font-family: var(--font-head);
+    font-size: 15px;
+    font-weight: 600;
+    margin: 20px 0 8px 0;
+    color: var(--fg);
+  }
+  p { margin: 0 0 12px 0; }
+  ul, ol { padding-left: 24px; }
+  li { margin-bottom: 6px; }
+
+  /* Tables */
+  table {
+    width: 100%;
+    border-collapse: collapse;
+    margin: 16px 0;
+    font-size: 14px;
+    font-family: var(--font-head);
+    background: var(--bg-elev);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    overflow: hidden;
+  }
+  th {
+    background: var(--accent-soft);
+    color: var(--fg);
+    text-align: left;
+    padding: 10px 14px;
+    font-weight: 600;
+    border-bottom: 1px solid var(--border);
+  }
+  td {
+    padding: 10px 14px;
+    border-bottom: 1px solid var(--border);
+    vertical-align: top;
+  }
+  tr:last-child td { border-bottom: none; }
+  tr:nth-child(even) td { background: var(--bg); }
+  @media (prefers-color-scheme: dark) {
+    tr:nth-child(even) td { background: rgba(255,255,255,0.02); }
+  }
+
+  /* Code */
+  code {
+    font-family: var(--font-mono);
+    font-size: 0.88em;
+    background: var(--code-bg);
+    color: var(--code-fg);
+    padding: 2px 6px;
+    border-radius: 4px;
+  }
+  pre {
+    background: var(--code-bg);
+    color: var(--code-fg);
+    padding: 16px 20px;
+    border-radius: 6px;
+    overflow-x: auto;
+    font-family: var(--font-mono);
+    font-size: 13px;
+    line-height: 1.6;
+    border: 1px solid var(--border);
+  }
+  pre code { background: none; padding: 0; }
+
+  /* UC card */
+  .uc-card {
+    background: var(--bg-elev);
+    border: 1px solid var(--border);
+    border-left: 3px solid var(--accent);
+    border-radius: 6px;
+    padding: 20px 24px;
+    margin: 20px 0;
+    box-shadow: var(--shadow);
+  }
+  .uc-card .uc-id {
+    font-family: var(--font-head);
+    font-size: 13px;
+    font-weight: 700;
+    color: var(--accent);
+    letter-spacing: 0.05em;
+  }
+  .uc-card h3 {
+    margin-top: 4px;
+    border: none;
+    padding: 0;
+  }
+  .uc-card dl {
+    display: grid;
+    grid-template-columns: 110px 1fr;
+    gap: 6px 16px;
+    margin: 12px 0;
+    font-size: 14px;
+    font-family: var(--font-head);
+  }
+  .uc-card dt {
+    color: var(--fg-dim);
+    font-weight: 600;
+  }
+  .uc-card dd { margin: 0; }
+  .ac-list {
+    margin-top: 12px;
+    padding-left: 20px;
+  }
+  .ac-list li { font-size: 14px; margin-bottom: 8px; }
+  .ac-tag {
+    display: inline-block;
+    font-family: var(--font-mono);
+    font-size: 11px;
+    font-weight: 600;
+    padding: 1px 7px;
+    border-radius: 10px;
+    margin-right: 6px;
+    vertical-align: middle;
+  }
+  .ac-normal { background: var(--accent-soft); color: var(--accent); }
+  .ac-boundary { background: var(--warn-soft); color: var(--warn); }
+  .ac-regress { background: #ede9fe; color: #6d28d9; }
+  @media (prefers-color-scheme: dark) {
+    .ac-regress { background: #3b0764; color: #c4b5fd; }
+  }
+
+  .callout {
+    background: var(--bg-elev);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 14px 20px;
+    margin: 16px 0;
+    font-size: 14px;
+    color: var(--fg-dim);
+    font-style: italic;
+  }
+
+  hr { border: none; border-top: 1px solid var(--border); margin: 32px 0; }
+
+  .footer {
+    margin-top: 64px;
+    padding-top: 24px;
+    border-top: 1px solid var(--border);
+    font-size: 13px;
+    color: var(--fg-dim);
+    font-family: var(--font-mono);
+    text-align: center;
+  }
+</style>
+</head>
+<body>
+<div class="page">
+
+  <header class="header">
+    <div class="eyebrow">Step 1 · 需求澄清 (Requirements)</div>
+    <h1>修复 ask-user 方向键泄漏 + 键码路由重构</h1>
+    <div class="meta">
+      <span>verdict: pass</span>
+      <span>topic: fix-ask-user-arrow-leak</span>
+    </div>
+  </header>
+
+  <div class="tldr">
+    <div class="tldr-label">TL;DR · 核心结论</div>
+    <ul>
+      <li><b>核心 bug</b>：freeform/comment 编辑器内按方向键/功能键，键码（<code>[</code>/<code>C</code>/<code>~</code>）泄漏成可见文本</li>
+      <li><b>根因</b>：缺失输入解析层，原始终端字节流直接灌进状态机，未被识别的键码被当文本追加</li>
+      <li><b>修复策略</b>：复用 SDK <code>parseKey</code> 构建「先 parse 再 route」白名单架构，<code>editorText</code> 迁移到 <code>QuestionState.draftText</code></li>
+      <li><b>范围</b>：4 目标 / 4 用例 / 5 功能，现有 180 个测试不得回归</li>
+      <li><b>不做</b>：光标自由移动编辑、多行编辑器、自建终端键码解析</li>
+    </ul>
+  </div>
+
+  <div class="hero">
+    <div class="hero-label">Hero 图 · 用例图</div>
+    <div class="hero-title">Actor × 用例 × 系统边界</div>
+    <div class="mermaid-wrap">
+      <pre class="mermaid">
+graph LR
+  User((用户))
+  User --> UC1[在编辑器输入文本]
+  User --> UC2[在编辑器按方向键/功能键]
+  User --> UC3[跨问题切换并保持草稿]
+  User --> UC4[阅读编辑器操作提示]
+  subgraph ask-user 编辑器
+    UC1
+    UC2
+    UC3
+    UC4
+  end
+      </pre>
+    </div>
+  </div>
+
+  <nav class="toc">
+    <div class="toc-label">目录</div>
+    <ol>
+      <li><a href="#s1">业务目标</a></li>
+      <li><a href="#s2">业务用例</a></li>
+      <li><a href="#s3">数据流转</a></li>
+      <li><a href="#s4">功能清单</a></li>
+      <li><a href="#s5">UI/UX 场景</a></li>
+      <li><a href="#s6">系统间功能关联</a></li>
+      <li><a href="#s7">约束</a></li>
+      <li><a href="#s8">不做</a></li>
+      <li><a href="#s9">决策记录</a></li>
+    </ol>
+  </nav>
+
+  <section id="s1">
+    <h2>1. 业务目标（Business Goals）</h2>
+
+    <h3>目标树</h3>
+    <ul>
+      <li><b>G1: 消除编辑器键码泄漏</b> — 成功标准：在 freeform/comment 编辑器内按任意方向键/功能键，editorText 不出现 <code>[</code>/<code>A</code>/<code>B</code>/<code>C</code>/<code>D</code>/<code>~</code> 等键码可见字符残留（回归测试 C-ARROW-* + C-KEYMAP-* 全绿）
+        <ul>
+          <li>G1.1: 覆盖全部 special key（SDK parseKey 可识别范围：含 up/down/left/right/home/end/delete/insert/pageUp/pageDown/f1-f12 等，但编辑器内 enter/escape/backspace/tab 有专门语义非 no-op），而非仅方向键</li>
+          <li>G1.2: 覆盖 modifier 组合键（alt+x / ctrl+shift+arrow 等）——SDK parseKey 已处理，ask-user 不自建</li>
+        </ul>
+      </li>
+      <li><b>G2: 键码解析架构归位</b> — 成功标准：输入路由从「黑名单逐键过滤」重构为「先 parse 再 route」的白名单架构，新键种不再因「某模式忘了处理」而泄漏
+        <ul>
+          <li>G2.1: 复用 SDK <code>@mariozechner/pi-tui</code> 的 <code>parseKey(data)</code> 构建编辑器路由层（parseKey 已覆盖全部 special + modifier + 三套终端协议，不自建）</li>
+          <li>G2.2: 三个模式（options/freeform/comment）的输入路由基于结构化事件分发，消除内联 <code>matchesKey</code> 散调</li>
+        </ul>
+      </li>
+      <li><b>G3: editorText 状态归属归位</b> — 成功标准：editorText 从组件级单实例迁移到 <code>QuestionState</code>，消除「单实例 + 进入编辑器时重赋值」的隐式不变式
+        <ul>
+          <li>G3.1: <code>QuestionState</code> 新增 <code>draftText</code> 字段，每问题独立持有编辑草稿</li>
+          <li>G3.2: 进入编辑器时预填逻辑改为读 <code>state.draftText</code>（<b>分流预填</b>：freeform 入口 <code>draftText = freeTextValue ?? ""</code>，comment 入口 <code>draftText = commentValue ?? ""</code>），移除组件级 <code>editorText</code>。渲染层 question-view.ts 的 <code>renderQuestionView</code>/<code>buildOptionLines</code>/<code>buildSplitPane</code>/<code>buildEditorBlock</code> 参数链改为从 <code>state.draftText</code> 传入</li>
+        </ul>
+      </li>
+      <li><b>G4: 编辑器 UX 可发现性</b> — 成功标准：用户在编辑器内能看到操作提示，知道编辑器是 append-only（方向键无效、Backspace 删末尾、Enter 提交）</li>
+    </ul>
+
+    <h3>达成路线</h3>
+    <table>
+      <thead><tr><th>目标</th><th>路线/策略</th><th>对应用例</th></tr></thead>
+      <tbody>
+        <tr><td>G1</td><td>在编辑器 printable 分支前统一消费功能键</td><td>UC-1</td></tr>
+        <tr><td>G2</td><td>引入 parseKey + routeKey 分层</td><td>UC-2</td></tr>
+        <tr><td>G3</td><td>editorText → QuestionState.draftText 迁移</td><td>UC-3</td></tr>
+        <tr><td>G4</td><td>编辑器底部加 dim 提示行</td><td>UC-4</td></tr>
+      </tbody>
+    </table>
+  </section>
+
+  <section id="s2">
+    <h2>2. 业务用例（Use Cases）</h2>
+
+    <h3>用例图</h3>
+    <div class="mermaid-wrap">
+      <pre class="mermaid">
+graph LR
+  User((用户))
+  User --> UC1[在编辑器输入文本]
+  User --> UC2[在编辑器按方向键/功能键]
+  User --> UC3[跨问题切换并保持草稿]
+  User --> UC4[阅读编辑器操作提示]
+  subgraph ask-user 编辑器
+    UC1
+    UC2
+    UC3
+    UC4
+  end
+      </pre>
+    </div>
+
+    <div class="uc-card">
+      <div class="uc-id">UC-1</div>
+      <h3>在 freeform/comment 编辑器输入文本</h3>
+      <dl>
+        <dt>Actor</dt><dd>终端用户</dd>
+        <dt>前置条件</dt><dd>已打开 Other freeform 编辑器 或 comment 输入行（mode=freeform/comment）</dd>
+        <dt>主流程</dt><dd>1. 用户按可打印字符键 2. 字符追加到 editorText 末尾 3. 视图刷新显示新文本 + 光标 █</dd>
+        <dt>替代流程</dt><dd>用户粘贴多字符 chunk（含/不含 bracketed paste 标记、含/不含 emoji）→ 按 code point 迭代完整捕获</dd>
+        <dt>异常流程</dt><dd>无</dd>
+        <dt>后置状态</dt><dd>editorText 含用户输入的全部可打印字符</dd>
+        <dt>关联目标</dt><dd>G1（不退化）、G3（draftText 正确读写）</dd>
+      </dl>
+      <div class="ac-label"><b>验收标准 (AC)</b></div>
+      <ul class="ac-list">
+        <li><span class="ac-tag ac-normal">AC-1.1 正常</span>单字符输入、多字符粘贴、emoji 粘贴行为与现状等价（现有 C-PASTE-1~7 全绿）</li>
+        <li><span class="ac-tag ac-boundary">AC-1.2 边界</span>空字符串输入是 no-op（C-PASTE-4 保持）</li>
+        <li><span class="ac-tag ac-regress">AC-1.3 回归</span>refactor 后现有 180 个测试全绿</li>
+      </ul>
+    </div>
+
+    <div class="uc-card">
+      <div class="uc-id">UC-2 · 核心修复</div>
+      <h3>在编辑器按方向键/功能键</h3>
+      <dl>
+        <dt>Actor</dt><dd>终端用户</dd>
+        <dt>前置条件</dt><dd>已打开 freeform/comment 编辑器</dd>
+        <dt>主流程</dt><dd>1. 用户按方向键（↑↓←→）/功能键（Home/End/Delete/Insert/PageUp/PageDown/F1-F12） 2. 键被解析为 special key 事件 3. 编辑器 no-op 消费（append-only 编辑器不支持光标移动） 4. editorText 不变</dd>
+        <dt>替代流程</dt><dd>用户按 modifier 组合键（alt+x 等）→ 解析为带 modifier 的 special 事件 → 编辑器 no-op，不泄漏 modifier 后的可打印字符</dd>
+        <dt>异常流程</dt><dd>无</dd>
+        <dt>后置状态</dt><dd>editorText 无键码残留</dd>
+        <dt>关联目标</dt><dd>G1、G2</dd>
+      </dl>
+      <div class="ac-label"><b>验收标准 (AC)</b></div>
+      <ul class="ac-list">
+        <li><span class="ac-tag ac-normal">AC-2.1 正常</span>连按 3 次右箭头，editorText 不含 <code>[</code>/<code>C</code>（C-ARROW-1）</li>
+        <li><span class="ac-tag ac-normal">AC-2.2 正常</span>连按 4 个方向键（↑↓←→各一次），中间夹输入 a/b，editorText === "ab"（C-ARROW-1 扩展）</li>
+        <li><span class="ac-tag ac-boundary">AC-2.3 边界</span>special key 分两类——<b>no-op 集合</b>（home/end/insert/pageUp/pageDown/f1-f12，编辑器内静默不响应）与<b>有专门语义键</b>（escape=退出/enter=提交/backspace=删尾，各有对应 AC）。no-op 集合遍历断言 editorText 不变。不含 enter/escape/backspace/tab（它们非 no-op）</li>
+        <li><span class="ac-tag ac-boundary">AC-2.4 边界</span>modifier 组合（alt+x / ctrl+shift+arrow）在编辑器内不泄漏可见字符（C-KEYMAP-MOD）。采样矩阵：4 modifier（ctrl/alt/shift/super）各单独 × {up/down/left/right} + 2-modifier 组合（ctrl+shift/ctrl+alt/shift+alt）× {up/down}，约 18 个用例。修复后 parseKey(data) 对 alt+x 返回 "alt+x" keyId → 命中 special 分支 no-op，不进 printable 追加</li>
+      </ul>
+    </div>
+
+    <div class="uc-card">
+      <div class="uc-id">UC-3</div>
+      <h3>跨问题切换并保持/丢弃草稿</h3>
+      <dl>
+        <dt>Actor</dt><dd>终端用户（多问题场景）</dd>
+        <dt>前置条件</dt><dd>多问题表单，用户在某问题的 freeform 编辑器输入了草稿</dd>
+        <dt>主流程</dt><dd>1. 用户在 Q1 freeform 输入 "abc" 2. 按 ←/→ 切到 Q2（<b>现状：freeform 模式下方向键泄漏成文本，是本次修复的 bug；修复后方向键在编辑器内 no-op，用户需 Esc 先退出编辑器才能切 tab</b>）3. 回到 Q1 重新进 freeform → 草稿 "abc" 仍存在（state.draftText 持久）</dd>
+        <dt>替代流程</dt><dd>用户 Esc 退出 freeform → 切 tab → 回来重进，editorText 预填上次未提交内容（与现状行为等价）</dd>
+        <dt>异常流程</dt><dd>无</dd>
+        <dt>后置状态</dt><dd>每问题的草稿独立、互不污染</dd>
+        <dt>关联目标</dt><dd>G3</dd>
+      </dl>
+      <div class="ac-label"><b>验收标准 (AC)</b></div>
+      <ul class="ac-list">
+        <li><span class="ac-tag ac-normal">AC-3.1 正常</span>Q1 freeform 草稿 + 切走再回来，draftText 恢复（C-DRAFT-1）</li>
+        <li><span class="ac-tag ac-boundary">AC-3.2 边界</span>Q1 和 Q3 各有草稿，互相独立（C-DRAFT-2）</li>
+      </ul>
+    </div>
+
+    <div class="uc-card">
+      <div class="uc-id">UC-4</div>
+      <h3>阅读编辑器操作提示</h3>
+      <dl>
+        <dt>Actor</dt><dd>终端用户</dd>
+        <dt>前置条件</dt><dd>已打开 freeform/comment 编辑器</dd>
+        <dt>主流程</dt><dd>1. 编辑器渲染时底部显示 dim 提示行 2. 用户读到 "Type to add · Backspace deletes · Enter submit · Esc back" 3. 用户理解编辑器是 append-only，不会困惑方向键无效</dd>
+        <dt>替代流程</dt><dd>无</dd>
+        <dt>异常流程</dt><dd>无</dd>
+        <dt>后置状态</dt><dd>用户知道可用操作</dd>
+        <dt>关联目标</dt><dd>G4</dd>
+      </dl>
+      <div class="ac-label"><b>验收标准 (AC)</b></div>
+      <ul class="ac-list">
+        <li><span class="ac-tag ac-normal">AC-4.1 正常</span>freeform 编辑器渲染含提示行（C-HINT-1）</li>
+        <li><span class="ac-tag ac-normal">AC-4.2 正常</span>comment 编辑器渲染含提示行（现有行为，保持）</li>
+      </ul>
+    </div>
+  </section>
+
+  <section id="s3">
+    <h2>3. 数据流转（Data Flow）</h2>
+
+    <h3>数据流图</h3>
+    <div class="mermaid-wrap">
+      <pre class="mermaid">
+graph LR
+  Terminal[终端按键 data] -->|raw string| Parse[parseKey 解析层]
+  Parse -->|KeyPressedEvent| Route[routeInput 路由层]
+  Route -->|mode=options| OptionsHandler[handleOptionsInput]
+  Route -->|mode=freeform/comment| EditorHandler[handleEditorInput]
+  Route -->|Submit tab| SubmitHandler[handleSubmitTabInput]
+  EditorHandler -->|printable| State1[QuestionState.draftText]
+  EditorHandler -->|special key| NoOp[no-op 消费]
+  OptionsHandler --> State2[QuestionState.cursorIndex/selected*]
+      </pre>
+    </div>
+
+    <h3>数据清单</h3>
+    <table>
+      <thead><tr><th>数据</th><th>来源</th><th>处理</th><th>消费者</th><th>归档策略</th><th>敏感级别</th></tr></thead>
+      <tbody>
+        <tr>
+          <td>data (按键序列)</td>
+          <td>终端</td>
+          <td>parseKey 解析为 KeyPressedEvent</td>
+          <td>routeInput</td>
+          <td>无（瞬时）</td>
+          <td>无</td>
+        </tr>
+        <tr>
+          <td>QuestionState.draftText</td>
+          <td>用户编辑器输入</td>
+          <td>append-only 追加/Backspace 删末尾</td>
+          <td>renderQuestionView 及其下游 build* 函数（component.ts + question-view.ts 跨文件参数链）</td>
+          <td>随 component 生命周期</td>
+          <td>用户输入（中，可能含粘贴敏感内容）</td>
+        </tr>
+      </tbody>
+    </table>
+  </section>
+
+  <section id="s4">
+    <h2>4. 功能清单（Features）</h2>
+    <table>
+      <thead><tr><th>编号</th><th>功能</th><th>对应用例</th><th>关联目标</th></tr></thead>
+      <tbody>
+        <tr><td>F1</td><td>编辑器功能键黑名单消费（短期）→ parseKey 白名单（长期）</td><td>UC-2</td><td>G1, G2</td></tr>
+        <tr><td>F2</td><td>parseKey + routeInput 架构分层</td><td>UC-2</td><td>G2</td></tr>
+        <tr><td>F3</td><td>editorText → QuestionState.draftText 迁移</td><td>UC-3</td><td>G3</td></tr>
+        <tr><td>F4</td><td>编辑器操作提示行</td><td>UC-4</td><td>G4</td></tr>
+        <tr><td>F5</td><td>键码完整性回归测试套件</td><td>UC-1, UC-2</td><td>G1</td></tr>
+      </tbody>
+    </table>
+  </section>
+
+  <section id="s5">
+    <h2>5. UI/UX 场景（Interface Scenarios）</h2>
+    <h3>交互流程</h3>
+    <p>编辑器内交互（freeform/comment）：</p>
+    <ul>
+      <li>输入文本 → 末尾追加</li>
+      <li>Backspace → 删末尾一个字符</li>
+      <li>Enter → 提交（freeform 保存 freeTextValue / comment 保存 commentValue）</li>
+      <li>Esc → 退出（freeform 丢弃 / comment 跳过评论）</li>
+      <li>方向键/Home/End/Delete/Insert/PageUp/PageDown/F1-F12 → <b>no-op</b>（append-only 不支持光标移动）</li>
+      <li>底部 dim 提示行告诉用户上述操作</li>
+    </ul>
+  </section>
+
+  <section id="s6">
+    <h2>6. 系统间功能关联（Cross-System）</h2>
+    <div class="callout">无外部系统依赖。ask-user 是进程内 TUI 组件，唯一外部交互是 pi-tui 的 <code>matchesKey</code> / <code>truncateToWidth</code> / <code>wrapTextWithAnsi</code> 等纯函数。</div>
+    <table>
+      <thead><tr><th>关联系统</th><th>依赖方向</th><th>交互方式</th><th>契约稳定性</th></tr></thead>
+      <tbody>
+        <tr>
+          <td><code>@mariozechner/pi-tui</code></td>
+          <td>ask-user → pi-tui</td>
+          <td>import 纯函数（matchesKey 等）</td>
+          <td>稳定（SDK 公共 API）</td>
+        </tr>
+      </tbody>
+    </table>
+  </section>
+
+  <section id="s7">
+    <h2>7. 约束（Constraints）</h2>
+    <ul>
+      <li><b>业务约束</b>: 无</li>
+      <li><b>技术约束</b>（仅记录不展开）:
+        <ul>
+          <li>必须复用 <code>@mariozechner/pi-tui</code> 的 <code>matchesKey</code>，不得自己解析终端转义序列</li>
+          <li>TypeScript 禁止 <code>any</code>，禁止绕过类型检查</li>
+          <li>现有 180 个测试不得回归（行为等价，除方向键泄漏修复外）</li>
+          <li>CLAUDE.md 规范：自定义 TUI 组件导航键用方向键，经 <code>matchesKey</code> 识别，禁止硬编码单一字节序列</li>
+        </ul>
+      </li>
+    </ul>
+  </section>
+
+  <section id="s8">
+    <h2>8. 不做（Out of Scope）</h2>
+    <ul>
+      <li><b>不做</b>光标自由移动编辑（Home/End/←/→ 移动光标到文本中间）——编辑器保持 append-only，方向键仅 no-op。若未来要支持，是独立 feature，不在本次范围</li>
+      <li><b>不做</b>多行编辑器——当前是 single-line append-only</li>
+      <li><b>不做</b> bracketed paste 跨 chunk 拆分的完美处理（边角情况，留待后续迭代）</li>
+      <li><b>不做</b> 选项 label 含逗号导致多选结果歧义的修复（边角情况，留待后续迭代）</li>
+      <li><b>不做</b> 自建终端键码解析逻辑（SDK <code>@mariozechner/pi-tui</code> 已导出 <code>parseKey</code>，直接复用；遵守 §7「不得自己解析终端转义序列」约束）</li>
+    </ul>
+  </section>
+
+  <section id="s9">
+    <h2>9. 决策记录</h2>
+    <div class="callout">batch-ask 已完成，全部决策已纳入。见 decisions.md D-001~D-004。</div>
+    <table>
+      <thead><tr><th>ID</th><th>类型</th><th>决策</th><th>confirmed_by</th></tr></thead>
+      <tbody>
+        <tr>
+          <td>D-001</td>
+          <td>D-不可逆</td>
+          <td>修复范围=架构重构（parseKey 白名单 + draftText 归位 + handleInput 拆分）。根因是缺失解析层；黑名单只堵症状。</td>
+          <td>ask_user</td>
+        </tr>
+        <tr>
+          <td>D-002</td>
+          <td>D-不可逆</td>
+          <td>parseKey 覆盖 modifier 组合键（alt+x 等）。matchesKey 已支持；不覆盖则 alt+x 泄漏 x。</td>
+          <td>ask_user</td>
+        </tr>
+        <tr>
+          <td>D-003</td>
+          <td>K</td>
+          <td>用户确认 Q2 必须覆盖 modifier，按潜在风险处理。</td>
+          <td>ask_user</td>
+        </tr>
+        <tr>
+          <td>D-004</td>
+          <td>D-不可逆</td>
+          <td>handleInput 搭便车拆分。~80 行踩行数上限边缘；与路由归位契合。</td>
+          <td>ask_user</td>
+        </tr>
+      </tbody>
+    </table>
+  </section>
+
+  <div class="footer">
+    fix-ask-user-arrow-leak · requirements.html · 渲染自 requirements.md
+  </div>
+
+</div>
+
+<script type="module">
+  import mermaid from "https://cdn.jsdelivr.net/npm/mermaid@10/dist/mermaid.esm.min.mjs";
+  const isDark = window.matchMedia("(prefers-color-scheme: dark)").matches;
+  mermaid.initialize({
+    startOnLoad: true,
+    theme: "base",
+    themeVariables: {
+      primaryColor: isDark ? "#134e4a" : "#ccfbf1",
+      primaryTextColor: isDark ? "#e5e7eb" : "#1f2937",
+      primaryBorderColor: isDark ? "#2dd4bf" : "#0d9488",
+      lineColor: isDark ? "#9ca3af" : "#6b7280",
+      secondaryColor: isDark ? "#181b22" : "#ffffff",
+      tertiaryColor: isDark ? "#0f1115" : "#fafaf7",
+      fontFamily: '"Source Han Sans SC", "PingFang SC", "Helvetica Neue", sans-serif',
+      fontSize: "14px",
+    },
+    flowchart: { curve: "basis", htmlLabels: true, useMaxWidth: true },
+  });
+</script>
+</body>
+</html>

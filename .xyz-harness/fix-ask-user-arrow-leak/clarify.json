@@ -1,0 +1,8 @@
+{
+  "format": "mid-clarify",
+  "objective": "修复 ask-user 编辑器方向键泄漏乱码（[D[D[D）的 bug，并将键码解析与输入路由重构为白名单架构（复用 SDK parseKey）；同步修复 editorText 归属（迁移到 QuestionState.draftText）、功能键覆盖盲区、UX 提示缺失等架构层面问题。产出 requirements.md + system-architecture.md。",
+  "deliverables": {
+    "requirements": "requirements.md",
+    "systemArchitecture": "system-architecture.md"
+  }
+}
