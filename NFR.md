@@ -60,3 +60,4 @@
 | ID | 风险 | 接受理由 | 监控方式 | 溯源 |
 |----|------|---------|---------|------|
 | RISK-1 | `todo` 扩展用模块级 `let todos`，多 session 时状态串 | 当前单 session 使用不会出问题 | 多 session 启用时重构为闭包内状态 | [from: 基建] |
+| RISK-2 | `handleEditorInput` fallback 守卫依赖 StdinBuffer 序列拆分假设（data 整体性） | StdinBuffer.extractCompleteSequences 源码确认混合输入 a+OSC+b 拆为三次 emit | 若 Pi 核心修改 StdinBuffer 拆分策略，回归测试 C-CSI-1~10 会红 | [from: fix-ask-user-unknown-csi-leak] |

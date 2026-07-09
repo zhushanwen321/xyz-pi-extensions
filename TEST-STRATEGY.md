@@ -39,6 +39,13 @@
 - **破坏后果**：用户输入丢失，体验倒退
 - **测试文件**：`extensions/ask-user/src/__tests__/w2-draft-hint.test.ts`
 
+### RB-3  [from: fix-ask-user-unknown-csi-leak]
+
+- **断言**：handleEditorInput fallback 分支投递 ESC 开头的未识别控制序列（OSC-BEL/OSC-ST/DA1/DA2/DCS/APC/SS3/unknown CSI/连续序列），editorText 不含任何控制序列可见残渣
+- **破坏即**：中（终端自发序列/OSC 响应/DA 响应在 ask_user 编辑器活跃时乱码渗入）
+- **关联约束**：RISK-2（StdinBuffer 序列拆分假设）
+- **测试文件**：`extensions/ask-user/src/__tests__/component-keymap.test.ts`（C-CSI-1~10 + C-CSI-R1~R7，17 条用例）
+
 ### {待沉淀 RB-N}  [from: {topic}]
 
 - **用例来源**：⑥验收清单 {ID}

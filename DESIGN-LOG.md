@@ -29,4 +29,6 @@
 | ADR-002 | Goal 7 态状态机 | accepted |
 | ADR-003 | Goal 强制任务分解 + evidence | accepted |
 
+| fix-ask-user-unknown-csi-leak | 2026-07-09 | archived | ESC 开头硬守卫拦截未知控制序列泄漏 + 9 类形态 17 条回归测试 | 271 tests passed |
+
 > 完整 ADR 清单见 [docs/adr/](./docs/adr/)。
