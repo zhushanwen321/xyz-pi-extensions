@@ -22,6 +22,13 @@ export const RIGHT = "\x1b[C";
 export const LEFT = "\x1b[D";
 export const TAB = "\t";
 export const BKSP = "\x7f";
+export const HOME = "\x1b[H";
+export const END = "\x1b[F";
+export const INSERT = "\x1b[2~";
+export const PGUP = "\x1b[5~";
+export const PGDN = "\x1b[6~";
+export const F1 = "\x1bOP";
+export const DELETE = "\x1b[3~";
 
 // ── Sample questions ──
 export const singleQ: Question = {
