@@ -118,6 +118,11 @@ interface ViewState {
   saveInputValue: string;
   saveMessage: string;
   saveMsgOk: boolean;
+ // ── L0/L1 列表滚动 ──
+  /** 左侧 phase list 滚动 offset。 */
+  phaseScrollOffset: number;
+  /** 右侧 agent list 滚动 offset。 */
+  agentScrollOffset: number;
  // ── L2 详情滚动 ──
   /** 右侧 detail 当前滚动 offset（render 路径 clamp 收敛）。 */
   detailScrollOffset: number;
@@ -136,6 +141,8 @@ function createInitialState(): ViewState {
     saveInputValue: "",
     saveMessage: "",
     saveMsgOk: false,
+    phaseScrollOffset: 0,
+    agentScrollOffset: 0,
     detailScrollOffset: 0,
     followTail: true, // 默认钉底（对齐 subagents 进详情即底部对齐）
   };
@@ -178,8 +185,9 @@ export function createWorkflowsView(
     const cache = { width: undefined as number | undefined, lines: undefined as string[] | undefined };
     const requestRender = () => tui.requestRender();
 
- // ── 轮询 tick（缺陷 #1+#5 修复）：engine 无事件推送，view 自轮询 trace 变化 ──
- // 对齐 subagents list-view 的 setInterval 做法。TICK_MS=1s 对 trace 低频更新够用。
+ // ── 轮询 tick：engine 无事件推送，view 自轮询 trace 变化 ──
+ // 每 200ms 重绘，保证 header 动态数据（elapsed/tokens）实时更新。
+ // 行数固定后，diff-redraw 引擎能正确逐行对比，不会出现残影。
     const tick = setInterval(() => {
       if (state.disposed) return;
       cache.width = undefined;
@@ -265,8 +273,11 @@ export function createWorkflowsView(
         if (state.level === 0 && state.phaseIdx > 0) {
           state.phaseIdx--;
           state.agentIdx = 0;
+          state.phaseScrollOffset = 0; // 切 phase → 重置滚动
+          state.agentScrollOffset = 0; // 切 phase → 重置滚动
         } else if (state.level === 1 && state.agentIdx > 0) {
           state.agentIdx--;
+          // agentScrollOffset 由 renderLevel1 自动调整
         } else if (state.level === NAV_LEVEL_DETAIL && state.agentIdx > 0) {
           state.agentIdx--;
           state.promptExpanded = false;
@@ -282,10 +293,13 @@ export function createWorkflowsView(
           if (state.phaseIdx < live.length - 1) {
             state.phaseIdx++;
             state.agentIdx = 0;
+            state.phaseScrollOffset = 0; // 切 phase → 重置滚动
+            state.agentScrollOffset = 0; // 切 phase → 重置滚动
           }
         } else if (state.level === 1) {
           const agents = currentPhaseAgents();
           if (state.agentIdx < agents.length - 1) state.agentIdx++;
+          // agentScrollOffset 由 renderLevel1 自动调整
         } else if (state.level === NAV_LEVEL_DETAIL) {
           const agents = currentPhaseAgents();
           if (state.agentIdx < agents.length - 1) {
@@ -304,6 +318,7 @@ export function createWorkflowsView(
         if (state.level === 0 && currentPhaseAgents().length > 0) {
           state.level = 1;
           state.agentIdx = 0;
+          state.agentScrollOffset = 0; // 进 L1 → 重置滚动
         } else if (state.level === 1) {
           state.level = NAV_LEVEL_DETAIL;
           state.promptExpanded = false;
@@ -487,23 +502,20 @@ function renderLayout(
   const agents = phase?.nodes ?? [];
   const now = Date.now();
 
+ // 固定 body 高度，确保 renderLayout 始终返回固定行数
+  const viewH = Math.max(MIN_BODY_LINES, bodyHeight(screenHeight));
+
   const bodyStart = lines.length;
   if (state.level === 0) {
-    renderLevel0(lines, run, phaseGroups, state, theme, mainWidth, now);
+    renderLevel0(lines, run, phaseGroups, state, theme, mainWidth, now, viewH);
   } else if (state.level === 1) {
-    renderLevel1(lines, run, phaseGroups, state, theme, mainWidth, now);
+    renderLevel1(lines, run, phaseGroups, state, theme, mainWidth, now, viewH);
   } else {
     // L2 详情走固定高度 viewport（右侧滚动），高度 = minBody（与 L0/L1 最小一致）
-    const viewH = Math.max(MIN_BODY_LINES, bodyHeight(screenHeight));
     renderLevel2(lines, run, agents, state, theme, mainWidth, now, viewH);
   }
 
- // Pad body to min height（L2 已固定高度，此处对 L0/L1 补短）
-  const minBody = bodyHeight(screenHeight);
-  const emptyBodyLine = padVisible("", SIDEBAR_WIDTH) + "│" + padVisible("", mainWidth);
-  while (lines.length - bodyStart < minBody) {
-    lines.push(emptyBodyLine);
-  }
+ // Padding 已在各 renderLevel 内部处理，无需额外 padding
 
  // Wrap body lines with │ borders + sidebar divider
   for (let i = bodyStart; i < lines.length; i++) {
@@ -610,18 +622,42 @@ function renderLevel0(
   theme: ThemeLike,
   mainWidth: number,
   now: number,
+  bodyH: number,
 ): void {
   const leftLines: string[] = [];
   const rightLines: string[] = [];
 
- // Left: sidebar title + phase list
+ // Left: sidebar title + phase list（固定高度 viewport + 滚动）
   leftLines.push(theme.fg("muted", "Phases"));
   leftLines.push("─".repeat(SIDEBAR_WIDTH));
+ // phase list 内容行（不含 title 和 separator）
+  const phaseContentStart = leftLines.length;
   for (let i = 0; i < phases.length; i++) {
     leftLines.push(formatPhaseLine(phases[i], i, i === state.phaseIdx, theme, SIDEBAR_WIDTH));
   }
+ // 滚动：确保选中的 phase 在可视区域内
+  const phaseContentLines = leftLines.length - phaseContentStart;
+  const phaseViewportH = bodyH - phaseContentStart; // 可用视口高度
+  if (phaseContentLines > phaseViewportH) {
+    // 调整滚动偏移，确保选中项可见
+    const selectedOffset = state.phaseIdx;
+    if (selectedOffset < state.phaseScrollOffset) {
+      state.phaseScrollOffset = selectedOffset;
+    } else if (selectedOffset >= state.phaseScrollOffset + phaseViewportH) {
+      state.phaseScrollOffset = selectedOffset - phaseViewportH + 1;
+    }
+    // 截取可见区域
+    const visiblePhases = leftLines.slice(phaseContentStart + state.phaseScrollOffset, phaseContentStart + state.phaseScrollOffset + phaseViewportH);
+    leftLines.length = phaseContentStart;
+    leftLines.push(...visiblePhases);
+  }
+ // padding 到固定高度
+  while (leftLines.length < bodyH) {
+    leftLines.push("");
+  }
+  leftLines.length = bodyH;
 
- // Right: agents in the currently selected phase only
+ // Right: agents in the currently selected phase only（固定高度 viewport + 滚动）
   const selectedPhase = phases[state.phaseIdx] ?? phases[0];
   if (selectedPhase) {
     const title = selectedPhase.name
@@ -629,9 +665,36 @@ function renderLevel0(
       : `${selectedPhase.nodes.length} agents · ${formatElapsed(run.meta.startedAt, now)}`;
     rightLines.push(theme.fg("muted", title));
     rightLines.push("─".repeat(mainWidth));
+    // agent list 内容行
+    const agentContentStart = rightLines.length;
     for (const node of selectedPhase.nodes) {
       rightLines.push(formatAgentOneLiner(node, theme));
     }
+    // 滚动：确保选中的 agent 在可视区域内
+    const agentContentLines = rightLines.length - agentContentStart;
+    const agentViewportH = bodyH - agentContentStart; // 可用视口高度
+    if (agentContentLines > agentViewportH) {
+      const selectedOffset = state.agentIdx;
+      if (selectedOffset < state.agentScrollOffset) {
+        state.agentScrollOffset = selectedOffset;
+      } else if (selectedOffset >= state.agentScrollOffset + agentViewportH) {
+        state.agentScrollOffset = selectedOffset - agentViewportH + 1;
+      }
+      const visibleAgents = rightLines.slice(agentContentStart + state.agentScrollOffset, agentContentStart + state.agentScrollOffset + agentViewportH);
+      rightLines.length = agentContentStart;
+      rightLines.push(...visibleAgents);
+    }
+    // padding 到固定高度
+    while (rightLines.length < bodyH) {
+      rightLines.push("");
+    }
+    rightLines.length = bodyH;
+  } else {
+    // 没有 agent 时，padding 到固定高度
+    while (rightLines.length < bodyH) {
+      rightLines.push("");
+    }
+    rightLines.length = bodyH;
   }
 
   mergeBody(lines, leftLines, rightLines);
@@ -647,16 +710,38 @@ function renderLevel1(
   theme: ThemeLike,
   mainWidth: number,
   now: number,
+  bodyH: number,
 ): void {
   const leftLines: string[] = [];
   const rightLines: string[] = [];
 
+ // Left: sidebar title + phase list（固定高度 viewport + 滚动）
   leftLines.push(theme.fg("muted", "Phases"));
   leftLines.push("─".repeat(SIDEBAR_WIDTH));
+  const phaseContentStart = leftLines.length;
   for (let i = 0; i < phases.length; i++) {
     leftLines.push(formatPhaseLine(phases[i], i, i === state.phaseIdx, theme, SIDEBAR_WIDTH));
   }
+ // 滚动：确保选中的 phase 在可视区域内
+  const phaseContentLines = leftLines.length - phaseContentStart;
+  const phaseViewportH = bodyH - phaseContentStart;
+  if (phaseContentLines > phaseViewportH) {
+    const selectedOffset = state.phaseIdx;
+    if (selectedOffset < state.phaseScrollOffset) {
+      state.phaseScrollOffset = selectedOffset;
+    } else if (selectedOffset >= state.phaseScrollOffset + phaseViewportH) {
+      state.phaseScrollOffset = selectedOffset - phaseViewportH + 1;
+    }
+    const visiblePhases = leftLines.slice(phaseContentStart + state.phaseScrollOffset, phaseContentStart + state.phaseScrollOffset + phaseViewportH);
+    leftLines.length = phaseContentStart;
+    leftLines.push(...visiblePhases);
+  }
+  while (leftLines.length < bodyH) {
+    leftLines.push("");
+  }
+  leftLines.length = bodyH;
 
+ // Right: agent list（固定高度 viewport + 滚动）
   const currentPhase = phases[state.phaseIdx];
   const agents = currentPhase?.nodes ?? [];
   if (currentPhase) {
@@ -666,6 +751,7 @@ function renderLevel1(
     rightLines.push(theme.fg("muted", title));
     rightLines.push("─".repeat(mainWidth));
   }
+  const agentContentStart = rightLines.length;
   for (let i = 0; i < agents.length; i++) {
     const node = agents[i];
     const pointer = i === state.agentIdx ? "❯ " : "  ";
@@ -688,6 +774,24 @@ function renderLevel1(
       rightLines.push(`${pointer}${dot} ${node.agent}    ${node.model}    ${tokStr} · ${tcCount} tools · ${elapsed}`);
     }
   }
+ // 滚动：确保选中的 agent 在可视区域内
+  const agentContentLines = rightLines.length - agentContentStart;
+  const agentViewportH = bodyH - agentContentStart;
+  if (agentContentLines > agentViewportH) {
+    const selectedOffset = state.agentIdx;
+    if (selectedOffset < state.agentScrollOffset) {
+      state.agentScrollOffset = selectedOffset;
+    } else if (selectedOffset >= state.agentScrollOffset + agentViewportH) {
+      state.agentScrollOffset = selectedOffset - agentViewportH + 1;
+    }
+    const visibleAgents = rightLines.slice(agentContentStart + state.agentScrollOffset, agentContentStart + state.agentScrollOffset + agentViewportH);
+    rightLines.length = agentContentStart;
+    rightLines.push(...visibleAgents);
+  }
+  while (rightLines.length < bodyH) {
+    rightLines.push("");
+  }
+  rightLines.length = bodyH;
 
   mergeBody(lines, leftLines, rightLines);
 }

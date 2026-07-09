@@ -70,6 +70,8 @@ export interface WorkflowRunResult {
 export interface LauncherDeps extends LifecycleDeps {
  /** workflow 脚本仓库。 */
   registry: WorkflowScriptRegistry;
+ /** 可选事件总线（跨扩展 pending-notifications 注册/注销）。 */
+  eventBus?: { emit(channel: string, data: unknown): void };
 }
 
 // ── 内部 helper ──────────────────────────────────────────────
@@ -164,6 +166,13 @@ export async function runAndWait(
   const runId = await runWorkflow(spec, deps, signal);
   const deadline = Date.now() + timeoutMs;
 
+ // 4.1 pending-notifications：workflow 启动注册（runId 可追踪）
+  deps.eventBus?.emit("pending:register", {
+    id: runId,
+    type: "workflow",
+    name,
+  });
+
  // 5. 轮询至 done
   while (Date.now() < deadline) {
  // signal abort 检查
@@ -173,10 +182,18 @@ export async function runAndWait(
  // 直接返回（避免二次 safeAbort 写不同的 error message 造成非确定性）。
       const runBeforeAbort = deps.runs.get(runId);
       if (runBeforeAbort?.state.status === "done") {
+        deps.eventBus?.emit("pending:unregister", {
+          id: runId,
+          reason: runBeforeAbort.state.reason ?? "aborted",
+        });
         return toResult(runBeforeAbort);
       }
       await safeAbort(runId, deps, "Aborted by signal", "aborted");
       const run = deps.runs.get(runId);
+      deps.eventBus?.emit("pending:unregister", {
+        id: runId,
+        reason: "aborted",
+      });
       return run
         ? toResult(run)
         : { status: "done", reason: "aborted", error: "Aborted by signal", runId };
@@ -187,6 +204,10 @@ export async function runAndWait(
       return { status: "done", reason: "failed", error: "Run not found", runId };
     }
     if (run.state.status === "done") {
+      deps.eventBus?.emit("pending:unregister", {
+        id: runId,
+        reason: run.state.reason ?? "completed",
+      });
       return toResult(run);
     }
     await pollInterval();
@@ -196,10 +217,18 @@ export async function runAndWait(
  // 超时前 run 可能已被 signal/其他路径 abort 到 done —— 检查避免覆盖。
   const runBeforeTimeout = deps.runs.get(runId);
   if (runBeforeTimeout?.state.status === "done") {
+    deps.eventBus?.emit("pending:unregister", {
+      id: runId,
+      reason: runBeforeTimeout.state.reason ?? "completed",
+    });
     return toResult(runBeforeTimeout);
   }
   await safeAbort(runId, deps, `Workflow timed out after ${timeoutMs}ms`, "time_limited");
   const finalRun = deps.runs.get(runId);
+  deps.eventBus?.emit("pending:unregister", {
+    id: runId,
+    reason: "time_limited",
+  });
   return finalRun
     ? toResult(finalRun)
     : {

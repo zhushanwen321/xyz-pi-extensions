@@ -7,6 +7,16 @@ export function truncateToWidth(text: string, width: number): string {
   return text.slice(0, width);
 }
 
+/**
+ * Mock for pi-tui's visibleWidth.
+ * Simplified: strips ANSI CSI and OSC sequences, then returns .length.
+ * Real implementation handles CJK/emoji width; mock uses .length for simplicity.
+ */
+export function visibleWidth(str: string): number {
+  // Strip ANSI CSI sequences (\x1b[...m) and OSC sequences (\x1b]...\x07)
+  return str.replace(/\x1b\[[0-9;]*m/g, "").replace(/\x1b\][^\x07]*\x07/g, "").length;
+}
+
 /** Key constants — match real pi-tui terminal sequences.
  *  arrow/enter/escape/backspace 用原始转义序列（保持与既有测试/代码契约一致），
  *  home/end/pageUp/pageDown 同样用标准序列，供 matchesKey 解析。 */

@@ -269,3 +269,100 @@ describe("WorkflowRunResult D-8 签名", () => {
  // error 可空（failed 不强制 error，但 reason 区分了失败类型）
   });
 });
+
+// ── pending-notifications（W2 跨扩展集成）───────────────────
+
+describe("runAndWait pending-notifications", () => {
+  it("正常完成时 eventBus emit pending:register + pending:unregister", async () => {
+    const eventBus = { emit: vi.fn() };
+    const deps = makeDeps();
+    deps.eventBus = eventBus;
+    const result = await runAndWait("test-wf", {}, deps);
+
+ // 启动时注册
+    expect(eventBus.emit).toHaveBeenCalledWith("pending:register", expect.objectContaining({
+      type: "workflow",
+      name: "test-wf",
+    }));
+
+ // 完成时注销
+    expect(eventBus.emit).toHaveBeenCalledWith("pending:unregister", expect.objectContaining({
+      id: result.runId,
+      reason: "completed",
+    }));
+  });
+
+  it("脚本未找到时不 emit pending:register（无 runId）", async () => {
+    const eventBus = { emit: vi.fn() };
+    const deps = makeDeps();
+    deps.eventBus = eventBus;
+    deps.registry.get = vi.fn().mockResolvedValue(undefined);
+    await runAndWait("missing-wf", {}, deps);
+
+    expect(eventBus.emit).not.toHaveBeenCalled();
+  });
+
+  it("timeout 时 emit pending:unregister with reason=time_limited", async () => {
+    const eventBus = { emit: vi.fn() };
+    const deps = makeDeps({ completeAfterMs: 5000 });
+    deps.eventBus = eventBus;
+    vi.useFakeTimers();
+    try {
+      const p = runAndWait("test-wf", {}, deps, undefined, 100);
+      for (let i = 0; i < 20; i++) {
+        await vi.advanceTimersByTimeAsync(50);
+      }
+      await p;
+    } finally {
+      vi.useRealTimers();
+    }
+
+ // 启动时注册
+    expect(eventBus.emit).toHaveBeenCalledWith("pending:register", expect.objectContaining({
+      type: "workflow",
+      name: "test-wf",
+    }));
+
+ // 超时注销
+    expect(eventBus.emit).toHaveBeenCalledWith("pending:unregister", expect.objectContaining({
+      reason: "time_limited",
+    }));
+  });
+
+  it("signal abort 时 emit pending:unregister with reason=aborted", async () => {
+    const eventBus = { emit: vi.fn() };
+    const deps = makeDeps({ completeAfterMs: 5000 });
+    deps.eventBus = eventBus;
+    const controller = new AbortController();
+    vi.useFakeTimers();
+    try {
+      const p = runAndWait("test-wf", {}, deps, controller.signal, 5000);
+      await vi.advanceTimersByTimeAsync(50);
+      controller.abort();
+      for (let i = 0; i < 10; i++) {
+        await vi.advanceTimersByTimeAsync(50);
+      }
+      await p;
+    } finally {
+      vi.useRealTimers();
+    }
+
+ // 启动时注册
+    expect(eventBus.emit).toHaveBeenCalledWith("pending:register", expect.objectContaining({
+      type: "workflow",
+    }));
+
+ // abort 注销
+    expect(eventBus.emit).toHaveBeenCalledWith("pending:unregister", expect.objectContaining({
+      reason: expect.stringMatching(/abort|aborted/i),
+    }));
+  });
+
+  it("无 eventBus 时不报错（向后兼容）", async () => {
+    const deps = makeDeps();
+    // deps.eventBus 未设置
+    const result = await runAndWait("test-wf", {}, deps);
+    expect(result.status).toBe("done");
+    expect(result.reason).toBe("completed");
+  });
+});

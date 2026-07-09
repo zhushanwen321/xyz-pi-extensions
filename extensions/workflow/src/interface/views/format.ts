@@ -5,7 +5,7 @@
  * All functions are pure: no Pi runtime, no side effects.
  */
 
-import { truncateToWidth } from "@mariozechner/pi-tui";
+import { truncateToWidth, visibleWidth } from "@mariozechner/pi-tui";
 
 import type { AgentEventLogEntry } from "../../engine/live/types.js";
 import type { ExecutionTraceNode, ToolCallEntry } from "../../engine/models/types.js";
@@ -206,17 +206,18 @@ export function formatActivityLine(entry: ToolCallEntry, maxWidth: number): stri
 
 // ── ANSI helpers ──────────────────────────────────────────────
 
-/** Measure visible width of a string (strips ANSI escapes). */
+/** Measure visible width of a string (strips ANSI escapes, handles CJK/emoji).
+ *  Delegates to pi-tui's visibleWidth for accurate width calculation.
+ */
 export function visibleLen(s: string): number {
-   
-  return s.replace(/\x1b\[[0-9;]*m/g, "").replace(/\x1b\][^\x07]*\x07/g, "").length;
+  return visibleWidth(s);
 }
 
-/** Pad an ANSI-escaped string to a target *visible* width. */
+/** Pad an ANSI-escaped string to a target *visible* width.
+ *  Delegates to pi-tui's truncateToWidth with pad=true for accurate CJK/emoji handling.
+ */
 export function padVisible(s: string, width: number): string {
-  const vl = visibleLen(s);
-  if (vl >= width) return s;
-  return s + " ".repeat(width - vl);
+  return truncateToWidth(s, width, "", true);
 }
 
 // ── Phase group (filters empty phases) ────────────────────────

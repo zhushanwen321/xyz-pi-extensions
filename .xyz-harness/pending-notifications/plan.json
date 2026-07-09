@@ -1,0 +1,71 @@
+{
+  "format": "lite",
+  "objective": "创建 pending-notifications extension，实现跨 extension 的异步操作注册/查询机制，解决 workflow/subagent 运行时 goal 持续注入消息的悖论",
+  "waves": [
+    {
+      "id": "W1",
+      "changes": [
+        "extensions/pending-notifications/index.ts",
+        "extensions/pending-notifications/src/index.ts"
+      ],
+      "dependsOn": [],
+      "parallelGroup": null
+    },
+    {
+      "id": "W2",
+      "changes": [
+        "extensions/workflow/src/engine/launcher.ts",
+        "extensions/subagents/src/runtime/subagent-service.ts",
+        "extensions/goal/src/adapters/event-handlers/before-agent-start.ts"
+      ],
+      "dependsOn": ["W1"],
+      "parallelGroup": null
+    }
+  ],
+  "testCases": [
+    {
+      "id": "E1",
+      "layer": "mock",
+      "scenario": "Workflow 运行时 Goal 注入等待消息",
+      "steps": "1. 启动 goal 2. 调用 coding-workflow 3. 观察 goal 注入消息",
+      "expected": {
+        "text": "Waiting for async operations"
+      },
+      "executor": "vitest",
+      "requiresScreenshot": false
+    },
+    {
+      "id": "E1-r",
+      "layer": "real",
+      "scenario": "Workflow 运行时 Goal 注入等待消息（真实环境）",
+      "steps": "1. /goal Fix bug 2. 调用 workflow 3. 观察 TUI",
+      "expected": {
+        "text": "Waiting for async operations"
+      },
+      "executor": "manual",
+      "requiresScreenshot": true
+    },
+    {
+      "id": "E2",
+      "layer": "mock",
+      "scenario": "Workflow 完成后 Goal 恢复正常注入",
+      "steps": "1. workflow 完成 2. 观察 goal 注入消息",
+      "expected": {
+        "text": "GOAL mode activated"
+      },
+      "executor": "vitest",
+      "requiresScreenshot": false
+    },
+    {
+      "id": "E3",
+      "layer": "mock",
+      "scenario": "Pi 重启后自动清理 expired notifications",
+      "steps": "1. 触发 session_start 2. 检查 registry",
+      "expected": {
+        "text": "expired"
+      },
+      "executor": "vitest",
+      "requiresScreenshot": false
+    }
+  ]
+}

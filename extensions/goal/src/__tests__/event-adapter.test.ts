@@ -10,7 +10,7 @@
  * 用 fake pi + fake ctx（不 import Pi SDK）。handler 签名 (pi, session, ctx) → void/result。
  */
 import type { ExtensionAPI, ExtensionContext } from "@mariozechner/pi-coding-agent";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import { handleAgentEnd } from "../adapters/event-handlers/agent-end";
 import { handleBeforeAgentStart } from "../adapters/event-handlers/before-agent-start";
@@ -335,5 +335,76 @@ describe("handleBeforeAgentStart", () => {
 		const result = await handleBeforeAgentStart(pi, session, ctx);
 
 		expect(result).toBeUndefined();
+	});
+
+	// ── pending-notifications（W2 跨扩展集成）───────────────────
+
+	it("有活跃 pending operations → 注入提示含 pending 数量", async () => {
+		const { pi } = makeFakePi();
+		// 创建带 pending:register entries 的 ctx
+		const entries = [
+			{ customType: "pending:register", data: { id: "wf-1", type: "workflow", name: "test-wf" } },
+			{ customType: "pending:register", data: { id: "bg-1", type: "subagent", name: "worker" } },
+		];
+		const ctx = {
+			hasUI: true,
+			signal: { aborted: false } as AbortSignal,
+			getContextUsage: () => undefined,
+			ui: {
+				notify: vi.fn(),
+				setStatus: vi.fn(),
+				setWidget: vi.fn(),
+				theme: { fg: (_c: string, t: string) => t, bold: (t: string) => t },
+			},
+			sessionManager: { getEntries: () => entries, getBranch: () => undefined },
+		} as unknown as ExtensionContext;
+		const session = createGoalSession();
+		session.state = makeRunningState();
+
+		const result = await handleBeforeAgentStart(pi, session, ctx);
+
+		expect(result).toBeDefined();
+		expect(result!.message.customType).toBe("goal-context");
+		expect(result!.message.content).toContain("2 pending async operation(s)");
+	});
+
+	it("有 pending register 但已 unregister → 不注入提示", async () => {
+		const { pi } = makeFakePi();
+		const entries = [
+			{ customType: "pending:register", data: { id: "wf-1", type: "workflow", name: "test-wf" } },
+			{ customType: "pending:unregister", data: { id: "wf-1" } },
+		];
+		const ctx = {
+			hasUI: true,
+			signal: { aborted: false } as AbortSignal,
+			getContextUsage: () => undefined,
+			ui: {
+				notify: vi.fn(),
+				setStatus: vi.fn(),
+				setWidget: vi.fn(),
+				theme: { fg: (_c: string, t: string) => t, bold: (t: string) => t },
+			},
+			sessionManager: { getEntries: () => entries, getBranch: () => undefined },
+		} as unknown as ExtensionContext;
+		const session = createGoalSession();
+		session.state = makeRunningState();
+
+		const result = await handleBeforeAgentStart(pi, session, ctx);
+
+		expect(result).toBeDefined();
+		expect(result!.message.customType).toBe("goal-context");
+		expect(result!.message.content).not.toContain("pending async operation");
+	});
+
+	it("无 pending entries → 正常注入（不含 pending 提示）", async () => {
+		const { pi } = makeFakePi();
+		const { ctx } = makeFakeCtx(); // 默认 getEntries: () => []
+		const session = createGoalSession();
+		session.state = makeRunningState();
+
+		const result = await handleBeforeAgentStart(pi, session, ctx);
+
+		expect(result).toBeDefined();
+		expect(result!.message.content).not.toContain("pending async operation");
 	});
 });

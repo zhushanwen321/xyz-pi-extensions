@@ -53,10 +53,21 @@ export async function handleBeforeAgentStart(
 
 	// 正常 context injection。
 	// 全解耦：planAvailable 恒 true（contextInjectionPrompt 恒定建议 plan mode，AI 自行决定）。
+	// pending-notifications：若有活跃的异步操作，注入等待提示。
+	const entries = ctx.sessionManager.getEntries();
+	const pendingRegisters = entries.filter((e) => e.customType === "pending:register");
+	const pendingUnregisters = new Set(
+		entries.filter((e) => e.customType === "pending:unregister").map((e) => (e.data as Record<string, unknown>)?.id),
+	);
+	const activePending = pendingRegisters.filter((e) => !pendingUnregisters.has((e.data as Record<string, unknown>)?.id));
+	const pendingHint = activePending.length > 0
+		? `\nNote: There are ${activePending.length} pending async operation(s) running. Consider waiting for them to complete before starting new work.`
+		: "";
+
 	return {
 		message: {
 			customType: "goal-context",
-			content: contextInjectionPrompt(session.state, session.state.timeUsedSeconds, true),
+			content: contextInjectionPrompt(session.state, session.state.timeUsedSeconds, true) + pendingHint,
 			display: false,
 		},
 	};
