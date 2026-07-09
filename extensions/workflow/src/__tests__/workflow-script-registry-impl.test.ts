@@ -16,6 +16,7 @@ import { join } from "node:path";
 
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
+import { type WorkflowScanConfig } from "../infra/config-loader.js";
 import { WorkflowScriptRegistryImpl } from "../infra/workflow-script-registry-impl.js";
 
 // ── Fixtures ─────────────────────────────────────────────────
@@ -26,6 +27,8 @@ let originalCwd: string;
 beforeEach(() => {
   originalCwd = process.cwd();
   tmpRoot = mkdtempSync(join(tmpdir(), "pi-workflow-registry-test-"));
+  // 隔离 user 级目录，避免真实 ~/.pi/agent/workflows 污染
+  mkdirSync(join(tmpRoot, "user-workflows"), { recursive: true });
   process.chdir(tmpRoot);
 });
 
@@ -33,6 +36,16 @@ afterEach(() => {
   process.chdir(originalCwd);
   rmSync(tmpRoot, { recursive: true, force: true });
 });
+
+/** 隔离 config：所有目录指向 tmpRoot，不碰全局 ~/.pi/agent/* */
+function isolatedConfig(): WorkflowScanConfig {
+  return {
+    projectDir: join(tmpRoot, ".pi", "workflows"),
+    tmpDir: join(tmpRoot, ".pi", "workflows", ".tmp"),
+    userDir: join(tmpRoot, "user-workflows"),
+    npmDirs: [],
+  };
+}
 
 function makeWorkflowDir(): string {
   const dir = join(tmpRoot, ".pi", "workflows");
@@ -67,7 +80,7 @@ describe("WorkflowScriptRegistryImpl — sourceCode population", () => {
     const expected = scriptFor("review-fix-loop");
     writeScript(dir, "review-fix-loop", expected);
 
-    const registry = new WorkflowScriptRegistryImpl();
+    const registry = new WorkflowScriptRegistryImpl(isolatedConfig());
     const script = await registry.get("review-fix-loop");
 
     expect(script).toBeDefined();
@@ -88,7 +101,7 @@ agent({ prompt: "hi" });
 `,
     );
 
-    const registry = new WorkflowScriptRegistryImpl();
+    const registry = new WorkflowScriptRegistryImpl(isolatedConfig());
     const scripts = await registry.loadAll();
 
     expect(scripts).toHaveLength(2);
@@ -112,7 +125,7 @@ agent({ prompt: "run" });
 `;
     writeScript(dir, "with-export", sourceWithExport);
 
-    const registry = new WorkflowScriptRegistryImpl();
+    const registry = new WorkflowScriptRegistryImpl(isolatedConfig());
     const script = await registry.get("with-export");
 
     expect(script).toBeDefined();
@@ -130,7 +143,7 @@ agent({ prompt: "run" });
     const expected = scriptFor("cached-wf");
     writeScript(dir, "cached-wf", expected);
 
-    const registry = new WorkflowScriptRegistryImpl();
+    const registry = new WorkflowScriptRegistryImpl(isolatedConfig());
     const first = await registry.get("cached-wf");
     const second = await registry.get("cached-wf");
 
@@ -145,7 +158,7 @@ agent({ prompt: "run" });
     const dir = makeWorkflowDir();
     const path = writeScript(dir, "editable", scriptFor("editable", "ORIGINAL"));
 
-    const registry = new WorkflowScriptRegistryImpl();
+    const registry = new WorkflowScriptRegistryImpl(isolatedConfig());
     const before = await registry.get("editable");
     expect(before!.sourceCode).toContain("ORIGINAL");
 
@@ -164,7 +177,7 @@ agent({ prompt: "run" });
  // No `const meta` declaration → meta extraction fails → available=false
     writeScript(dir, "no-meta", 'console.log("no meta here"); agent({ prompt: "x" });');
 
-    const registry = new WorkflowScriptRegistryImpl();
+    const registry = new WorkflowScriptRegistryImpl(isolatedConfig());
     const script = await registry.get("no-meta");
 
     expect(script).toBeDefined();

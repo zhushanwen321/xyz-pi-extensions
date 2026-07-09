@@ -4,7 +4,7 @@
  * 合并原 tool-workflow.ts + tool-workflow-run.ts 为单 tool。
  *
  * Actions:
- * - run: registry.get → requiresConfirmation → RPC 降级确认 → recordApproval → runWorkflow
+ * - run: registry.get → runWorkflow（直接启动，无需用户确认）
  * - status: 列出 runs（deps.runs）
  * - pause: 调 pauseRun
  * - resume: 调 resumeRun
@@ -28,7 +28,6 @@ import type { LauncherDeps } from "../engine/launcher.js";
 import { abortRun, pauseRun, resumeRun, runWorkflow } from "../engine/lifecycle.js";
 import type { WorkflowRun } from "../engine/models/workflow-run.js";
 import { retryNode, skipNode } from "../engine/node-ops.js";
-import { recordApproval, requiresConfirmation } from "./helpers.js";
 import {
   acquireReentryGuard,
   REENTRY_BUSY_MESSAGE,
@@ -94,7 +93,7 @@ interface RunSummary {
  * without unsafe casts.
  */
 export type WorkflowToolDetails =
-  | { action: "run"; runId: string; status: "running" | "not_found" | "declined"; name: string }
+  | { action: "run"; runId: string; status: "running" | "not_found"; name: string }
   | { action: "status"; runs: RunSummary[] }
   | { action: "pause" | "resume" | "abort"; runId: string; status: string; reason?: string }
   | { action: "retry-node" | "skip-node"; runId: string; callId: number };
@@ -113,13 +112,11 @@ export interface ToolResult {
  *
  * @param pi ExtensionAPI
  * @param deps LauncherDeps（LifecycleDeps + registry）
- * @param sessionApprovals 本 session 已批准的脚本名集合（requiresConfirmation 用）
  * @param reentryRef 共享 reentry guard（与 workflow-script tool 共用）
  */
 export function registerWorkflowTool(
   pi: ExtensionAPI,
   deps: LauncherDeps,
-  sessionApprovals: Set<string>,
   reentryRef: ReentryGuardRef,
 ): void {
   pi.registerTool({
@@ -133,7 +130,7 @@ export function registerWorkflowTool(
     promptSnippet: "Run, pause, resume, abort, or check workflow status",
     promptGuidelines: [
       "PRIORITY: When user says 'workflow', 'run workflow', try run action FIRST.",
-      "run: discover by name/description, confirm with user (tmp or unapproved), then start in background.",
+      "run: discover by name/description, then start in background (no user confirmation needed).",
       "Do NOT poll status after starting — results appear automatically via notifyDone.",
       "retry-node/skip-node: for specific failed agent calls (requires runId + callId). " +
       "retry-node only re-runs the call and refreshes the trace — the workflow script has " +
@@ -147,7 +144,7 @@ export function registerWorkflowTool(
       params: WorkflowToolParams,
       signal: AbortSignal | undefined,
       _onUpdate: unknown,
-      ctx: ExtensionContext,
+      _ctx: ExtensionContext,
     ): Promise<ToolResult> {
  // P1-2: Honor abort signal up-front
       if (signal?.aborted) {
@@ -160,7 +157,7 @@ export function registerWorkflowTool(
       try {
         switch (params.action) {
           case "run":
-            return await actionRun(pi, params, deps, sessionApprovals, signal, ctx);
+            return await actionRun(params, deps, signal);
           case "status":
             return actionStatus(deps);
           case "pause":
@@ -204,12 +201,9 @@ export function registerWorkflowTool(
 // ── run action ───────────────────────────────────────────────
 
 async function actionRun(
-  pi: ExtensionAPI,
   params: WorkflowToolParams,
   deps: LauncherDeps,
-  sessionApprovals: Set<string>,
   signal: AbortSignal | undefined,
-  ctx: ExtensionContext,
 ): Promise<ToolResult> {
   const name = params.name;
   if (!name) {
@@ -237,33 +231,6 @@ async function actionRun(
       details: { action: "run", runId: "", status: "not_found", name },
       isError: true,
     };
-  }
-
- // 确认流程（tmp 或未批准需确认）
-  if (requiresConfirmation(script, sessionApprovals)) {
-    if (ctx.hasUI) {
-      const ok = await ctx.ui.confirm(
-        "Run workflow?",
-        `Workflow: ${script.name}\nDescription: ${script.meta.description ?? "(none)"}\nSource: [${script.source}]\nPath: ${script.path}`,
-      );
-      if (!ok) {
-        return {
-          content: [{ type: "text", text: `User declined to run '${script.name}'.` }],
-          details: { action: "run", runId: "", status: "declined", name: script.name },
-        };
-      }
- // 持久化批准（tmp 不持久化——每次都要确认）
-      if (script.source !== "tmp") {
-        sessionApprovals.add(script.name);
-        await recordApproval(script.name, pi);
-      }
-    } else {
- // RPC 降级：sendUserMessage 提示
-      pi.sendUserMessage(
-        `Confirm to run '${script.name}'? (RPC mode — auto-confirm not available, proceed with caution)`,
-        { deliverAs: "steer" },
-      );
-    }
   }
 
  // 构建 RunSpec + 启动

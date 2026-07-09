@@ -6,9 +6,6 @@
 // notifyDone（C-4 完成通知回调，~100 行带分支）此前仅经 index.test.ts 间接覆盖，
 // sendMessage 在各处均被 mock 但无 toHaveBeenCalledWith 针对 workflow-result/_render。
 // 本文件直测其契约：去重早退、截断条件、statusToItemStatus 4 分支、_render 结构。
-//
-// 顺带直测 requiresConfirmation（纯谓词 3 分支）+ recordApproval（appendEntry 调用），
-// 锁定其契约，避免未来重构 index.ts 接线时静默回归。
 
 /* eslint-disable taste/no-unsafe-cast */
 
@@ -20,13 +17,7 @@ import { Budget } from "../../engine/models/budget.js";
 import { Trace } from "../../engine/models/trace.js";
 import type { DoneReason, ExecutionTraceNode } from "../../engine/models/types.js";
 import { WorkflowRun } from "../../engine/models/workflow-run.js";
-import { WorkflowScript } from "../../engine/models/workflow-script.js";
-import {
-  APPROVAL_MEMORY_TYPE,
-  notifyDone,
-  recordApproval,
-  requiresConfirmation,
-} from "../helpers.js";
+import { notifyDone } from "../helpers.js";
 
 // ── Fixtures ─────────────────────────────────────────────────
 
@@ -214,51 +205,5 @@ describe("notifyDone", () => {
     expect(items[0].label as string).toContain("agent-0");
     expect(items[0].status).toBe("completed");
     expect(items[0].detail).toBe("done"); // result.content slice
-  });
-});
-
-// ── requiresConfirmation (suggestion #4) ─────────────────────
-
-describe("requiresConfirmation", () => {
-  function makeScript(source: "tmp" | "saved", name: string): WorkflowScript {
-    return new WorkflowScript({
-      name,
-      source,
-      path: `/abs/${name}.js`,
-      sourceCode: 'agent({ prompt: "hi" });',
-      meta: { name },
-      available: true,
-    });
-  }
-
-  it("source=tmp → 永远需确认（即使在 approved 中）", () => {
-    const script = makeScript("tmp", "tmp-cleanup");
-    expect(requiresConfirmation(script, new Set(["tmp-cleanup"]))).toBe(true);
-  });
-
-  it("非 tmp + approved.has(name) → 不需确认", () => {
-    const script = makeScript("saved", "deploy-app");
-    expect(requiresConfirmation(script, new Set(["deploy-app"]))).toBe(false);
-  });
-
-  it("非 tmp + !approved.has(name) → 需确认", () => {
-    const script = makeScript("saved", "deploy-app");
-    expect(requiresConfirmation(script, new Set(["other"]))).toBe(true);
-  });
-});
-
-// ── recordApproval (suggestion #4) ───────────────────────────
-
-describe("recordApproval", () => {
-  it("调 appendEntry(APPROVAL_MEMORY_TYPE, { workflowName, approvedAt })", async () => {
-    const pi = makePi();
-
-    await recordApproval("deploy-app", pi as unknown as ExtensionAPI);
-
-    expect(pi.appendEntry).toHaveBeenCalledTimes(1);
-    const [customType, data] = pi.appendEntry.mock.calls[0] as [string, Record<string, unknown>];
-    expect(customType).toBe(APPROVAL_MEMORY_TYPE);
-    expect(data.workflowName).toBe("deploy-app");
-    expect(typeof data.approvedAt).toBe("string");
   });
 });

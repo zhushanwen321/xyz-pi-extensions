@@ -25,33 +25,51 @@ import {
 } from "../engine/models/workflow-script.js";
 import type { WorkflowScriptRegistry } from "../engine/models/workflow-script-registry.js";
 import {
+  discoverWorkflows,
   getWorkflow,
   invalidateCache,
   loadWorkflows,
+  type WorkflowScanConfig,
 } from "./config-loader.js";
 
 // ── WorkflowScriptRegistryImpl ───────────────────────────────
 
-export class WorkflowScriptRegistryImpl implements WorkflowScriptRegistry {
- /**
- * 扫描所有 workflow 脚本（project + user + tmp），按 tmp>project>user 优先级
- * 去重，返回 WorkflowScript 实体数组（含 available=false 的解析失败项）。
+/**
+ * WorkflowScriptRegistry port 的 Infra 实现。
  *
- * 60s TTL 缓存——同 workspace 60s 内重复调用走缓存。
+ * @param config 可选扫描配置。传入时 registry 只扫 config 声明的目录
+ *              （测试隔离用）；省略时走生产默认（全局 ~/.pi/agent/* 目录）。
  */
+export class WorkflowScriptRegistryImpl implements WorkflowScriptRegistry {
+  constructor(private readonly config?: WorkflowScanConfig) {}
+
+ /**
+	 * 扫描所有 workflow 脚本（project + user + tmp），按 tmp>project>user 优先级
+	 * 去重，返回 WorkflowScript 实体数组（含 available=false 的解析失败项）。
+	 *
+	 * 60s TTL 缓存——同 workspace 60s 内重复调用走缓存。
+	 */
   async loadAll(): Promise<WorkflowScript[]> {
-    const metas = await loadWorkflows();
+    const metas = this.config
+      ? await discoverWorkflows(this.config)
+      : await loadWorkflows();
     return metas.map((m) => this.toScript(m));
   }
 
  /**
- * 按名查单个脚本。精确匹配。
- * 返回 undefined 当 name 不存在。
- *
- * 注：fuzzy 匹配由 Interface 层 tool-workflow负责——registry 只做精确查。
- */
+	 * 按名查单个脚本。精确匹配。
+	 * 返回 undefined 当 name 不存在。
+	 *
+	 * 注：fuzzy 匹配由 Interface 层 tool-workflow负责——registry 只做精确查。
+	 *
+	 * 性能注记：无 config（生产路径）时走 getWorkflow 的 60s TTL 单条缓存。
+	 * 有 config（测试隔离）时退化为每次 discoverWorkflows 全扫——测试场景
+	 * 可接受，生产路径不受影响。
+	 */
   async get(name: string): Promise<WorkflowScript | undefined> {
-    const meta = await getWorkflow(name);
+    const meta = this.config
+      ? (await discoverWorkflows(this.config)).find((w) => w.name === name)
+      : await getWorkflow(name);
     return meta ? this.toScript(meta) : undefined;
   }
 

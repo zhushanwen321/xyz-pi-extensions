@@ -8,7 +8,7 @@
  * - Infra 注入：JsonlRunStore / WorkerHostImpl / SubprocessAgentRunner /
  * WorkflowScriptRegistryImpl（4 个具体类，D-12 不造 interface）
  * - deps: LauncherDeps = { store, workerHost, runner, runs, registry }
- * - session_start：重建 approvals + store.loadAll 重建 runs + D-4 kill-9 残留 running→failed
+ * - session_start：store.loadAll 重建 runs + D-4 kill-9 残留 running→failed
  * - pi.__workflowRun（D-8 签名）：调 runAndWait → {status:'done', reason, ...}
  * - 注册 2 个 tool（workflow-script + workflow）+ /workflows command
  * - session_tree：切分支前 pause 所有 running run
@@ -19,8 +19,6 @@
  *
  * 参考：domain-models.md §D-8（WorkflowRunResult 签名）。
  */
-
-/* eslint-disable taste/no-unsafe-cast */
 
 import * as fs from "node:fs";
 import * as os from "node:os";
@@ -39,7 +37,7 @@ import { SubprocessAgentRunner } from "./infra/subprocess-agent-runner.js";
 import { WorkerHostImpl } from "./infra/worker-host.js";
 import { WorkflowScriptRegistryImpl } from "./infra/workflow-script-registry-impl.js";
 import { registerWorkflowsCommand } from "./interface/commands.js";
-import { APPROVAL_MEMORY_TYPE, notifyDone } from "./interface/helpers.js";
+import { notifyDone } from "./interface/helpers.js";
 import { registerWorkflowTool } from "./interface/tool-workflow.js";
 import { registerWorkflowScriptTool } from "./interface/tool-workflow-script.js";
 
@@ -60,7 +58,6 @@ declare module "@mariozechner/pi-coding-agent" {
 
 export default function workflowExtension(pi: ExtensionAPI): void {
   const lsRef = { lastSessionId: "" };
-  const sessionApprovals = new Set<string>();
  // C-4: notifyDone 去重 Set——同一 runId 只通知一次（跨 done 路径 / 边界防重复）。
   const notifiedRunIds = new Set<string>();
  // P1-6: Reentry guard — shared between workflow + workflow-script tools
@@ -140,16 +137,6 @@ export default function workflowExtension(pi: ExtensionAPI): void {
   pi.on("session_start", async (_event: Record<string, unknown>, ctx: ExtensionContext) => {
     const sessionId = ctx.sessionManager.getSessionId();
     lsRef.lastSessionId = sessionId;
-
- // 重建 sessionApprovals（从持久化 entries）
- // SDK stub 的 SessionEntry 类型缺 customType/data 字段，运行时 guard：
- // 只读有 customType 的 entry，跳过其他类型。
-    for (const entry of ctx.sessionManager.getEntries()) {
-       
-      const e = entry as { type?: string; customType?: string; data?: { workflowName?: string } };
-      if (e.customType !== APPROVAL_MEMORY_TYPE) continue;
-      if (e.data?.workflowName) sessionApprovals.add(e.data.workflowName);
-    }
 
  // 构建 per-session store + runs
     const sessionDir = resolveSessionDir();
@@ -293,7 +280,7 @@ export default function workflowExtension(pi: ExtensionAPI): void {
     },
   };
 
-  registerWorkflowTool(pi, lazyDeps, sessionApprovals, guard);
+  registerWorkflowTool(pi, lazyDeps, guard);
   registerWorkflowScriptTool(pi, registry, isScriptRunning);
 
  // ── Commands（仅 /workflows，FR-6） ────────────────────────
