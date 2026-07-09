@@ -85,10 +85,10 @@ describe("AskUserComponent — key leak fix (C-ARROW / C-KEYMAP)", () => {
 		c.handleInput(RIGHT);
 		c.handleInput(RIGHT);
 		const lines = c.render(60);
-		const editorLine = lines.find((l) => l.includes("█"));
+		const editorLine = lines.find((l) => l.includes("\x1b[7m"));
 		expect(editorLine).toBeDefined();
 		// BUG: before fix, [C[C[C would appear. After fix: editorText stays empty.
-		expect(editorLine).not.toContain("[");
+		expect(editorLine).not.toContain("\x1b[A"); expect(editorLine).not.toContain("\x1b[B"); expect(editorLine).not.toContain("\x1b[C"); expect(editorLine).not.toContain("\x1b[D");
 		expect(editorLine).not.toContain("C");
 	});
 
@@ -102,13 +102,13 @@ describe("AskUserComponent — key leak fix (C-ARROW / C-KEYMAP)", () => {
 		c.handleInput(LEFT);   // cursor 1→0
 		c.handleInput("b");   // insert at 0 → "ba", cursor=1
 		const lines = c.render(60);
-		const editorLine = lines.find((l) => l.includes("█"));
+		const editorLine = lines.find((l) => l.includes("\x1b[7m"));
 		expect(editorLine).toBeDefined();
 		// cursor at 1: "b█a"
 		expect(editorLine).toContain("b");
 		expect(editorLine).toContain("a");
 		// Ensure no leaked sequences
-		expect(editorLine).not.toContain("[");
+		expect(editorLine).not.toContain("\x1b[A"); expect(editorLine).not.toContain("\x1b[B"); expect(editorLine).not.toContain("\x1b[C"); expect(editorLine).not.toContain("\x1b[D");
 	});
 
 	// ── C-KEYMAP-UP: up key no-op in editor ──
@@ -118,7 +118,7 @@ describe("AskUserComponent — key leak fix (C-ARROW / C-KEYMAP)", () => {
 		c.handleInput(UP);
 		c.handleInput("b");
 		const lines = c.render(60);
-		const editorLine = lines.find((l) => l.includes("█"));
+		const editorLine = lines.find((l) => l.includes("\x1b[7m"));
 		expect(editorLine).toContain("ab");
 	});
 
@@ -129,7 +129,7 @@ describe("AskUserComponent — key leak fix (C-ARROW / C-KEYMAP)", () => {
 		c.handleInput(DOWN);
 		c.handleInput("b");
 		const lines = c.render(60);
-		const editorLine = lines.find((l) => l.includes("█"));
+		const editorLine = lines.find((l) => l.includes("\x1b[7m"));
 		expect(editorLine).toContain("ab");
 	});
 
@@ -140,7 +140,7 @@ describe("AskUserComponent — key leak fix (C-ARROW / C-KEYMAP)", () => {
 		c.handleInput(LEFT);   // cursor 2→1
 		c.handleInput("c");   // insert at 1 → "acb", cursor=2
 		const lines = c.render(60);
-		const editorLine = lines.find((l) => l.includes("█"));
+		const editorLine = lines.find((l) => l.includes("\x1b[7m"));
 		// cursor at 2: "ac█b"
 		expect(editorLine).toContain("a");
 		expect(editorLine).toContain("b");
@@ -154,10 +154,12 @@ describe("AskUserComponent — key leak fix (C-ARROW / C-KEYMAP)", () => {
 		c.handleInput(HOME);    // cursor 3→0
 		c.handleInput("d");    // insert at 0 → "dabc", cursor=1
 		const lines = c.render(60);
-		const editorLine = lines.find((l) => l.includes("█"));
-		// cursor at 1: "d█abc"
+		const editorLine = lines.find((l) => l.includes("\x1b[7m"));
+		// cursor at 1: "d\x1b[7ma\x1b[27mbc" — cursor reverse video splits "abc"
 		expect(editorLine).toContain("d");
-		expect(editorLine).toContain("abc");
+		expect(editorLine).toContain("a");
+		expect(editorLine).toContain("b");
+		expect(editorLine).toContain("c");
 	});
 
 	// ── C-KEYMAP-END: end key moves cursor to end ──
@@ -168,7 +170,7 @@ describe("AskUserComponent — key leak fix (C-ARROW / C-KEYMAP)", () => {
 		c.handleInput(END);     // cursor 0→3
 		c.handleInput("d");    // insert at 3 → "abcd", cursor=4
 		const lines = c.render(60);
-		const editorLine = lines.find((l) => l.includes("█"));
+		const editorLine = lines.find((l) => l.includes("\x1b[7m"));
 		// cursor at 4 (end): "abcd█"
 		expect(editorLine).toContain("abcd");
 	});
@@ -180,7 +182,7 @@ describe("AskUserComponent — key leak fix (C-ARROW / C-KEYMAP)", () => {
 		c.handleInput(INSERT);  // no-op, cursor stays at 3
 		c.handleInput("d");    // insert at 3 → "abcd", cursor=4
 		const lines = c.render(60);
-		const editorLine = lines.find((l) => l.includes("█"));
+		const editorLine = lines.find((l) => l.includes("\x1b[7m"));
 		expect(editorLine).toContain("abcd");
 	});
 
@@ -191,7 +193,7 @@ describe("AskUserComponent — key leak fix (C-ARROW / C-KEYMAP)", () => {
 		c.handleInput(PAGE_UP); // no-op, cursor stays at 3
 		c.handleInput("d");    // insert at 3 → "abcd", cursor=4
 		const lines = c.render(60);
-		const editorLine = lines.find((l) => l.includes("█"));
+		const editorLine = lines.find((l) => l.includes("\x1b[7m"));
 		expect(editorLine).toContain("abcd");
 	});
 
@@ -202,7 +204,7 @@ describe("AskUserComponent — key leak fix (C-ARROW / C-KEYMAP)", () => {
 		c.handleInput(PAGE_DOWN); // no-op, cursor stays at 3
 		c.handleInput("d");    // insert at 3 → "abcd", cursor=4
 		const lines = c.render(60);
-		const editorLine = lines.find((l) => l.includes("█"));
+		const editorLine = lines.find((l) => l.includes("\x1b[7m"));
 		expect(editorLine).toContain("abcd");
 	});
 
@@ -213,7 +215,7 @@ describe("AskUserComponent — key leak fix (C-ARROW / C-KEYMAP)", () => {
 		c.handleInput(F1);      // no-op, cursor stays at 3
 		c.handleInput("d");    // insert at 3 → "abcd", cursor=4
 		const lines = c.render(60);
-		const editorLine = lines.find((l) => l.includes("█"));
+		const editorLine = lines.find((l) => l.includes("\x1b[7m"));
 		expect(editorLine).toContain("abcd");
 	});
 
@@ -224,7 +226,7 @@ describe("AskUserComponent — key leak fix (C-ARROW / C-KEYMAP)", () => {
 		c.handleInput(DELETE);  // no-op, cursor stays at 3
 		c.handleInput("d");    // insert at 3 → "abcd", cursor=4
 		const lines = c.render(60);
-		const editorLine = lines.find((l) => l.includes("█"));
+		const editorLine = lines.find((l) => l.includes("\x1b[7m"));
 		expect(editorLine).toContain("abcd");
 	});
 
@@ -235,7 +237,7 @@ describe("AskUserComponent — key leak fix (C-ARROW / C-KEYMAP)", () => {
 		c.handleInput(" "); // space — parseKey(" ") returns "space" not a printable char
 		c.handleInput("b");
 		const lines = c.render(60);
-		const editorLine = lines.find((l) => l.includes("█"));
+		const editorLine = lines.find((l) => l.includes("\x1b[7m"));
 		expect(editorLine).toBeDefined();
 		expect(editorLine).toContain("a b");
 	});
@@ -247,7 +249,7 @@ describe("AskUserComponent — key leak fix (C-ARROW / C-KEYMAP)", () => {
 		c.handleInput(ESC); // should discard and go back to options
 		const lines = c.render(60);
 		// No more editor (back in options mode)
-		expect(lines.some((l) => l.includes("█"))).toBe(false);
+		expect(lines.some((l) => l.includes("\x1b[7m"))).toBe(false);
 	});
 
 	// ── C-KEYMAP-BKSP: backspace still works (semantic key) ──
@@ -256,7 +258,7 @@ describe("AskUserComponent — key leak fix (C-ARROW / C-KEYMAP)", () => {
 		c.handleInput("abc");
 		c.handleInput(BKSP); // delete 'c'
 		const lines = c.render(60);
-		const editorLine = lines.find((l) => l.includes("█"));
+		const editorLine = lines.find((l) => l.includes("\x1b[7m"));
 		expect(editorLine).toContain("ab");
 		expect(editorLine).not.toContain("abc");
 	});
@@ -309,11 +311,11 @@ describe("AskUserComponent — key leak fix (C-ARROW / C-KEYMAP)", () => {
 			c.handleInput(seq); // modifier combo → should be no-op
 			c.handleInput("y");
 			const lines = c.render(60);
-			const editorLine = lines.find((l) => l.includes("█"));
+			const editorLine = lines.find((l) => l.includes("\x1b[7m"));
 			expect(editorLine).toBeDefined();
 			expect(editorLine).toContain("xy");
 			// No leaked characters from the escape sequence
-			expect(editorLine).not.toContain("[");
+			expect(editorLine).not.toContain("\x1b[A"); expect(editorLine).not.toContain("\x1b[B"); expect(editorLine).not.toContain("\x1b[C"); expect(editorLine).not.toContain("\x1b[D");
 			expect(editorLine).not.toContain(";");
 		});
 	}
@@ -326,10 +328,10 @@ describe("AskUserComponent — unknown control sequence leak fix (C-CSI)", () =>
 		c.handleInput("a");
 		c.handleInput("b");
 		const lines = c.render(60);
-		const editorLine = lines.find((l) => l.includes("█"));
+		const editorLine = lines.find((l) => l.includes("\x1b[7m"));
 		expect(editorLine).toBeDefined();
 		expect(editorLine).toContain("ab");
-		expect(editorLine).not.toContain("[");
+		expect(editorLine).not.toContain("\x1b[A"); expect(editorLine).not.toContain("\x1b[B"); expect(editorLine).not.toContain("\x1b[C"); expect(editorLine).not.toContain("\x1b[D");
 		expect(editorLine).not.toContain("9");
 		expect(editorLine).not.toContain("~");
 	});
@@ -339,7 +341,7 @@ describe("AskUserComponent — unknown control sequence leak fix (C-CSI)", () =>
 		c.handleInput(OSC_BEL);
 		c.handleInput("x");
 		const lines = c.render(60);
-		const editorLine = lines.find((l) => l.includes("█"));
+		const editorLine = lines.find((l) => l.includes("\x1b[7m"));
 		expect(editorLine).toBeDefined();
 		expect(editorLine).toContain("x");
 		expect(editorLine).not.toContain("]");
@@ -351,7 +353,7 @@ describe("AskUserComponent — unknown control sequence leak fix (C-CSI)", () =>
 		c.handleInput(OSC_ST);
 		c.handleInput("y");
 		const lines = c.render(60);
-		const editorLine = lines.find((l) => l.includes("█"));
+		const editorLine = lines.find((l) => l.includes("\x1b[7m"));
 		expect(editorLine).toBeDefined();
 		expect(editorLine).toContain("y");
 		expect(editorLine).not.toContain("]");
@@ -363,10 +365,10 @@ describe("AskUserComponent — unknown control sequence leak fix (C-CSI)", () =>
 		c.handleInput(DA2);
 		c.handleInput("m");
 		const lines = c.render(60);
-		const editorLine = lines.find((l) => l.includes("█"));
+		const editorLine = lines.find((l) => l.includes("\x1b[7m"));
 		expect(editorLine).toBeDefined();
 		expect(editorLine).toContain("m");
-		expect(editorLine).not.toContain("[");
+		expect(editorLine).not.toContain("\x1b[A"); expect(editorLine).not.toContain("\x1b[B"); expect(editorLine).not.toContain("\x1b[C"); expect(editorLine).not.toContain("\x1b[D");
 	});
 
 	it("C-CSI-5: DA1 device attribute response does not leak", () => {
@@ -374,7 +376,7 @@ describe("AskUserComponent — unknown control sequence leak fix (C-CSI)", () =>
 		c.handleInput(DA1);
 		c.handleInput("n");
 		const lines = c.render(60);
-		const editorLine = lines.find((l) => l.includes("█"));
+		const editorLine = lines.find((l) => l.includes("\x1b[7m"));
 		expect(editorLine).toBeDefined();
 		expect(editorLine).toContain("n");
 		expect(editorLine).not.toContain("?");
@@ -385,7 +387,7 @@ describe("AskUserComponent — unknown control sequence leak fix (C-CSI)", () =>
 		c.handleInput(DCS);
 		c.handleInput("d");
 		const lines = c.render(60);
-		const editorLine = lines.find((l) => l.includes("█"));
+		const editorLine = lines.find((l) => l.includes("\x1b[7m"));
 		expect(editorLine).toBeDefined();
 		expect(editorLine).toContain("d");
 		expect(editorLine).not.toContain("tmux");
@@ -396,7 +398,7 @@ describe("AskUserComponent — unknown control sequence leak fix (C-CSI)", () =>
 		c.handleInput(APC);
 		c.handleInput("e");
 		const lines = c.render(60);
-		const editorLine = lines.find((l) => l.includes("█"));
+		const editorLine = lines.find((l) => l.includes("\x1b[7m"));
 		expect(editorLine).toBeDefined();
 		expect(editorLine).toContain("e");
 		expect(editorLine).not.toContain("G");
@@ -407,7 +409,7 @@ describe("AskUserComponent — unknown control sequence leak fix (C-CSI)", () =>
 		c.handleInput(UNKNOWN_SS3);
 		c.handleInput("f");
 		const lines = c.render(60);
-		const editorLine = lines.find((l) => l.includes("█"));
+		const editorLine = lines.find((l) => l.includes("\x1b[7m"));
 		expect(editorLine).toBeDefined();
 		expect(editorLine).toContain("f");
 		expect(editorLine).not.toContain("O");
@@ -420,10 +422,10 @@ describe("AskUserComponent — unknown control sequence leak fix (C-CSI)", () =>
 		c.handleInput(DA2);
 		c.handleInput("ok");
 		const lines = c.render(60);
-		const editorLine = lines.find((l) => l.includes("█"));
+		const editorLine = lines.find((l) => l.includes("\x1b[7m"));
 		expect(editorLine).toBeDefined();
 		expect(editorLine).toContain("ok");
-		expect(editorLine).not.toContain("[");
+		expect(editorLine).not.toContain("\x1b[A"); expect(editorLine).not.toContain("\x1b[B"); expect(editorLine).not.toContain("\x1b[C"); expect(editorLine).not.toContain("\x1b[D");
 	});
 
 	it("C-CSI-10: unknown CSI does not leak in comment editor", () => {
@@ -442,7 +444,7 @@ describe("AskUserComponent — unknown control sequence leak fix (C-CSI)", () =>
 		const c = openFreeform([singleQ]);
 		c.handleInput("hello");
 		const lines = c.render(60);
-		const editorLine = lines.find((l) => l.includes("█"));
+		const editorLine = lines.find((l) => l.includes("\x1b[7m"));
 		expect(editorLine).toContain("hello");
 	});
 
@@ -450,7 +452,7 @@ describe("AskUserComponent — unknown control sequence leak fix (C-CSI)", () =>
 		const c = openFreeform([singleQ]);
 		c.handleInput("fix the 🐛 bug");
 		const lines = c.render(60);
-		const editorLine = lines.find((l) => l.includes("█"));
+		const editorLine = lines.find((l) => l.includes("\x1b[7m"));
 		expect(editorLine).toContain("fix the 🐛 bug");
 	});
 
@@ -458,7 +460,7 @@ describe("AskUserComponent — unknown control sequence leak fix (C-CSI)", () =>
 		const c = openFreeform([singleQ]);
 		c.handleInput("你好");
 		const lines = c.render(60);
-		const editorLine = lines.find((l) => l.includes("█"));
+		const editorLine = lines.find((l) => l.includes("\x1b[7m"));
 		expect(editorLine).toContain("你好");
 	});
 
@@ -466,7 +468,7 @@ describe("AskUserComponent — unknown control sequence leak fix (C-CSI)", () =>
 		const c = openFreeform([singleQ]);
 		c.handleInput("\x1b[200~hello\x1b[201~");
 		const lines = c.render(60);
-		const editorLine = lines.find((l) => l.includes("█"));
+		const editorLine = lines.find((l) => l.includes("\x1b[7m"));
 		expect(editorLine).toContain("hello");
 		expect(editorLine).not.toContain("[200~");
 	});
@@ -479,9 +481,9 @@ describe("AskUserComponent — unknown control sequence leak fix (C-CSI)", () =>
 		c.handleInput("a");
 		c.handleInput("b");
 		const lines = c.render(60);
-		const editorLine = lines.find((l) => l.includes("█"));
+		const editorLine = lines.find((l) => l.includes("\x1b[7m"));
 		expect(editorLine).toContain("ab");
-		expect(editorLine).not.toContain("[");
+		expect(editorLine).not.toContain("\x1b[A"); expect(editorLine).not.toContain("\x1b[B"); expect(editorLine).not.toContain("\x1b[C"); expect(editorLine).not.toContain("\x1b[D");
 	});
 
 	it("C-CSI-R6: backspace still works", () => {
@@ -489,7 +491,7 @@ describe("AskUserComponent — unknown control sequence leak fix (C-CSI)", () =>
 		c.handleInput("abc");
 		c.handleInput(BKSP);
 		const lines = c.render(60);
-		const editorLine = lines.find((l) => l.includes("█"));
+		const editorLine = lines.find((l) => l.includes("\x1b[7m"));
 		expect(editorLine).toContain("ab");
 		expect(editorLine).not.toContain("abc");
 	});
@@ -499,6 +501,6 @@ describe("AskUserComponent — unknown control sequence leak fix (C-CSI)", () =>
 		c.handleInput("abc");
 		c.handleInput(ESC);
 		const lines = c.render(60);
-		expect(lines.some((l) => l.includes("█"))).toBe(false);
+		expect(lines.some((l) => l.includes("\x1b[7m"))).toBe(false);
 	});
 });

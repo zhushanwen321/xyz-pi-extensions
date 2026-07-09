@@ -50,9 +50,9 @@ describe("W3 — extended no-op key coverage (C-KEYMAP-*)", () => {
 		c.handleInput(DOWN);
 		c.handleInput("b");
 		const lines = c.render(60);
-		const editorLine = lines.find((l) => l.includes("█"));
+		const editorLine = lines.find((l) => l.includes("\x1b[7m"));
 		expect(editorLine).toContain("ab");
-		expect(editorLine).not.toContain("[");
+		expect(editorLine).not.toContain("\x1b[A"); expect(editorLine).not.toContain("\x1b[B"); expect(editorLine).not.toContain("\x1b[C"); expect(editorLine).not.toContain("\x1b[D");
 		expect(editorLine).not.toContain("B");
 	});
 
@@ -63,12 +63,12 @@ describe("W3 — extended no-op key coverage (C-KEYMAP-*)", () => {
 		c.handleInput(LEFT);   // cursor 2→1
 		c.handleInput("c");   // insert at 1 → "acb", cursor=2
 		const lines = c.render(60);
-		const editorLine = lines.find((l) => l.includes("█"));
+		const editorLine = lines.find((l) => l.includes("\x1b[7m"));
 		// cursor at 2: "ac█b"
 		expect(editorLine).toContain("a");
 		expect(editorLine).toContain("b");
 		expect(editorLine).toContain("c");
-		expect(editorLine).not.toContain("[");
+		expect(editorLine).not.toContain("\x1b[A"); expect(editorLine).not.toContain("\x1b[B"); expect(editorLine).not.toContain("\x1b[C"); expect(editorLine).not.toContain("\x1b[D");
 		expect(editorLine).not.toContain("D");
 	});
 
@@ -79,11 +79,13 @@ describe("W3 — extended no-op key coverage (C-KEYMAP-*)", () => {
 		c.handleInput(HOME);    // cursor 3→0
 		c.handleInput("d");    // insert at 0 → "dabc", cursor=1
 		const lines = c.render(60);
-		const editorLine = lines.find((l) => l.includes("█"));
-		// cursor at 1: "d█abc"
+		const editorLine = lines.find((l) => l.includes("\x1b[7m"));
+		// cursor at 1: "d\x1b[7ma\x1b[27mbc" — cursor reverse video splits "abc"
 		expect(editorLine).toContain("d");
-		expect(editorLine).toContain("abc");
-		expect(editorLine).not.toContain("[");
+		expect(editorLine).toContain("a");
+		expect(editorLine).toContain("b");
+		expect(editorLine).toContain("c");
+		expect(editorLine).not.toContain("\x1b[A"); expect(editorLine).not.toContain("\x1b[B"); expect(editorLine).not.toContain("\x1b[C"); expect(editorLine).not.toContain("\x1b[D");
 		expect(editorLine).not.toContain("H");
 	});
 
@@ -94,9 +96,9 @@ describe("W3 — extended no-op key coverage (C-KEYMAP-*)", () => {
 		c.handleInput(END);
 		c.handleInput("b");
 		const lines = c.render(60);
-		const editorLine = lines.find((l) => l.includes("█"));
+		const editorLine = lines.find((l) => l.includes("\x1b[7m"));
 		expect(editorLine).toContain("ab");
-		expect(editorLine).not.toContain("[");
+		expect(editorLine).not.toContain("\x1b[A"); expect(editorLine).not.toContain("\x1b[B"); expect(editorLine).not.toContain("\x1b[C"); expect(editorLine).not.toContain("\x1b[D");
 		expect(editorLine).not.toContain("F");
 	});
 
@@ -107,9 +109,9 @@ describe("W3 — extended no-op key coverage (C-KEYMAP-*)", () => {
 		c.handleInput(INSERT);
 		c.handleInput("b");
 		const lines = c.render(60);
-		const editorLine = lines.find((l) => l.includes("█"));
+		const editorLine = lines.find((l) => l.includes("\x1b[7m"));
 		expect(editorLine).toContain("ab");
-		expect(editorLine).not.toContain("[");
+		expect(editorLine).not.toContain("\x1b[A"); expect(editorLine).not.toContain("\x1b[B"); expect(editorLine).not.toContain("\x1b[C"); expect(editorLine).not.toContain("\x1b[D");
 		expect(editorLine).not.toContain("~");
 	});
 
@@ -120,9 +122,9 @@ describe("W3 — extended no-op key coverage (C-KEYMAP-*)", () => {
 		c.handleInput(PGUP);
 		c.handleInput("b");
 		const lines = c.render(60);
-		const editorLine = lines.find((l) => l.includes("█"));
+		const editorLine = lines.find((l) => l.includes("\x1b[7m"));
 		expect(editorLine).toContain("ab");
-		expect(editorLine).not.toContain("[");
+		expect(editorLine).not.toContain("\x1b[A"); expect(editorLine).not.toContain("\x1b[B"); expect(editorLine).not.toContain("\x1b[C"); expect(editorLine).not.toContain("\x1b[D");
 		expect(editorLine).not.toContain("~");
 	});
 
@@ -133,9 +135,9 @@ describe("W3 — extended no-op key coverage (C-KEYMAP-*)", () => {
 		c.handleInput(PGDN);
 		c.handleInput("b");
 		const lines = c.render(60);
-		const editorLine = lines.find((l) => l.includes("█"));
+		const editorLine = lines.find((l) => l.includes("\x1b[7m"));
 		expect(editorLine).toContain("ab");
-		expect(editorLine).not.toContain("[");
+		expect(editorLine).not.toContain("\x1b[A"); expect(editorLine).not.toContain("\x1b[B"); expect(editorLine).not.toContain("\x1b[C"); expect(editorLine).not.toContain("\x1b[D");
 		expect(editorLine).not.toContain("~");
 	});
 
@@ -146,9 +148,9 @@ describe("W3 — extended no-op key coverage (C-KEYMAP-*)", () => {
 		c.handleInput(F1);
 		c.handleInput("b");
 		const lines = c.render(60);
-		const editorLine = lines.find((l) => l.includes("█"));
+		const editorLine = lines.find((l) => l.includes("\x1b[7m"));
 		expect(editorLine).toContain("ab");
-		expect(editorLine).not.toContain("[");
+		expect(editorLine).not.toContain("\x1b[A"); expect(editorLine).not.toContain("\x1b[B"); expect(editorLine).not.toContain("\x1b[C"); expect(editorLine).not.toContain("\x1b[D");
 		expect(editorLine).not.toContain("P");
 	});
 
@@ -158,9 +160,9 @@ describe("W3 — extended no-op key coverage (C-KEYMAP-*)", () => {
 		c.handleInput("abc");
 		c.handleInput(DELETE); // delete ≠ backspace — should NOT delete
 		const lines = c.render(60);
-		const editorLine = lines.find((l) => l.includes("█"));
+		const editorLine = lines.find((l) => l.includes("\x1b[7m"));
 		expect(editorLine).toContain("abc"); // unchanged
-		expect(editorLine).not.toContain("[");
+		expect(editorLine).not.toContain("\x1b[A"); expect(editorLine).not.toContain("\x1b[B"); expect(editorLine).not.toContain("\x1b[C"); expect(editorLine).not.toContain("\x1b[D");
 		expect(editorLine).not.toContain("~");
 	});
 
@@ -178,9 +180,9 @@ describe("W3 — extended no-op key coverage (C-KEYMAP-*)", () => {
 		c.handleInput(seq);
 		c.handleInput("b");
 		const lines = c.render(60);
-		const editorLine = lines.find((l) => l.includes("█"));
+		const editorLine = lines.find((l) => l.includes("\x1b[7m"));
 		expect(editorLine).toContain("ab");
-		expect(editorLine).not.toContain("[");
+		expect(editorLine).not.toContain("\x1b[A"); expect(editorLine).not.toContain("\x1b[B"); expect(editorLine).not.toContain("\x1b[C"); expect(editorLine).not.toContain("\x1b[D");
 	});
 });
 
@@ -265,7 +267,7 @@ describe("W3 — single char append via parseKey path (C-PASTE-5 equiv)", () => 
 		openFreeform(c);
 		c.handleInput("x");
 		const lines = c.render(60);
-		const editorLine = lines.find((l) => l.includes("█"));
+		const editorLine = lines.find((l) => l.includes("\x1b[7m"));
 		expect(editorLine).toContain("x");
 	});
 
@@ -276,7 +278,7 @@ describe("W3 — single char append via parseKey path (C-PASTE-5 equiv)", () => 
 			c.handleInput(ch);
 		}
 		const lines = c.render(60);
-		const editorLine = lines.find((l) => l.includes("█"));
+		const editorLine = lines.find((l) => l.includes("\x1b[7m"));
 		expect(editorLine).toContain("hello");
 	});
 });

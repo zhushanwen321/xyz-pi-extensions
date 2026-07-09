@@ -37,9 +37,9 @@ describe("W2 — parseKey guard (arrow/keys no-op in editor)", () => {
 		c.handleInput(RIGHT);
 		c.handleInput(RIGHT);
 		const lines = c.render(60);
-		const editorLine = lines.find((l) => l.includes("█"));
+		const editorLine = lines.find((l) => l.includes("\x1b[7m"));
 		expect(editorLine).toBeDefined();
-		expect(editorLine).not.toContain("[");
+		expect(editorLine).not.toContain("\x1b[A"); expect(editorLine).not.toContain("\x1b[B"); expect(editorLine).not.toContain("\x1b[C"); expect(editorLine).not.toContain("\x1b[D");
 		expect(editorLine).not.toContain("C");
 	});
 
@@ -55,12 +55,12 @@ describe("W2 — parseKey guard (arrow/keys no-op in editor)", () => {
 		c.handleInput(LEFT);  // cursor 1→0
 		c.handleInput("b");   // insert at 0 → "ba", cursor=1
 		const lines = c.render(60);
-		const editorLine = lines.find((l) => l.includes("█"));
+		const editorLine = lines.find((l) => l.includes("\x1b[7m"));
 		expect(editorLine).toBeDefined();
 		// cursor at 1: "b█a" — text contains both chars
 		expect(editorLine).toContain("b");
 		expect(editorLine).toContain("a");
-		expect(editorLine).not.toContain("[");
+		expect(editorLine).not.toContain("\x1b[A"); expect(editorLine).not.toContain("\x1b[B"); expect(editorLine).not.toContain("\x1b[C"); expect(editorLine).not.toContain("\x1b[D");
 	});
 
 	it("C-KEYMAP-SPACE: space input appends a space character", () => {
@@ -72,7 +72,7 @@ describe("W2 — parseKey guard (arrow/keys no-op in editor)", () => {
 		c.handleInput(" ");
 		c.handleInput("b");
 		const lines = c.render(60);
-		const editorLine = lines.find((l) => l.includes("█"));
+		const editorLine = lines.find((l) => l.includes("\x1b[7m"));
 		expect(editorLine).toContain("a b");
 	});
 
@@ -85,9 +85,9 @@ describe("W2 — parseKey guard (arrow/keys no-op in editor)", () => {
 		c.handleInput(UP);
 		c.handleInput("b");
 		const lines = c.render(60);
-		const editorLine = lines.find((l) => l.includes("█"));
+		const editorLine = lines.find((l) => l.includes("\x1b[7m"));
 		expect(editorLine).toContain("ab");
-		expect(editorLine).not.toContain("[");
+		expect(editorLine).not.toContain("\x1b[A"); expect(editorLine).not.toContain("\x1b[B"); expect(editorLine).not.toContain("\x1b[C"); expect(editorLine).not.toContain("\x1b[D");
 	});
 
 	it.each([
@@ -110,9 +110,9 @@ describe("W2 — parseKey guard (arrow/keys no-op in editor)", () => {
 		c.handleInput(seq);
 		c.handleInput("b");
 		const lines = c.render(60);
-		const editorLine = lines.find((l) => l.includes("█"));
+		const editorLine = lines.find((l) => l.includes("\x1b[7m"));
 		expect(editorLine).toContain("ab");
-		expect(editorLine).not.toContain("[");
+		expect(editorLine).not.toContain("\x1b[A"); expect(editorLine).not.toContain("\x1b[B"); expect(editorLine).not.toContain("\x1b[C"); expect(editorLine).not.toContain("\x1b[D");
 	});
 });
 
@@ -134,7 +134,7 @@ describe("W2 — draftText migration", () => {
 		c.handleInput(DOWN);
 		c.handleInput(ENTER);
 		const lines = c.render(80);
-		const editorLine = lines.find((l) => l.includes("█"));
+		const editorLine = lines.find((l) => l.includes("\x1b[7m"));
 		expect(editorLine).toBeDefined();
 		expect(editorLine).toContain("abc");
 	});
@@ -164,7 +164,7 @@ describe("W2 — draftText migration", () => {
 		c.handleInput(DOWN);
 		c.handleInput(ENTER);
 		const lines1 = c.render(80);
-		const editorLine1 = lines1.find((l) => l.includes("█"));
+		const editorLine1 = lines1.find((l) => l.includes("\x1b[7m"));
 		expect(editorLine1).toContain("aaa");
 		expect(editorLine1).not.toContain("ccc");
 	});
