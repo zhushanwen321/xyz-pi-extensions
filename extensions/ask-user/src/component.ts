@@ -260,6 +260,7 @@ export class AskUserComponent implements Component {
 		if (onOther && matchesKey(data, "enter")) {
 			state.mode = "freeform";
 			state.draftText = state.freeTextValue ?? state.freeDraft ?? "";
+			state.cursorIndex = state.draftText.length;
 			this.invalidate();
 			this.tui.requestRender();
 			return;
@@ -380,26 +381,56 @@ export class AskUserComponent implements Component {
 				return;
 			}
 			if (matchesKey(data, "backspace")) {
-				state.draftText = state.draftText.slice(0, -1);
+				if (state.cursorIndex > 0) {
+					state.draftText = state.draftText.slice(0, state.cursorIndex - 1) + state.draftText.slice(state.cursorIndex);
+					state.cursorIndex--;
+				}
+				this.invalidate();
+				this.tui.requestRender();
+				return;
+			}
+			// 光标移动
+			if (matchesKey(data, "left")) {
+				state.cursorIndex = Math.max(0, state.cursorIndex - 1);
+				this.invalidate();
+				this.tui.requestRender();
+				return;
+			}
+			if (matchesKey(data, "right")) {
+				state.cursorIndex = Math.min(state.draftText.length, state.cursorIndex + 1);
+				this.invalidate();
+				this.tui.requestRender();
+				return;
+			}
+			if (matchesKey(data, "home")) {
+				state.cursorIndex = 0;
+				this.invalidate();
+				this.tui.requestRender();
+				return;
+			}
+			if (matchesKey(data, "end")) {
+				state.cursorIndex = state.draftText.length;
 				this.invalidate();
 				this.tui.requestRender();
 				return;
 			}
 			// 空格特判：parseKey(" ") 返回 "space"（非单字符），需显式追加
 			if (matchesKey(data, "space")) {
-				state.draftText += " ";
+				state.draftText = state.draftText.slice(0, state.cursorIndex) + " " + state.draftText.slice(state.cursorIndex);
+				state.cursorIndex++;
 				this.invalidate();
 				this.tui.requestRender();
 				return;
 			}
-			// 单字符 printable：parseKey("a") 返回 "a"（code 32-126），追加
+			// 单字符 printable：parseKey("a") 返回 "a"（code 32-126），在光标处插入
 			if (keyId.length === 1 && keyId >= " " && keyId <= "~") {
-				state.draftText += keyId;
+				state.draftText = state.draftText.slice(0, state.cursorIndex) + keyId + state.draftText.slice(state.cursorIndex);
+				state.cursorIndex++;
 				this.invalidate();
 				this.tui.requestRender();
 				return;
 			}
-			// 其他 special key（方向键/功能键/modifier 组合）→ no-op（不泄漏）
+			// 其他 special key（功能键/modifier 组合）→ no-op（不泄漏）
 			return;
 		}
 
@@ -412,9 +443,11 @@ export class AskUserComponent implements Component {
 
 		const cleaned = data.replace(/\x1b\[200~|\x1b\[201~/g, "");
 		let changed = false;
-		for (const c of cleaned) {
+		// 用 Array.from 正确拆分 emoji/surrogate pairs
+		for (const c of Array.from(cleaned)) {
 			if (c >= " ") {
-				state.draftText += c;
+				state.draftText = state.draftText.slice(0, state.cursorIndex) + c + state.draftText.slice(state.cursorIndex);
+				state.cursorIndex += c.length;
 				changed = true;
 			}
 		}
@@ -472,6 +505,7 @@ export class AskUserComponent implements Component {
 		if (q.allowComment && state.mode !== "comment") {
 			state.mode = "comment";
 			state.draftText = state.commentValue ?? "";
+			state.cursorIndex = state.draftText.length;
 			this.invalidate();
 			this.tui.requestRender();
 			return;

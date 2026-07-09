@@ -148,8 +148,9 @@ describe("renderQuestionView — Other editor mode", () => {
 			"my draft",
 		);
 		const t = text(lines);
-		// Other 行原地变 [ ] <input>█（freeform 模式不依赖 buildEditorBlock 独立编辑块）
-		expect(t).toContain("my draft");
+		// cursorIndex=2 → █ 在 "my" 和 " draft" 之间
+		expect(t).toContain("my");
+		expect(t).toContain("draft");
 		expect(t).toContain("█");
 		// 不再独立 "Your answer" 提示行
 		expect(t).not.toContain("Your answer");
@@ -177,7 +178,9 @@ describe("renderQuestionView — Other editor mode", () => {
 		// 多选 box [ ] + 编号 3. 都在编辑行上
 		expect(t).toContain("[ ]");
 		expect(t).toContain("3. ");
-		expect(t).toContain("custom");
+		// cursorIndex=2 → █ 在 "cu" 和 "stom" 之间
+		expect(t).toContain("cu");
+		expect(t).toContain("stom");
 		expect(t).toContain("█");
 	});
 

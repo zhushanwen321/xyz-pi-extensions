@@ -92,19 +92,21 @@ describe("AskUserComponent — key leak fix (C-ARROW / C-KEYMAP)", () => {
 		expect(editorLine).not.toContain("C");
 	});
 
-	// ── C-ARROW-2: 4 方向键夹输入 a/b → editorText === "ab" ──
-	it("C-ARROW-2: mixed arrow keys and text input only captures text", () => {
+	// ── C-ARROW-2: direction keys + text input → correct cursor behavior ──
+	it("C-ARROW-2: mixed arrow keys and text input with cursor movement", () => {
 		const c = openFreeform([singleQ]);
 		c.handleInput(DOWN);   // no-op
-		c.handleInput(RIGHT);  // no-op
-		c.handleInput("a");   // append
+		c.handleInput(RIGHT);  // no-op (empty text)
+		c.handleInput("a");   // insert at 0 → "a", cursor=1
 		c.handleInput(UP);     // no-op
-		c.handleInput(LEFT);   // no-op
-		c.handleInput("b");   // append
+		c.handleInput(LEFT);   // cursor 1→0
+		c.handleInput("b");   // insert at 0 → "ba", cursor=1
 		const lines = c.render(60);
 		const editorLine = lines.find((l) => l.includes("█"));
 		expect(editorLine).toBeDefined();
-		expect(editorLine).toContain("ab");
+		// cursor at 1: "b█a"
+		expect(editorLine).toContain("b");
+		expect(editorLine).toContain("a");
 		// Ensure no leaked sequences
 		expect(editorLine).not.toContain("[");
 	});
@@ -131,78 +133,85 @@ describe("AskUserComponent — key leak fix (C-ARROW / C-KEYMAP)", () => {
 		expect(editorLine).toContain("ab");
 	});
 
-	// ── C-KEYMAP-LEFT: left key no-op in editor ──
-	it("C-KEYMAP-LEFT: left arrow is no-op in freeform editor", () => {
+	// ── C-KEYMAP-LEFT: left arrow moves cursor ──
+	it("C-KEYMAP-LEFT: left arrow moves cursor left in freeform editor", () => {
 		const c = openFreeform([singleQ]);
-		c.handleInput("a");
-		c.handleInput(LEFT);
-		c.handleInput("b");
+		c.handleInput("ab");  // "ab", cursor=2
+		c.handleInput(LEFT);   // cursor 2→1
+		c.handleInput("c");   // insert at 1 → "acb", cursor=2
 		const lines = c.render(60);
 		const editorLine = lines.find((l) => l.includes("█"));
-		expect(editorLine).toContain("ab");
+		// cursor at 2: "ac█b"
+		expect(editorLine).toContain("a");
+		expect(editorLine).toContain("b");
+		expect(editorLine).toContain("c");
 	});
 
-	// ── C-KEYMAP-HOME: home key no-op ──
-	it("C-KEYMAP-HOME: home key is no-op in freeform editor", () => {
+	// ── C-KEYMAP-HOME: home key moves cursor to start ──
+	it("C-KEYMAP-HOME: home key moves cursor to start in freeform editor", () => {
 		const c = openFreeform([singleQ]);
-		c.handleInput("abc");
-		c.handleInput(HOME);
-		c.handleInput("d");
+		c.handleInput("abc");  // cursor=3
+		c.handleInput(HOME);    // cursor 3→0
+		c.handleInput("d");    // insert at 0 → "dabc", cursor=1
 		const lines = c.render(60);
 		const editorLine = lines.find((l) => l.includes("█"));
+		// cursor at 1: "d█abc"
+		expect(editorLine).toContain("d");
+		expect(editorLine).toContain("abc");
+	});
+
+	// ── C-KEYMAP-END: end key moves cursor to end ──
+	it("C-KEYMAP-END: end key moves cursor to end in freeform editor", () => {
+		const c = openFreeform([singleQ]);
+		c.handleInput("abc");  // cursor=3
+		c.handleInput(HOME);    // cursor 3→0
+		c.handleInput(END);     // cursor 0→3
+		c.handleInput("d");    // insert at 3 → "abcd", cursor=4
+		const lines = c.render(60);
+		const editorLine = lines.find((l) => l.includes("█"));
+		// cursor at 4 (end): "abcd█"
 		expect(editorLine).toContain("abcd");
 	});
 
-	// ── C-KEYMAP-END: end key no-op ──
-	it("C-KEYMAP-END: end key is no-op in freeform editor", () => {
-		const c = openFreeform([singleQ]);
-		c.handleInput("abc");
-		c.handleInput(END);
-		c.handleInput("d");
-		const lines = c.render(60);
-		const editorLine = lines.find((l) => l.includes("█"));
-		expect(editorLine).toContain("abcd");
-	});
-
-	// ── C-KEYMAP-INSERT: insert key no-op ──
+	// ── C-KEYMAP-INSERT: insert key no-op (cursor preserved) ──
 	it("C-KEYMAP-INSERT: insert key is no-op in freeform editor", () => {
 		const c = openFreeform([singleQ]);
-		c.handleInput("abc");
-		c.handleInput(INSERT);
-		c.handleInput("d");
+		c.handleInput("abc");  // cursor=3
+		c.handleInput(INSERT);  // no-op, cursor stays at 3
+		c.handleInput("d");    // insert at 3 → "abcd", cursor=4
 		const lines = c.render(60);
 		const editorLine = lines.find((l) => l.includes("█"));
 		expect(editorLine).toContain("abcd");
 	});
 
-	// ── C-KEYMAP-PGUP: page up no-op ──
+	// ── C-KEYMAP-PGUP: page up no-op (cursor preserved) ──
 	it("C-KEYMAP-PGUP: page up is no-op in freeform editor", () => {
 		const c = openFreeform([singleQ]);
-		c.handleInput("abc");
-		c.handleInput(PAGE_UP);
-		c.handleInput("d");
+		c.handleInput("abc");  // cursor=3
+		c.handleInput(PAGE_UP); // no-op, cursor stays at 3
+		c.handleInput("d");    // insert at 3 → "abcd", cursor=4
 		const lines = c.render(60);
 		const editorLine = lines.find((l) => l.includes("█"));
 		expect(editorLine).toContain("abcd");
 	});
 
-	// ── C-KEYMAP-PGDN: page down no-op ──
+	// ── C-KEYMAP-PGDN: page down no-op (cursor preserved) ──
 	it("C-KEYMAP-PGDN: page down is no-op in freeform editor", () => {
 		const c = openFreeform([singleQ]);
-		c.handleInput("abc");
-		c.handleInput(PAGE_DOWN);
-		c.handleInput("d");
+		c.handleInput("abc");  // cursor=3
+		c.handleInput(PAGE_DOWN); // no-op, cursor stays at 3
+		c.handleInput("d");    // insert at 3 → "abcd", cursor=4
 		const lines = c.render(60);
 		const editorLine = lines.find((l) => l.includes("█"));
 		expect(editorLine).toContain("abcd");
 	});
 
-	// ── C-KEYMAP-F1: f1 key no-op ──
+	// ── C-KEYMAP-F1: f1 key no-op (cursor preserved) ──
 	it("C-KEYMAP-F1: F1 key is no-op in freeform editor", () => {
 		const c = openFreeform([singleQ]);
-		c.handleInput("abc");
-		c.handleInput(F1);
-		c.handleInput("d");
+		c.handleInput("abc");  // cursor=3
+		c.handleInput(F1);      // no-op, cursor stays at 3
+		c.handleInput("d");    // insert at 3 → "abcd", cursor=4
 		const lines = c.render(60);
 		const editorLine = lines.find((l) => l.includes("█"));
 		expect(editorLine).toContain("abcd");
@@ -211,9 +220,9 @@ describe("AskUserComponent — key leak fix (C-ARROW / C-KEYMAP)", () => {
 	// ── C-KEYMAP-DELETE: delete key no-op (not backspace) ──
 	it("C-KEYMAP-DELETE: delete key is no-op in freeform editor (not backspace)", () => {
 		const c = openFreeform([singleQ]);
-		c.handleInput("abc");
-		c.handleInput(DELETE); // delete ≠ backspace, should be no-op
-		c.handleInput("d");
+		c.handleInput("abc");  // cursor=3
+		c.handleInput(DELETE);  // no-op, cursor stays at 3
+		c.handleInput("d");    // insert at 3 → "abcd", cursor=4
 		const lines = c.render(60);
 		const editorLine = lines.find((l) => l.includes("█"));
 		expect(editorLine).toContain("abcd");

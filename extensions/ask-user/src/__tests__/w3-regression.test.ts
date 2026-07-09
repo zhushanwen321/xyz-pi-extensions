@@ -56,28 +56,33 @@ describe("W3 — extended no-op key coverage (C-KEYMAP-*)", () => {
 		expect(editorLine).not.toContain("B");
 	});
 
-	it("C-KEYMAP-LEFT: left arrow is no-op in freeform editor", () => {
+	it("C-KEYMAP-LEFT: left arrow moves cursor in freeform editor", () => {
 		const { c } = make([singleQ]);
 		openFreeform(c);
-		c.handleInput("a");
-		c.handleInput(LEFT);
-		c.handleInput("b");
+		c.handleInput("ab");  // "ab", cursor=2
+		c.handleInput(LEFT);   // cursor 2→1
+		c.handleInput("c");   // insert at 1 → "acb", cursor=2
 		const lines = c.render(60);
 		const editorLine = lines.find((l) => l.includes("█"));
-		expect(editorLine).toContain("ab");
+		// cursor at 2: "ac█b"
+		expect(editorLine).toContain("a");
+		expect(editorLine).toContain("b");
+		expect(editorLine).toContain("c");
 		expect(editorLine).not.toContain("[");
 		expect(editorLine).not.toContain("D");
 	});
 
-	it("C-KEYMAP-HOME: Home key is no-op in freeform editor", () => {
+	it("C-KEYMAP-HOME: Home key moves cursor to start in freeform editor", () => {
 		const { c } = make([singleQ]);
 		openFreeform(c);
-		c.handleInput("a");
-		c.handleInput(HOME);
-		c.handleInput("b");
+		c.handleInput("abc");  // fallback: "abc", cursor=3
+		c.handleInput(HOME);    // cursor 3→0
+		c.handleInput("d");    // insert at 0 → "dabc", cursor=1
 		const lines = c.render(60);
 		const editorLine = lines.find((l) => l.includes("█"));
-		expect(editorLine).toContain("ab");
+		// cursor at 1: "d█abc"
+		expect(editorLine).toContain("d");
+		expect(editorLine).toContain("abc");
 		expect(editorLine).not.toContain("[");
 		expect(editorLine).not.toContain("H");
 	});

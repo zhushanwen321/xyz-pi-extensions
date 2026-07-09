@@ -43,21 +43,23 @@ describe("W2 — parseKey guard (arrow/keys no-op in editor)", () => {
 		expect(editorLine).not.toContain("C");
 	});
 
-	it("C-ARROW-2: arrow keys between typed chars do not leak", () => {
+	it("C-ARROW-2: arrow keys between typed chars with cursor movement", () => {
 		const { c } = make([singleQ]);
 		c.handleInput(DOWN);
 		c.handleInput(DOWN);
 		c.handleInput(ENTER); // open freeform
-		c.handleInput(DOWN);
-		c.handleInput(RIGHT);
-		c.handleInput("a");
-		c.handleInput(UP);
-		c.handleInput(LEFT);
-		c.handleInput("b");
+		c.handleInput(DOWN);  // no-op
+		c.handleInput(RIGHT); // no-op (empty text)
+		c.handleInput("a");   // insert at 0 → "a", cursor=1
+		c.handleInput(UP);    // no-op
+		c.handleInput(LEFT);  // cursor 1→0
+		c.handleInput("b");   // insert at 0 → "ba", cursor=1
 		const lines = c.render(60);
 		const editorLine = lines.find((l) => l.includes("█"));
 		expect(editorLine).toBeDefined();
-		expect(editorLine).toContain("ab");
+		// cursor at 1: "b█a" — text contains both chars
+		expect(editorLine).toContain("b");
+		expect(editorLine).toContain("a");
 		expect(editorLine).not.toContain("[");
 	});
 

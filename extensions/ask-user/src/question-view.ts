@@ -116,7 +116,10 @@ function buildOptionLines(
 				const lead = `${prefix} ${marker} `;
 				const avail = Math.max(1, width - visibleWidth(lead));
 				// 编号 + 文本 + 末尾光标 █ 整体软换行（空 input 时仅编号 + 光标，wrapTextWithAnsi 单行）
-				const styled = `${t.fg("muted", `${num}. `)}${t.fg("text", editorText)}${t.fg("accent", "█")}`;
+				const cursorPos = state.cursorIndex;
+			const before = editorText.slice(0, cursorPos);
+			const after = editorText.slice(cursorPos);
+			const styled = `${t.fg("muted", `${num}. `)}${t.fg("text", before)}${t.fg("accent", "█")}${t.fg("text", after)}`;
 				addWrappedInput(add, lead, styled, avail, MAX_EDITOR_LINES);
 			} else {
 				const hasFreeText = state.freeTextValue !== null;
@@ -205,6 +208,7 @@ function buildEditorBlock(
 	width: number,
 	mode: "freeform" | "comment",
 	editorText: string,
+	cursorIndex?: number,
 ): string[] {
 	if (mode === "freeform") {
 		return [""];
@@ -217,10 +221,11 @@ function buildEditorBlock(
 	add("");
 	const prompt = t.fg("muted", " Your comment (optional):");
 	add(prompt);
-	// 渲染当前编辑器文本（单行；多行时按 \n 拆分）
-	for (const line of editorText.split("\n")) add(` ${line}`);
-	// 光标行
-	add(` ${t.fg("accent", "█")}`);
+	// 渲染当前编辑器文本，光标在 cursorIndex 位置
+	const pos = cursorIndex ?? editorText.length;
+	const before = editorText.slice(0, pos);
+	const after = editorText.slice(pos);
+	add(` ${t.fg("text", before)}${t.fg("accent", "█")}${t.fg("text", after)}`);
 	add("");
 	add(t.fg("dim", " Type to add · Backspace deletes · Enter submit · Esc back"));
 	return lines;
@@ -294,7 +299,7 @@ export function renderQuestionView(
 		add("");
 		const optionLines = buildOptionLines(q, state, theme, width, false, editorText);
 		for (const line of optionLines) add(line);
-		const editorBlock = buildEditorBlock(theme, width, state.mode, editorText);
+		const editorBlock = buildEditorBlock(theme, width, state.mode, editorText, state.cursorIndex);
 		lines.push(...editorBlock);
 		if (state.mode === "freeform") {
 			// freeform 模式 help 行：光标锁在 Other 上，正在输入
