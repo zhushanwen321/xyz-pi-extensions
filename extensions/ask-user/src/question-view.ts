@@ -101,7 +101,9 @@ function buildOptionLines(
 
 	for (let i = 0; i < opts.length; i++) {
 		const opt = opts[i]!;
-		const isSelected = i === state.cursorIndex;
+		// 编辑器模式下用 savedOptionsCursorIndex 判断选项高亮，cursorIndex 此时是文本光标
+		const activeOptionCursor = (state.mode === "freeform" || state.mode === "comment") ? state.savedOptionsCursorIndex : state.cursorIndex;
+		const isSelected = i === activeOptionCursor;
 		const isOther = opt.isOther === true;
 		const prefix = isSelected ? t.fg("accent", ">") : " ";
 
