@@ -223,6 +223,30 @@ export function padVisible(s: string, width: number): string {
   return s + " ".repeat(width - vl);
 }
 
+/**
+ * 分段着色版填充：title 和 fill 都已着色（含 ANSI），拼接时各自 ANSI 延续。
+ * 解决 ANSI 嵌套失色：若用 fg("c1", fill(title, "─", n))，
+ * title 内的 \x1b[0m 会重置外层 c1，导致 title 之后的 ─ 失去 c1。
+ * 改成 title + fill.repeat(后)，fill 整段保持自己的 ANSI，不依赖外层包裹。
+ *
+ * 对齐 subagents format.ts segFillColored（同源移植）。
+ */
+export function segFillColored(
+  titleStyled: string | undefined,
+  fillStyled: string,
+  width: number,
+): string {
+  if (width <= 0) return "";
+  const fillW = visibleLen(fillStyled);
+  if (!titleStyled || fillW === 0) {
+    return fillStyled.repeat(width);
+  }
+  const tw = visibleLen(titleStyled);
+  if (tw >= width) return truncateToWidth(titleStyled, width);
+  const fillCount = width - tw;
+  return titleStyled + fillStyled.repeat(fillCount);
+}
+
 // ── Phase group (filters empty phases) ────────────────────────
 
 export interface PhaseGroup {

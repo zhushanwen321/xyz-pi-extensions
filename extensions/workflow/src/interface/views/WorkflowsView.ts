@@ -83,6 +83,31 @@ const TICK_MS = 200;
 /** 可打印 ASCII 字符下限（用于 save overlay 输入过滤）。 */
 const PRINTABLE_CHAR_MIN = 32;
 
+// ── 边框着色 helper（统一 borderMuted，避 ANSI 嵌套失色）──────────
+// 对齐 subagents list-component.ts 的 b/dash/dashes/titleBorder/plainBorder/walled。
+// 所有 ╭╮╰╯├┤┬┴─│ 统一走 borderMuted token，保证边框颜色一致。
+
+/** 着色单个框线字符（borderMuted）。 */
+function b(theme: ThemeLike, s: string): string {
+  return theme.fg("borderMuted", s);
+}
+/** 着色单字符填充用的 ─（供 segFillColored 的 fillStyled）。 */
+function dash(theme: ThemeLike): string {
+  return theme.fg("borderMuted", "─");
+}
+/** 满宽 ─ 填充串（borderMuted）。n 次单字符着色，ANSI 自然延续。 */
+function dashes(theme: ThemeLike, n: number): string {
+  return dash(theme).repeat(Math.max(0, n));
+}
+/** 纯线顶/底框（无标题）：左角 + ─×W + 右角。 */
+function plainBorder(theme: ThemeLike, left: string, right: string, contentWidth: number): string {
+  return b(theme, left) + dashes(theme, contentWidth) + b(theme, right);
+}
+/** 内容行墙：│ + 内容(pad 到 contentWidth) + │，墙字符 borderMuted。 */
+function walled(theme: ThemeLike, content: string, contentWidth: number): string {
+  return `${b(theme, "│")}${padVisible(content, contentWidth)}${b(theme, "│")}`;
+}
+
 // ── Minimal TUI duck-types（避免直接 import TUI/KeybindingsManager 类型 ──
 // 共享类型 fallback shared/types/mariozechner/index.d.ts 不导出 TUI 类，
 // workspace 跨包 typecheck 会报 "no exported member 'TUI'"。
@@ -518,12 +543,12 @@ function renderLayout(
 
  // Padding 已在各 renderLevel 内部处理，无需额外 padding
 
- // Wrap body lines with │ borders + sidebar divider
+ // Wrap body lines with │ borders + sidebar divider（统一 borderMuted）
   for (let i = bodyStart; i < lines.length; i++) {
-    lines[i] = "│" + padVisible(lines[i], contentWidth) + "│";
+    lines[i] = walled(theme, lines[i], contentWidth);
   }
 
-  lines.push("╰" + "─".repeat(contentWidth) + "╯");
+  lines.push(plainBorder(theme, "╰", "╯", contentWidth));
 
  // Save overlay（缺陷 #3）：居中覆盖 body
   if (state.saveMode) {
@@ -557,8 +582,8 @@ function renderHeader(
   const nameLine = theme.bold(run.spec.scriptName);
   const rightPart = theme.fg("muted", `${headerRight} · ${budgetStr}`);
 
-  lines.push("╭" + "─".repeat(contentWidth) + "╮");
-  lines.push("│" + padVisible(nameLine, contentWidth) + "│");
+  lines.push(plainBorder(theme, "╭", "╮", contentWidth));
+  lines.push(walled(theme, nameLine, contentWidth));
 
   if (run.spec.description) {
     const maxDesc = contentWidth - visibleLen(rightPart) - 1;
@@ -567,11 +592,11 @@ function renderHeader(
       : run.spec.description;
     const descPart = theme.fg("dim", descText);
     const padLen = Math.max(0, contentWidth - visibleLen(descPart) - visibleLen(rightPart));
-    lines.push("│" + descPart + " ".repeat(padLen) + rightPart + "│");
+    lines.push(`${b(theme, "│")}${descPart}${" ".repeat(padLen)}${rightPart}${b(theme, "│")}`);
   } else {
-    lines.push("│" + padVisible(rightPart, contentWidth) + "│");
+    lines.push(walled(theme, rightPart, contentWidth));
   }
-  lines.push("├" + "─".repeat(contentWidth) + "┤");
+  lines.push(plainBorder(theme, "├", "┤", contentWidth));
 }
 
 /** Footer（框外）：nav hint + lifecycle shortcuts + esc/ctrl+c。 */
@@ -600,16 +625,17 @@ function renderFooter(
   lines.push(theme.fg("muted", footer));
 }
 
-/** mergeBody：左侧 sidebar + │ divider + 右侧 main，拼成 body 行。 */
+/** mergeBody：左侧 sidebar + │ divider + 右侧 main，拼成 body 行（divider 着色 borderMuted）。 */
 function mergeBody(
   lines: string[],
   leftLines: string[],
   rightLines: string[],
+  theme: ThemeLike,
 ): void {
   const bodyHeightVal = Math.max(leftLines.length, rightLines.length);
   for (let i = 0; i < bodyHeightVal; i++) {
     const left = padVisible(leftLines[i] ?? "", SIDEBAR_WIDTH);
-    lines.push(left + "│" + (rightLines[i] ?? ""));
+    lines.push(left + b(theme, "│") + (rightLines[i] ?? ""));
   }
 }
 
@@ -649,7 +675,7 @@ function renderLevel0(
 
  // Left: sidebar title + phase list（固定高度 viewport + 滚动，只构建可见行）
   leftLines.push(theme.fg("muted", "Phases"));
-  leftLines.push("─".repeat(SIDEBAR_WIDTH));
+  leftLines.push(dashes(theme, SIDEBAR_WIDTH));
   const { startIdx: phaseStart, viewportH: phaseViewportH } = computeViewport(phases.length, state.phaseIdx, bodyH);
   for (let i = phaseStart; i < phaseStart + phaseViewportH && i < phases.length; i++) {
     leftLines.push(formatPhaseLine(phases[i], i, i === state.phaseIdx, theme, SIDEBAR_WIDTH));
@@ -667,7 +693,7 @@ function renderLevel0(
       ? `${selectedPhase.name} · ${selectedPhase.nodes.length} agents · ${formatElapsed(run.meta.startedAt, now)}`
       : `${selectedPhase.nodes.length} agents · ${formatElapsed(run.meta.startedAt, now)}`)
     : "(no phase)"));
-  rightLines.push("─".repeat(mainWidth));
+  rightLines.push(dashes(theme, mainWidth));
   if (selectedPhase) {
     const { startIdx: agentStart, viewportH: agentViewportH } = computeViewport(selectedPhase.nodes.length, state.agentIdx, bodyH);
     for (let i = agentStart; i < agentStart + agentViewportH && i < selectedPhase.nodes.length; i++) {
@@ -678,7 +704,7 @@ function renderLevel0(
   while (rightLines.length < bodyH) rightLines.push("");
   rightLines.length = bodyH;
 
-  mergeBody(lines, leftLines, rightLines);
+  mergeBody(lines, leftLines, rightLines, theme);
 }
 
 // ── Level 1: Agent selection ──────────────────────────────────
@@ -698,7 +724,7 @@ function renderLevel1(
 
  // Left: sidebar title + phase list（固定高度 viewport + 滚动，只构建可见行）
   leftLines.push(theme.fg("muted", "Phases"));
-  leftLines.push("─".repeat(SIDEBAR_WIDTH));
+  leftLines.push(dashes(theme, SIDEBAR_WIDTH));
   const { startIdx: phaseStart, viewportH: phaseViewportH } = computeViewport(phases.length, state.phaseIdx, bodyH);
   for (let i = phaseStart; i < phaseStart + phaseViewportH && i < phases.length; i++) {
     leftLines.push(formatPhaseLine(phases[i], i, i === state.phaseIdx, theme, SIDEBAR_WIDTH));
@@ -714,10 +740,10 @@ function renderLevel1(
     rightLines.push(theme.fg("muted", currentPhase.name
       ? `${currentPhase.name} · ${currentPhase.nodes.length} agents`
       : `${currentPhase.nodes.length} agents`));
-    rightLines.push("─".repeat(mainWidth));
+    rightLines.push(dashes(theme, mainWidth));
   } else {
     rightLines.push(theme.fg("muted", "(no phase)"));
-    rightLines.push("─".repeat(mainWidth));
+    rightLines.push(dashes(theme, mainWidth));
   }
   const { startIdx: agentStart, viewportH: agentViewportH } = computeViewport(agents.length, state.agentIdx, bodyH);
   for (let i = agentStart; i < agentStart + agentViewportH && i < agents.length; i++) {
@@ -746,7 +772,7 @@ function renderLevel1(
   while (rightLines.length < bodyH) rightLines.push("");
   rightLines.length = bodyH;
 
-  mergeBody(lines, leftLines, rightLines);
+  mergeBody(lines, leftLines, rightLines, theme);
 }
 
 // ── Level 2: Execution detail ─────────────────────────────────
@@ -767,7 +793,7 @@ function renderLevel2(
 
  // Left: agents title + agent names
   leftLines.push(theme.fg("muted", "Agents"));
-  leftLines.push("─".repeat(SIDEBAR_WIDTH));
+  leftLines.push(dashes(theme, SIDEBAR_WIDTH));
   const AGENT_NAME_BUDGET = 4; // pointer(2) + spacing(2)
   for (let i = 0; i < agents.length; i++) {
     const a = agents[i];
@@ -811,7 +837,7 @@ function renderLevel2(
   for (let i = 0; i < bodyH; i++) leftPadded.push(leftLines[i] ?? "");
   const rightPadded: string[] = [];
   for (let i = 0; i < bodyH; i++) rightPadded.push(rightLines[i] ?? "");
-  mergeBody(lines, leftPadded, rightPadded);
+  mergeBody(lines, leftPadded, rightPadded, theme);
 }
 
 // ── Trace export（S 键，对齐 main saveTraceToFile）─────────────
@@ -876,43 +902,43 @@ function renderSaveOverlay(
   const contentWidth = width - BOX_BORDER_CHARS;
   const lines: string[] = [];
 
-  lines.push("╭" + "─".repeat(contentWidth) + "╮");
+  lines.push(plainBorder(theme, "╭", "╮", contentWidth));
 
  // Title
-  lines.push("│" + padVisible(theme.bold(" Save dynamic workflow"), contentWidth) + "│");
+  lines.push(walled(theme, theme.bold(" Save dynamic workflow"), contentWidth));
 
  // Destination preview
   const destName = state.saveInputValue || "(name)";
   const destLine = `.pi/workflows/${destName}.js`;
-  lines.push("│" + padVisible(theme.fg("dim", destLine), contentWidth) + "│");
+  lines.push(walled(theme, theme.fg("dim", destLine), contentWidth));
 
  // Empty line
-  lines.push("│" + padVisible("", contentWidth) + "│");
+  lines.push(walled(theme, "", contentWidth));
 
  // Label
-  lines.push("│" + padVisible("Save as:", contentWidth) + "│");
+  lines.push(walled(theme, "Save as:", contentWidth));
 
  // Input line with cursor block
   const inputLine = `  > ${state.saveInputValue}\u2588`;
-  lines.push("│" + padVisible(inputLine, contentWidth) + "│");
+  lines.push(walled(theme, inputLine, contentWidth));
 
  // Empty line
-  lines.push("│" + padVisible("", contentWidth) + "│");
+  lines.push(walled(theme, "", contentWidth));
 
  // Inline message (error or success)
   if (state.saveMessage) {
     const msgStyle = state.saveMsgOk ? "success" : "error";
     const msgLine = `  ${state.saveMessage}`;
-    lines.push("│" + padVisible(theme.fg(msgStyle, msgLine), contentWidth) + "│");
+    lines.push(walled(theme, theme.fg(msgStyle, msgLine), contentWidth));
   } else {
-    lines.push("│" + padVisible("", contentWidth) + "│");
+    lines.push(walled(theme, "", contentWidth));
   }
 
  // Hint
   const hint = "Enter to save · Esc to cancel";
-  lines.push("│" + padVisible(theme.fg("muted", hint), contentWidth) + "│");
+  lines.push(walled(theme, theme.fg("muted", hint), contentWidth));
 
-  lines.push("╰" + "─".repeat(contentWidth) + "╯");
+  lines.push(plainBorder(theme, "╰", "╯", contentWidth));
 
   return lines;
 }
