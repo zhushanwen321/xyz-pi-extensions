@@ -74,14 +74,9 @@ export const multiQWithComment: Question[] = [
 	{ question: "Q2", header: "Second", options: [{ label: "X" }, { label: "Y" }] },
 ];
 
-// ── Special keys (non-printable) ──
-export const HOME = "\x1b[H";
-export const END = "\x1b[F";
-export const INSERT = "\x1b[2~";
+// ── Aliases (PAGE_UP/PAGE_DOWN for W1 tests, PGUP/PGDN for W3 tests) ──
 export const PAGE_UP = "\x1b[5~";
 export const PAGE_DOWN = "\x1b[6~";
-export const F1 = "\x1bOP";
-export const DELETE = "\x1b[3~";
 
 // ── Modifier key sequences (ctrl/alt/shift/super + arrow/special) ──
 // CSI u encoding (Kitty/modifyOtherKeys mode 2): ESC [ <code> ; <mod> ~
