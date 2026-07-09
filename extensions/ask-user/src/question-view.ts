@@ -117,11 +117,12 @@ function buildOptionLines(
 				const num = i + 1;
 				const lead = `${prefix} ${marker} `;
 				const avail = Math.max(1, width - visibleWidth(lead));
-				// 编号 + 文本 + 末尾光标 █ 整体软换行（空 input 时仅编号 + 光标，wrapTextWithAnsi 单行）
+				// 编号 + 文本，光标用反色高亮当前字符（不占额外位置）
 				const cursorPos = state.cursorIndex;
-			const before = editorText.slice(0, cursorPos);
-			const after = editorText.slice(cursorPos);
-			const styled = `${t.fg("muted", `${num}. `)}${t.fg("text", before)}${t.fg("accent", "█")}${t.fg("text", after)}`;
+				const before = editorText.slice(0, cursorPos);
+				const charAtCursor = editorText[cursorPos] ?? " ";
+				const after = editorText.slice(cursorPos + 1);
+				const styled = `${t.fg("muted", `${num}. `)}${t.fg("text", before)}\x1b[7m${charAtCursor}\x1b[27m${t.fg("text", after)}`;
 				addWrappedInput(add, lead, styled, avail, MAX_EDITOR_LINES);
 			} else {
 				const hasFreeText = state.freeTextValue !== null;
@@ -223,11 +224,12 @@ function buildEditorBlock(
 	add("");
 	const prompt = t.fg("muted", " Your comment (optional):");
 	add(prompt);
-	// 渲染当前编辑器文本，光标在 cursorIndex 位置
+	// 渲染当前编辑器文本，光标用反色高亮当前字符
 	const pos = cursorIndex ?? editorText.length;
 	const before = editorText.slice(0, pos);
-	const after = editorText.slice(pos);
-	add(` ${t.fg("text", before)}${t.fg("accent", "█")}${t.fg("text", after)}`);
+	const charAtCursor = editorText[pos] ?? " ";
+	const after = editorText.slice(pos + 1);
+	add(` ${t.fg("text", before)}\x1b[7m${charAtCursor}\x1b[27m${t.fg("text", after)}`);
 	add("");
 	add(t.fg("dim", " Type to add · Backspace deletes · Enter submit · Esc back"));
 	return lines;
