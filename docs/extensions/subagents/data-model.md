@@ -27,7 +27,7 @@
 
 ### 保留的"充血内核"
 
-- 一次执行的完整内容（text/thinking/toolCalls/usage）按 turn 收口在 `record.turns: Turn[]`，是 record 的**字段**而非函数局部变量——流式内容跨事件累积存活，只有 `updateFromEvent` 读写。这是状态封装，等价 `private`
+- 一次执行的完整内容（SDK message.content 镜像为 content blocks + usage）按 turn 收口在 `record.turns: Turn[]`，是 record 的**字段**而非函数局部变量——流式内容跨事件累积存活，只有 `updateFromEvent` 读写。这是状态封装，等价 `private`
 - 不变量守护集中在 module 内：`completeRecord` 不重置 turns（updateFromEvent 已累积）、`project` 唯一算 elapsedSeconds——等价 aggregate root 守护不变量
 
 ---
@@ -84,22 +84,20 @@ interface ExecutionRecord {
 }
 ```
 
-`turns: Turn[]` 是收口设计的核心：一次执行的完整内容（text/thinking/toolCalls/usage）按 turn 组织在单一数组里，`eventLog` / `currentActivity` / `result` 文本均从 `turns[]` 派生（`getEventLog` / `getCurrentActivity` / `getFullText`），不再独立存储切片或缓冲。
+`turns: Turn[]` 是收口设计的核心：一次执行的完整内容（SDK message.content 镜像为 `TurnContentBlock[]` + usage）按 turn 组织在单一数组里，`eventLog` / `result` 文本均从 `turns[]` 派生（`getEventLog` / `getFullText`），不再独立存储切片或缓冲。
 
 ### Turn 结构（`turns[]` 的元素）
 
 ```typescript
 interface Turn {
-  text: string;            // 本 turn assistant 正文（text_delta 流式累积，完整内容）
-  thinking: string;        // 本 turn 推理（thinking_delta 流式累积，完整内容）
-  toolCalls: InternalToolCall[];  // 含完整 result + _status 进行中标记
-  usageDelta?: AgentUsage;        // 本 turn message_end 的 token 增量（聚合得 totalUsage）
+  content: TurnContentBlock[];  // SDK message.content 镜像：text/thinking/toolCall 同构有序 block
+  usageDelta?: AgentUsage;        // 本 turn message_end 的 token 增量（累加得 totalTokens）
   closed: boolean;         // turn_end 是否已到达；false=进行中，true=下次内容开新 turn
   closedTs?: number;       // turn_end 到达时的墙钟时间戳（getEventLog 派生 turn_end 条目 ts）
 }
 ```
 
-text/thinking 流式累积**完整内容**（非旧实现的 100 字切片），toolCalls 存完整 `InternalToolCall`（含 result + _status 内部状态机）。`turn_end` 到达后 `closed=true`，下次 text/thinking/tool 时开新 turn。跨边界导出（`getAllToolCalls` → `AgentResult.toolCalls`）由 `getAllToolCalls` 映射回纯净 `ToolCall`（strip `_status`/`startedTs`），保证导出形状清洁。
+`content` 是 SDK `message.content` 的**直接镜像**（单源）：`message_update` 事件用快照整体覆盖 `currentTurn().content`，不再 delta 累积。text/thinking/toolCall 是同构有序 block，由 `updateFromEvent` 按 id 精确关联（`toolCallId === ToolCall.id`）。跨边界导出（`getAllToolCalls` → `AgentResult.toolCalls`）由 `getAllToolCalls` 从 content 映射回纯净 `ToolCall`，保证导出形状清洁。
 
 ## 3. 状态机
 
@@ -130,11 +128,11 @@ status = result.success ? "done"
 | 入口 | 职责 | 调用方 |
 |---|---|---|
 | `createRecord(id, identity)` | 创建。identity（agent/model/mode/task/controller）一次确定不可变 | SubagentService.createRecordForMode |
-| `updateFromEvent(record, event)` | 实时更新。累积进 `turns[]`（text/thinking/toolCalls/usage）+ totalTokens + lastError | session-runner（`agentEvent` 回调，内联事件处理） |
+| `updateFromEvent(record, event)` | 实时更新。`message_update` 整体覆盖 `currentTurn().content`，tool 按 id 关联进 content + totalTokens + lastError | session-runner（`agentEvent` 回调，内联事件处理） |
 | `completeRecord(record, result, status)` | 冻结。写 endedAt/agentResult/result/error，不改 turns/tokens | SubagentService.finalizeRecord |
 | `project(record)` / `snapshot(record)` + 派生函数 | 投影。只读产出展示层对象 | 详见下节 |
 
-> 派生函数（与投影并列的只读读出器）：`getEventLog`（turns[] → 离散语义事件序列）、`getCurrentActivity`（turns[] 末尾 → running 活动行）、`getFullText`（turns[] → 完整正文）、`getAllToolCalls`（turns[] → 扁平 toolCalls）、`getTotalUsage`（turns[] → 聚合 usage）。
+> 派生函数（与投影并列的只读读出器）：`getEventLog`（turns[] → 离散语义事件序列）、`getFullText`（turns[] → 完整正文）、`getAllToolCalls`（turns[] → 扁平 toolCalls）、`getTotalUsage`（turns[] → 聚合 usage）。
 
 ## 5. 生命周期
 
@@ -171,21 +169,20 @@ flowchart LR
 - **poll 无 model**：旧 background record 的 model 在运行时丢失。新设计 model 是 identity 字段，创建时必填，投影时直取。
 - **elapsedSeconds 不一致**：旧 6 处计算 floor/round 混用。新设计 `project` 唯一计算点，统一 `Math.floor`。
 
-## 7. turns[] 收口（替代旧 eventLog chunking）
+## 7. turns[] 收口（content 单源镜像）
 
-`updateFromEvent` 把流式 delta 累积进 `turns[]` 的当前 turn，**不再切片成 eventLog 条目**：
+`updateFromEvent` 把 SDK 事件属入 `turns[]` 的当前 turn——`message_update` 用 SDK message.content 快照**整体覆盖** `currentTurn().content`（不 delta 累积），tool 按 **id** 精确关联：
 
 ```
-text_delta   → currentTurn().text += delta         （完整内容，非切片）
-thinking_delta → currentTurn().thinking += delta    （完整内容，非切片）
-tool_start   → currentTurn().toolCalls.push(running InternalToolCall)
-tool_end     → 跨 turn 找 running 同名 toolCall，补全 result/_status
-turn_end     → currentTurn().closed = true + closedTs + turnCount++ + 清 lastError
-message_end  → currentTurn().usageDelta += usage + totalTokens += Σ(usage)
-error        → record.lastError = message
+message_update → currentTurn().content = event.content 快照整体覆盖（text/thinking/toolCall 同构 block）
+tool_start     → content.push(running toolCall block，带 id)；若 message_update 快照已含同 id 骨架则补 _status
+tool_end       → findRunningToolCallBlock 按 id 精确关联（toolCallId===ToolCall.id，fallback 按 name），补 result/_status
+turn_end       → currentTurn().closed = true + closedTs + turnCount++ + 清 lastError
+message_end    → currentTurn().usageDelta += usage（累加，非覆盖）+ totalTokens += Σ(usage)
+error          → record.lastError = message
 ```
 
-`getEventLog(record)` 从 `turns[]` 派生**离散语义事件**序列（tool_start/tool_end 对 + turn_end，末尾若有 lastError 追加 error），不再含 `text_output`/`thinking` 切片条目——这从根上消灭了旧实现的残余尾巴 bug（compact view 显示 `text: }` 尾巴而非开头）。需要流式文本的消费方改读 `getCurrentActivity().label`（running 态）或 `result`（终态）。
+`getEventLog(record)` 从 `turns[]` 派生**离散语义事件**序列（tool_start/tool_end 对 + turn_end，末尾若有 lastError 追加 error），**含 text/thinking 首行摘要**条目（取首行避免膨胀）。这从根上消灭了旧实现的残余尾巴 bug（compact view 显示 `text: }` 尾巴而非开头）。
 
 ## 相关文档
 

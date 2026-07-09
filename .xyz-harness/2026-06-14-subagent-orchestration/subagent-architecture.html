@@ -258,7 +258,7 @@
   <div class="subtitle">当前实现（纯 in-process）· 与 spawn 模式的抉择分析</div>
   <div class="meta">
     repo: feat-subagent-enhance · branch: feat-subagent-enhance · 2026-06-14<br>
-    refs: ADR-022 (in-process) · ADR-024 (L1+L2 持久化) · Evolution 005 (混合模式 draft)
+    refs: ADR-025 (in-process) · ADR-027 (L1+L2 持久化) · Evolution 005 (混合模式 draft)
   </div>
 
   <!-- ============================================================ -->
@@ -596,7 +596,7 @@
         <div class="dt-branch-label">A · 不是</div>
         <div class="dt-branch-text">
           coding 场景 in-process 足够，background 大多几分钟内完成。<br><br>
-          <strong>动作：</strong>关闭 Evolution 005（superseded），ADR-024"不做 L3"保持有效。
+          <strong>动作：</strong>关闭 Evolution 005（superseded），ADR-027"不做 L3"保持有效。
         </div>
       </div>
       <div class="dt-branch b">
@@ -621,7 +621,7 @@
     <ol style="margin:8px 0 0; padding-left:20px;">
       <li><strong>实际使用数据</strong>：<code>~/.pi/agent/subagents/*/history.jsonl</code> 中 background 记录比例与时长分布 —— 若大多几分钟内完成，L3 需求弱。</li>
       <li><strong>是否该用 schedule_prompt</strong>：跨重启的持久任务是否本就该用已有的 <code>schedule_prompt</code> 工具，而非 subagent 承担？</li>
-      <li><strong>ADR-022 约束是否仍成立</strong>：当时的迁移理由（性能、工具完整性）现在是否还成立？Pi SDK 是否有新变化？</li>
+      <li><strong>ADR-025 约束是否仍成立</strong>：当时的迁移理由（性能、工具完整性）现在是否还成立？Pi SDK 是否有新变化？</li>
       <li><strong>第三方包状态</strong>：tintinweb 版 <code>pi-subagents</code> 的 <code>async-execution.ts</code> 是否已卸载 —— 若还在，可参考其 spawn 模块而非从零实现。</li>
     </ol>
   </div>

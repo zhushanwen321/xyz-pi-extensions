@@ -208,7 +208,9 @@ describe("execute — signal abort (FR-10 / AC-14)", () => {
 		const ctx = makeCtx();
 		ctx.signal = controller.signal;
 		const result = await tool.execute("id", validSingle, controller.signal, undefined, ctx);
-		expect(result.content[0].text).toContain("cancelled");
+		// step3 是 agent abort（goal 取消/compact/session 切换），文案应明确告知 abort，
+		// 区别于 step5 的用户取消（A5）
+		expect(result.content[0].text).toContain("abort");
 		expect(result.details.cancelled).toBe(true);
 	});
 
@@ -475,5 +477,26 @@ describe("factory registration (FR-1)", () => {
 		expect(typeof tool.execute).toBe("function");
 		expect(typeof tool.renderCall).toBe("function");
 		expect(typeof tool.renderResult).toBe("function");
+	});
+});
+
+// ── FR-3: inline 渲染（不传 overlay）───────────────────────
+describe("execute — inline render (FR-3)", () => {
+	it("I-FR3: ui.custom called WITHOUT overlay options (inline, not modal)", async () => {
+		const tool = getTool();
+		let customArgCount = -1;
+		const ctx = {
+			hasUI: true,
+			signal: undefined as AbortSignal | undefined,
+			ui: {
+				custom: async (...args: unknown[]): Promise<null> => {
+					customArgCount = args.length;
+					return null; // cancelled — simplest resolve
+				},
+			},
+		};
+		await tool.execute("id", validSingle, undefined, undefined, ctx);
+		// FR-3: execute 调用 ui.custom 只传 factory（1 个参数），不传 overlay options
+		expect(customArgCount).toBe(1);
 	});
 });

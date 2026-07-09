@@ -1,0 +1,94 @@
+<!DOCTYPE html>
+<!--
+  requirements.html 骨架 — full-clarity（① 澄清需求）阶段产物模板。
+  主角图：flowchart LR 用例图（Actor × 用例 × 系统边界）。
+  特有 CSS：.uc / .uc-meta / .ac / .ac-normal / .ac-abnormal / .ac-boundary（用例卡片 + 验收条件三色）。
+-->
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>澄清需求 — {{TOPIC}}</title>
+<style>
+/* INLINE: design.css */
+
+/* === requirements 阶段特有样式 === */
+.uc { background: var(--surface); border: 1px solid var(--border); border-radius: 12px; padding: 16px 20px; margin: 14px 0; }
+.uc h3 { margin-top: 0; color: var(--accent); font-family: var(--font-mono); font-size: 15px; }
+.uc-meta { color: var(--text-dim); font-size: 13px; margin: 2px 0 8px; font-family: var(--font-mono); }
+.ac { font-size: 14px; list-style: none; padding: 0; }
+.ac li { margin: 3px 0; padding-left: 16px; position: relative; }
+.ac li::before { content: '☐'; position: absolute; left: 0; color: var(--text-dim); }
+.ac-normal { color: var(--green); font-weight: 600; }
+.ac-abnormal { color: var(--red); font-weight: 600; }
+.ac-boundary { color: var(--amber); font-weight: 600; }
+.ac-normal::before, .ac-abnormal::before, .ac-boundary::before { content: '●'; font-size: 8px; top: 7px; }
+</style>
+</head>
+<body>
+<div class="wrap">
+<nav class="toc" id="toc">
+  <div class="toc-title">目录</div>
+  <!-- AGENT-FILL: toc-links — 建议含：TL;DR / 用例图 / 业务目标 / 业务用例 / 数据流转 / 功能清单 / UI-UX / 系统间关联 / 约束 / 不做 / 决策记录 -->
+</nav>
+<main class="main">
+<header class="doc-head">
+  <h1>① 澄清需求</h1>
+  <p class="subtitle">{{TOPIC}} · ① 澄清需求 · business requirements</p>
+  <div class="badge-row">
+    <!-- AGENT-FILL: badges — 如 <span class="tag tag--green">verdict: pass</span> -->
+  </div>
+</header>
+
+<!-- AGENT-FILL: tldr — TL;DR 摘要框（同 issues 骨架 .tldr 结构） -->
+
+<!-- AGENT-FILL: hero-diagram — 用例图主角图。flowchart LR，Actor (( )) → 用例，系统边界用 subgraph。
+<div class="diagram-shell">
+  <p class="diagram-shell__hint">用例图 · Actor × 用例 × 系统边界</p>
+  <div class="mermaid-wrap">
+    <div class="zoom-controls">
+      <button data-action="zoom-in" title="放大">+</button>
+      <button data-action="zoom-out" title="缩小">−</button>
+      <button data-action="zoom-fit" title="适配">⊡</button>
+      <button data-action="zoom-one" title="1:1">1:1</button>
+      <button data-action="zoom-expand" title="新窗口">⤢</button>
+      <span class="zoom-label">— contain</span>
+    </div>
+    <div class="mermaid-viewport"><div class="mermaid mermaid-canvas"></div></div>
+  </div>
+  <script type="text/plain" class="diagram-source">
+flowchart LR
+  Actor((用户))
+  subgraph 系统
+    UC1[用例1]
+    UC2[用例2]
+  end
+  Actor --> UC1
+  ...
+  </script>
+</div>
+-->
+
+<!-- AGENT-FILL: goals — 业务目标。用 .data-table 或列表 -->
+
+<!-- AGENT-FILL: use-cases — 业务用例。每个用例用 .uc 卡片 + .uc-meta + .ac（验收条件，用 .ac-normal/.ac-abnormal/.ac-boundary 三色） -->
+
+<!-- AGENT-FILL: data-flow — 数据流转 -->
+
+<!-- AGENT-FILL: features — 功能清单。用 .data-table -->
+
+<!-- AGENT-FILL: ui-ux — UI/UX 场景（纯后端/API 写降级理由跳过） -->
+
+<!-- AGENT-FILL: cross-system — 系统间关联（单系统写降级理由跳过） -->
+
+<!-- AGENT-FILL: constraints — 约束 & 不做 -->
+
+<!-- AGENT-FILL: decisions — 决策记录 -->
+
+<footer class="doc-foot">{{TOPIC}} · 澄清需求 · requirements.md 可视化</footer>
+</main>
+</div>
+
+<script type="module">/* INLINE: zoom.js */</script>
+</body>
+</html>

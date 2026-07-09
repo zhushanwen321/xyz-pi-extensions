@@ -12,14 +12,13 @@
             ┌─────────────────────────────────────────────┐
             │              外壳（薄壳）                    │
             │  tools/subagent-tool   commands/subagents   │
-            │           index.ts（装配）                   │
+            │           index.ts（装配 tool/command/messageRenderer）  │
             └────────────────────┬────────────────────────┘
                                  │ 调用
                                  ▼
    ┌─────────────────────────────────────────────────────────┐
    │                     TUI 层（展示）                       │
-   │  tool-render · list-view · progress-widget              │
-   │  category-confirm · config-wizard · format              │
+   │  tool-render · list-view · bg-notify-render · format        │
    │  职责：只读消费 RecordSnapshot / Details，永不回写状态   │
    └────────────────────────▲────────────────────────────────┘
                             │ 投影（snapshot/project）
@@ -82,7 +81,7 @@ Core 内部进一步分两子层，依赖严格自上而下，禁止反向或同
 
 按层 + 状态标注。状态：✅ 已实现 ｜ ⬜ 骨架（签名+流程图，待填）。
 
-### Core 层（8）
+### Core 层（9）
 
 > 分编排 / 基础 / 叶子三个子层（依赖方向见 §2 Core 子层依赖铁律）。
 
@@ -96,13 +95,14 @@ Core 内部进一步分两子层，依赖严格自上而下，禁止反向或同
 
 | 文件 | 职责 | 状态 |
 |---|---|---|
-| `output-collector.ts` | Record → AgentResult 收集（text/usage/toolCalls/parsedOutput 字段单源，全部从 record.turns[] 派生） | ✅ |
+| `output-collector.ts` | Record → AgentResult 收集（text/usage/toolCalls/parsedOutput 字段单源，全部从 record.turns[].content 派生） | ✅ |
 
-#### 叶子原语（Primitives）— 6
+#### 叶子原语（Primitives）— 7
 
 | 文件 | 职责 | 状态 |
 |---|---|---|
 | `execution-record.ts` | 唯一状态对象（turns[] 收口）+ 创建/更新/完成/投影/派生入口 | ✅ |
+| `session-reconstructor.ts` | session.jsonl → turns[]/usage/result/error 重建（含 tombstone override + 防御性降级） | ✅ |
 | `model-resolver.ts` | 5 级 fallback 模型解析链 + category 推断 | ✅ |
 | `agent-registry.ts` | agent `.md` 文件发现与解析（hot-reload） | ✅ |
 | `concurrency-pool.ts` | 并发控制 + 优先级排队（仅 background 进池，bg=1000），maxConcurrent 下限 1。sync 不进池（D-032），避免嵌套持有槽位死锁 | ✅ |
@@ -128,30 +128,29 @@ Core 内部进一步分两子层，依赖严格自上而下，禁止反向或同
 | `config/config.ts` | 全局配置（单一真相源读 config.json）+ session 级状态（纯函数，被 ModelConfigService 调用） | ✅ |
 | `session-file-gc.ts` | 过期 subagent session 文件清理 | ✅ |
 
-> 另：`discovery-config.ts`（ADR-025 资源发现契约）留在 `runtime/` 根——被 index.ts（resources_discover）与 ModelConfigService 双消费，不归任一 Service 子目录。
+> 另：`discovery-config.ts`（ADR-028 资源发现契约）留在 `runtime/` 根——被 index.ts（resources_discover）与 ModelConfigService 双消费，不归任一 Service 子目录。
 
-### TUI 层（7）
+### TUI 层（4）
 
 | 文件 | 职责 | 状态 |
 |---|---|---|
 | `tool-render.ts` | 对话流 tool block 渲染（renderCall + renderResult） | ✅ |
-| `list-view.ts` | `/subagents list` 全屏左右分屏 overlay | ✅ |
-| `progress-widget.ts` | aboveEditor 常驻进度 widget（静态内容，防 TUI ghosting） | ✅ |
-| `config-wizard.ts` | `/subagents config` 交互向导 | ✅ |
-| `bg-notify-render.ts` | background 完成通知的对话流渲染 | ✅ |
+| `list-view.ts` | `/subagents` 全屏左右分屏 overlay（含 list + 详情） | ✅ |
+| `bg-notify-render.ts` | background 完成通知的对话流渲染（messageRenderer） | ✅ |
 | `format.ts` | 纯格式化函数（tokens/duration/firstLine/extractAgentName 共享 helper） | ✅ |
-| `format-helpers.ts` | 配置摘要格式化（拆出避免循环依赖） | ✅ |
 
-### 测试（23 文件，356 tests）
+> **[HISTORICAL]** 早期 TUI 层曾有 `progress-widget.ts`（aboveEditor 常驻进度 widget）、`config-wizard.ts`（`/subagents config` 交互向导）、`format-helpers.ts`（配置摘要格式化）、`category-confirm.ts`（首次 category 确认组件）。均已删除：progress-widget 因 ghosting 反复修复无效移除（8a23d5db1）；config-wizard/format-helpers/saveGlobalConfig 因 `/subagents` 精简为仅 list overlay 而连带删除（c7eaea6e6，FR-10）；category-confirm 因 D-1 决策取消（80448bd53）。详见 §5.3。
 
-`src/__tests__/` 下 23 个测试文件覆盖 Core + Runtime + TUI 关键模块。详见 [pi-extension-standards.md](../../pi-extension-standards.md) §7 测试要求。
+### 测试（24 文件）
+
+`src/__tests__/` 下 24 个 `.test.ts` 测试文件（另含 `helpers/` 目录）覆盖 Core + Runtime + TUI 关键模块。详见 [pi-extension-standards.md](../../pi-extension-standards.md) §7 测试要求。
 
 | 文件 | 覆盖 |
 |---|---|
 | `turn-limiter.test.ts` | steer/abort 时序 + didSteer/didAbort getter |
 | `concurrency-pool.test.ts` | 满载阻塞/优先级抢占/FIFO/maxConcurrent=0 clamp/防负 |
 | `throttle.test.ts` | leading/trailing edge/flush/默认 150ms |
-| `execution-record.test.ts` | turns[] 收口累积/派生视图(getEventLog/getCurrentActivity/getFullText/getAllToolCalls/getTotalUsage)/tryTransition CAS/project/snapshot |
+| `execution-record.test.ts` | turns[] 收口累积/派生视图(getEventLog/getFullText/getAllToolCalls/getTotalUsage)/tryTransition CAS/project/snapshot |
 | `output-collector.test.ts` | collectResult 字段单源（从 record 派生）+ extractParsedOutput |
 | `session-runner.test.ts` | run() 编排骨架 + 事件处理内联 |
 | `session-factory.test.ts` | session-runner 内联纯函数（applyToolFilter/buildAppendSystemPrompt/buildEnvBlock/getSubagentSessionDir）——文件名为历史遗留，测的是合并进 session-runner 的函数 |
@@ -164,7 +163,7 @@ Core 内部进一步分两子层，依赖严格自上而下，禁止反向或同
 | `model-resolver.test.ts` | 5 级 fallback 模型解析链 |
 | `agent-registry.test.ts` | agent `.md` 发现与 hot-reload |
 | `config.test.ts` | 全局配置 + session 状态 |
-| `discovery-config.test.ts` | ADR-025 资源发现契约 |
+| `discovery-config.test.ts` | ADR-028 资源发现契约 |
 | `session-file-gc.test.ts` | 过期 session 文件清理 |
 | `path-encoding.test.ts` | cwd → 安全目录名编码 |
 | `format.test.ts` | formatTokens/formatElapsedSeconds/truncLine(ANSI SGR)/segFillColored/formatEventLine |
@@ -177,10 +176,10 @@ Core 内部进一步分两子层，依赖严格自上而下，禁止反向或同
 
 | 文件 | 职责 | 状态 |
 |---|---|---|
-| `index.ts`（根） | 工厂函数，注册 tool/command/widget/events | ✅ |
-| `types.ts` | 跨层共享类型契约（316 行） | ✅ |
-| `tools/subagent-tool.ts` | `subagent` LLM 工具薄壳 | ⬜ |
-| `commands/subagents.ts` | `/subagents` 命令薄壳 | ⬜ |
+| `index.ts`（根） | 工厂函数，注册 tool/command/messageRenderer/session 事件 | ✅ |
+| `types.ts` | 跨层共享类型契约 | ✅ |
+| `tools/subagent-tool.ts` | `subagent` LLM 工具薄壳 | ✅ |
+| `commands/subagents.ts` | `/subagents [<id>]` 命令薄壳（打开 list overlay） | ✅ |
 
 ## 4. 核心设计原则
 
@@ -189,7 +188,7 @@ Core 内部进一步分两子层，依赖严格自上而下，禁止反向或同
 **1. 唯一状态源** — 所有执行路径共用一个 `ExecutionRecord` 对象，由 Core 层 `execution-record.ts` 的四个入口（create/update/complete/project）唯一操作。消灭旧实现 11 种状态形状、6 个 turns 累加器、双状态构建。
 → 详见 [data-model.md](./data-model.md)
 
-**2. 统一执行入口** — sync/background 共用一条 `executor.execute()` 路径，mode 分叉点集中在此函数顶部 4 处。`session-runner.run()` 完全不感知 mode。消灭旧实现 runAgent + startBackground 两份重复逻辑、死 state。
+**2. 统一执行入口** — sync/background 共用一条 `SubagentService.execute()` 路径，mode 分叉点集中在此函数顶部（原独立 `executor.ts` 已合并进 SubagentService，见 §5.2）。`session-runner.run()` 完全不感知 mode。消灭旧实现 runAgent + startBackground 两份重复逻辑、死 state。
 → 详见 [execution-flow.md](./execution-flow.md)
 
 **3. 投影单点** — `ExecutionRecord` 到展示层（Details/Snapshot/Persisted）的转换各只有一个入口，三路径字段一致。消灭旧实现 6 处手工构造 Details 导致的字段丢失（Mode 3 cancelled 丢 turns/tokens、poll 无 model 等）。
@@ -201,13 +200,15 @@ Core 内部进一步分两子层，依赖严格自上而下，禁止反向或同
 
 ### 5.1 为什么拆双 Service（ModelConfigService + SubagentService）
 
-**问题**：runtime.ts（361 行）同时承担配置管理、模型解析、执行编排、状态容器、生命周期五种职责，是典型的"上帝类"。
+**问题**：runtime.ts（361 行）同时承担配置管理、模型解析、执行编排、状态容器、生命周期五种职责，是典型的"上帝类"。（注：该文件已删除，拆为 `ModelConfigService` + `SubagentService`，本节为拆分决策的历史语境。）
 
 **推理**：用"变化轴"分析——哪些东西会**一起变**？
 - globalConfig/sessionState/agentRegistry/modelRegistry → 配置变化（用户改 config.json、注入新 modelRegistry）
 - pool/store/notifier → 执行状态变化（并发槽分配、record 生命周期、回注通知）
 
-这两组东西**从不一起变**。command/wizard 只碰配置，不碰执行；executor 只碰执行组件，不碰配置。是**正交的关注点**。
+这两组东西**从不一起变**。command 只碰配置（注：`config-wizard` 已于 c7eaea6e6 删除，`/subagents` 现仅为 list overlay，但配置域与执行域的解耦关系不变），不碰执行；executor 只碰执行组件，不碰配置。是**正交的关注点**。
+
+> **[HISTORICAL]** 以下「进一步验证」是拆分当时（c7eaea6e6 之前）的论证，引用了现已删除的 `/subagents config` wizard 与 `saveGlobalConfig()`。保留作历史记录——共论证逻辑（配置域与执行域已解耦）仍成立，现在 command 只读 config 更印证了这一点。
 
 进一步验证：`/subagents config` wizard 接收 `globalConfig` 作为函数参数，修改后调 `saveGlobalConfig()`——它**根本不 import runtime.ts**，只碰 config 函数。这证明配置域和执行域已经是解耦的，runtime.ts 只是强行把它们塞进同一个类。
 
@@ -231,13 +232,13 @@ Core 内部进一步分两子层，依赖严格自上而下，禁止反向或同
 
 ### 5.3 为什么用 ensureConfirmed + ConfirmCancelledError（已废弃，D-1）
 
-> **状态：已废弃（D-1 决策）**。首次 category 确认拦截已取消——`categoryConfirmed` 恒为 true，`ensureConfirmed`/`ConfirmCancelledError` 不再使用。本节保留作历史决策记录；用户改 category 模型走 `/subagents config`（写 globalConfig）。
+> **状态：已整体移除（D-1 + FR-10）**。首次 category 确认拦截已取消；category/fallback/yoloByDefault 等 config.json 字段现读取时忽略（`config.ts` 仅留 `maxConcurrent`）。`/subagents config` wizard 与 `saveGlobalConfig()` 亦已于 c7eaea6e6 删除。本节保留作历史决策记录。
 
 **原问题**：category 确认是 async（UI 交互），但 `resolveModel` 是 sync（纯 5 级 fallback）。async 函数内调 sync 函数没问题，但 sync 函数内**触发 async 确认**再继续——怎么表达？
 
 **原方案**（已移除）：方案 C + 信号类。`ensureConfirmed(onConfirm)` 是 async（可 await），`resolveModel` 保持 sync（纯解析）。
 
-**为什么废弃**：首次确认增加交互摩擦且无实际收益——用户改 category 模型走 `/subagents config` wizard 即可，执行路径直接解析（5 级 fallback 兜底，解析失败抛错让用户感知）。
+**为什么废弃**：首次确认增加交互摩擦且无实际收益——category 概念后续亦整体移除（FR-10），执行路径直接解析（5 级 fallback 兜底，解析失败抛错让用户感知）。
 
 ### 5.4 双 Service 依赖方向 + mode 判定归属
 
@@ -261,11 +262,13 @@ SubagentService 内部调：       │
 
 **问题**：globalConfig / sessionState 是配置数据对象，wizard 需要读改。暴露 public 字段（哪怕 readonly）等于宣布外部可依赖其结构——改内部形状时所有调用方跟着改。
 
-**决策**：`getGlobalConfig()` / `getSessionState()` 返回 `structuredClone()` 深拷贝。调用方拿到的是**副本**，改不影响 Service 内部。改完后调 `modelService.saveGlobalConfig(config)` 写回。
+**决策**：`getGlobalConfig()` 返回 `structuredClone()` 深拷贝。调用方拿到的是**副本**，改不影响 Service 内部。
 
-**代价**：每次读配置多一次结构化克隆。但配置对象很小（几十个字段），且只在 wizard / command 调用时读——非热路径。性能影响可忽略。
+> **[HISTORICAL]** 原决策还包含「改完后调 `modelService.saveGlobalConfig(config)` 写回」——该写回路径与 config-wizard 已于 c7eaea6e6 一并删除（config.json 现为只读 `maxConcurrent` 单字段）。深拷贝读仍保留，避免外部依赖内部结构。
 
-**替代方案**（未采用）：行为方法（`toggleYolo()` / `setCategoryModel()` 等）替代直接改字段——更安全但更啰嗦。wizard 的配置修改是开放集（用户可能改 categories/maxConcurrent/fallback 等任意字段），行为方法无法穷举。深拷贝 + saveGlobalConfig 是更灵活的方案。
+**代价**：每次读配置多一次结构化克隆。但配置对象很小（现仅 `maxConcurrent`），且只在 command 调用时读——非热路径。性能影响可忽略。
+
+**替代方案**（未采用）：行为方法（`toggleYolo()` / `setCategoryModel()` 等）替代直接改字段。但配置现已是只读单字段，行为方法无意义，深拷贝读是当前最小实现。
 
 ### 5.6 getAgentDir 是否该暴露
 

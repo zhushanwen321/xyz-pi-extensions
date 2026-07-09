@@ -46,6 +46,10 @@
       "@sinclair/typebox": [
         "/Users/zhushanwen/.nvm/versions/node/v24.11.1/lib/node_modules/@earendil-works/pi-coding-agent/node_modules/typebox/build/index.d.mts",
         "./shared/types/mariozechner/index"
+      ],
+      "@sinclair/typebox/value": [
+        "/Users/zhushanwen/.nvm/versions/node/v24.11.1/lib/node_modules/@earendil-works/pi-coding-agent/node_modules/typebox/build/value/index.d.mts",
+        "./shared/types/mariozechner/index"
       ]
     }
   },

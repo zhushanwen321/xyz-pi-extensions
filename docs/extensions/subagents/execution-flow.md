@@ -10,8 +10,8 @@
 | 路径 | 调用方行为 | 结果交付 | 典型触发 |
 |---|---|---|---|
 | **sync** | `await`，阻塞调用方 turn | execute 返回时同步拿 record | `subagent({task})` 默认 |
-| **background** | 不 await，立即拿 backgroundId | 完成后回注主对话（notifier） | `subagent({task, wait:false})` 或 agent 配 `defaultBackground` |
-| **poll** | 查询既有 background | 返回当前 record 快照 | `subagent({backgroundId})` |
+| **background** | 不 await，立即拿 subagentId | 完成后回注主对话（notifier） | `subagent({task, wait:false})` 或 agent 配 `defaultBackground` |
+| **poll** | 查询既有 background | 返回当前 record 快照 | `subagent({action:"list", subagentId})` |
 
 三条路径的差异**只有交付方式**，执行本体完全相同。poll 不创建新 record，只读既有 record 的 snapshot。
 
@@ -37,7 +37,7 @@ flowchart TD
     S4b --> S4
     S4 --> S5 --> S6
     S6 -->|sync| S7a[返回 sync handle<br/>含 record]
-    S6 -->|background| S7b[立即返回<br/>backgroundId]
+    S6 -->|background| S7b[立即返回<br/>subagentId]
 ```
 
 ### 为什么 executor 合并进 SubagentService（不独立文件）
@@ -52,7 +52,7 @@ executor 没有独立状态、独立生命周期、独立调用方（只有 Suba
 
 | # | sync | background | 根因 |
 |---|---|---|---|
-| ① 返回 | await，返回 `{mode:"sync", record}` | 不 await，立即返回 `{mode:"background", backgroundId}` | 调用语义定义 |
+| ① 返回 | await，返回 `{mode:"sync", record}` | 不 await，立即返回 `{mode:"background", subagentId}` | 调用语义定义 |
 | ② priority | 0（高，抢占） | 1000（低，让步） | sync 需快速响应 |
 | ③ signal | `opts.signal`（Pi tool 框架传入） | `controller.signal`（runtime 自建） | background 需 runtime 持有 controller 供 cancel |
 | ④ notifier | 无（调用方还在 await） | `notifier.notify`（调用方已 return，靠事件回流） | 结果交付方式不同 |
@@ -80,7 +80,7 @@ finally: pool.release()              ← H1: runAndFinalize catch + finalizeFail
 
 ## 4. background detached 时序
 
-background 的步骤 4-6 不在 `execute` 内 await，而是包进 detached promise。`execute` 在注册 record 后立即返回 backgroundId，完成回调异步触发。
+background 的步骤 4-6 不在 `execute` 内 await，而是包进 detached promise。`execute` 在注册 record 后立即返回 subagentId，完成回调异步触发。
 
 ```mermaid
 sequenceDiagram
@@ -92,7 +92,7 @@ sequenceDiagram
 
     Tool->>Exec: execute({mode:"background"})
     Exec->>Exec: createRecord + store.register
-    Exec-->>Tool: backgroundId（立即返回）
+    Exec-->>Tool: subagentId（立即返回）
     Note over Tool: 调用方 turn 结束
 
     par detached promise
@@ -100,7 +100,7 @@ sequenceDiagram
         Run-->>Exec: AgentResult
         Exec->>Exec: completeRecord + archive（终态移出内存）
         Exec->>Notifier: notify(snapshot)
-        Notifier->>Main: sendMessage({triggerTurn:true})
+        Notifier->>Main: sendMessage({triggerTurn:true, deliverAs:"followUp"})
         Note over Main: 唤醒父 agent 下一 turn
     end
 ```
@@ -133,7 +133,7 @@ sequenceDiagram
 
 ### notifier 合并窗口与去重
 
-- **合并窗口**：2000ms 内多个 background 完成，合并为一条通知注入主对话
+- **合并窗口**：60000ms 内多个 background 完成，合并为一条通知注入主对话
 - **去重 TTL**：同 id 短时间内不重复通知（cancel 已 notify 并抢到 CAS，detached 的 tryTransition 失败不 notify）
 
 ## 5. cancelled 路径一致性

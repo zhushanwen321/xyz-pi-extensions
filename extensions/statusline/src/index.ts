@@ -59,6 +59,8 @@ interface PiThinkingLevelEvent {
 const SEP = "│";
 const DOT = "·";
 const RUN_UPDATE_MS = 5000;
+/** render 兜底间隔:空闲时也定期重绘,顺带触发 provider 缓存过期检测 + 走表 */
+const RENDER_INTERVAL_MS = 30_000;
 /** sessionId 截取末尾字符数 */
 const SESSION_ID_TAIL = 12;
 /** 路径展示的层数（cwd 倒数 N 段） */
@@ -115,9 +117,13 @@ function initFooter(
 		(t: TuiHandle, theme: Theme, footerData: ReadonlyFooterDataProvider) => {
 			tuiRef.current = t;
 			const unsub = footerData.onBranchChange(() => t.requestRender());
+			// 兜底定时器:定期 requestRender,让空闲时也能走表 + 检测 provider 缓存过期。
+			// triggerUpdate 内部 TTL 节流(2min + 并发闸)防住过频请求。
+			const interval = setInterval(() => t.requestRender(), RENDER_INTERVAL_MS);
 			return {
 				dispose() {
 					unsub();
+					clearInterval(interval);
 					tuiRef.current = null;
 				},
 				invalidate() {},
@@ -146,6 +152,8 @@ interface StatuslineRuntimeState {
 	usedPct: number;
 	contextTokens: number;
 	contextWindow: number;
+	/** ctx 百分比未知(如刚 compact 完,还没有新的 assistant 响应)。true 时渲染占位符。 */
+	contextUnknown: boolean;
 	sessionName: string | undefined;
 }
 
@@ -165,6 +173,7 @@ function makeInitialState(): StatuslineRuntimeState {
 		usedPct: 0,
 		contextTokens: 0,
 		contextWindow: 0,
+		contextUnknown: true,
 		sessionName: undefined,
 	};
 }
@@ -235,9 +244,20 @@ function registerSessionLifecycle(pi: ExtensionAPI): void {
 		// 切换分支后重建状态栏数据
 		Object.assign(state, makeInitialState(), {
 			sessionStart: Date.now(),
+			thinkingLevel: pi.getThinkingLevel(),
 			sessionName: ctx.sessionManager.getSessionName() ?? undefined,
 		});
 		refreshTotals(state, ctx);
+		triggerUpdate();
+	});
+
+	pi.on("session_compact", async (_event: unknown, ctx: ExtensionContext) => {
+		// compact 刚完成:历史已被摘要替换,重算累计量。
+		// getContextUsage() 此刻返回 tokens:null(还没有 compact 后的 assistant 消息),
+		// 所以标记 contextUnknown,渲染时显示占位符而非卡在压缩前的旧百分比。
+		state.contextUnknown = true;
+		refreshTotals(state, ctx);
+		tuiRef.current?.requestRender();
 		triggerUpdate();
 	});
 
@@ -272,7 +292,12 @@ function refreshTotals(st: StatuslineRuntimeState, ctx: ExtensionContext): void 
 
 function refreshContextUsage(st: StatuslineRuntimeState, ctx: ExtensionContext): void {
 	const usage = ctx.getContextUsage();
-	if (!usage || usage.tokens === null) return;
+	if (!usage || usage.tokens === null) {
+		// ctx 未知(如刚 compact 完):标记占位,不再偷偷保留旧 ctx 值误导
+		st.contextUnknown = true;
+		return;
+	}
+	st.contextUnknown = false;
 	const contextWindow = usage.contextWindow || DEFAULT_CONTEXT_WINDOW;
 	st.contextTokens = usage.tokens;
 	st.contextWindow = contextWindow;
@@ -339,11 +364,11 @@ function buildLine3(
 	p: Pallet,
 	theme: Theme,
 ): string {
-	const ctxPct = st.usedPct;
-	const ctxPctCol = theme.fg(pctColor(ctxPct), `${ctxPct}%`);
-	const ctxStr = st.contextWindow > 0
-		? `${p.d("ctx")} ${p.v(fmtTokens(st.contextTokens))}/${p.v(fmtTokens(st.contextWindow))} ${ctxPctCol}`
-		: `${p.d("ctx")} ${ctxPctCol}`;
+	const ctxStr = st.contextUnknown
+		? `${p.d("ctx")} ${p.d("--")}/${p.v(fmtTokens(st.contextWindow || DEFAULT_CONTEXT_WINDOW))} ${p.d("--%")}`
+		: st.contextWindow > 0
+			? `${p.d("ctx")} ${p.v(fmtTokens(st.contextTokens))}/${p.v(fmtTokens(st.contextWindow))} ${theme.fg(pctColor(st.usedPct), `${st.usedPct}%`)}`
+			: `${p.d("ctx")} ${theme.fg(pctColor(st.usedPct), `${st.usedPct}%`)}`;
 
 	const tp: string[] = [];
 	if (st.sessionStart) {

@@ -592,6 +592,29 @@ describe("AskUserComponent — re-entry guard", () => {
 		c.handleInput(ENTER); // ignored
 		expect(result.val).toBeNull();
 	});
+
+	// FR-12 竞态：signal abort 可能在用户已 submit 后才触发，此时 cancel() 必须是
+	// no-op，避免二次调 done（用户已拿到 submit 结果，不应被 abort 覆盖为 null）。
+	it("C-FR12 (FR-12): cancel() after submit does not re-invoke done", () => {
+		const { c, result } = make([singleQ]);
+		c.handleInput(ENTER); // submit → done(result), _resolved=true
+		expect(result.val).toBeDefined();
+		expect(result.val!.cancelled).toBe(false);
+		const submitVal = result.val;
+		// 模拟 signal abort 在 submit 后触发 → cancel() 应被 _resolved 守卫拦截
+		c.cancel();
+		expect(result.val).toBe(submitVal); // 不变 —— done 未被二次调用
+	});
+
+	it("C-FR12b (FR-12): cancel() after cancel does not re-invoke done", () => {
+		const { c, result } = make([singleQ]);
+		c.handleInput(ESC); // overlay
+		c.handleInput(ESC); // cancel → done(null), _resolved=true
+		expect(result.val).toBeNull();
+		// 再次 cancel（模拟 abort 触发）应 no-op
+		c.cancel();
+		expect(result.val).toBeNull(); // 仍为 null，未触发异常
+	});
 });
 
 // ── 5h. 渲染缓存 ───────────────────────────────────────

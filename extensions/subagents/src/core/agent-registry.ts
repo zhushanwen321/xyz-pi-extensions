@@ -133,7 +133,7 @@ function extractYamlField(yaml: string, key: string): string | undefined {
  *
  * 多目录优先级：agentDirs 数组顺序即优先级，靠前覆盖靠后。
  * 实现上逆序扫描（先扫低优先级目录，后扫高优先级目录覆盖同名）。
- * 详见 ADR-025。
+ * 详见 ADR-028。
  */
 export class AgentRegistry {
   private readonly cache = new Map<string, AgentConfig>();

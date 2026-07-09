@@ -3,7 +3,7 @@
  */
 
 import type { Theme } from "@mariozechner/pi-coding-agent";
-import { matchesKey, truncateToWidth } from "@mariozechner/pi-tui";
+import { matchesKey, truncateToWidth } from "@earendil-works/pi-tui";
 
 import type { Todo } from "./model";
 import { FALLBACK_TERM_WIDTH, renderDualColumn } from "./render";

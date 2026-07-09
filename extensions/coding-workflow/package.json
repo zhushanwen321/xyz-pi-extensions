@@ -1,52 +1,56 @@
 {
   "name": "@zhushanwen/pi-coding-workflow",
   "version": "0.3.2",
-  "description": "5-phase coding workflow orchestration",
-  "main": "index.ts",
+  "description": "Coding workflow tools for Pi \u2014 L1/L2/L3 design + execution orchestration with machine-enforced test gates.",
   "type": "module",
-  "files": [
-    "index.ts",
-    "lib/",
-    "scripts/",
-    "skills/",
-    "agents/",
-    "commands/"
-  ],
+  "main": "./index.ts",
   "pi": {
     "extensions": [
       "./index.ts"
     ],
     "skills": [
       "./skills"
+    ],
+    "workflows": [
+      "./workflows"
     ]
   },
   "keywords": [
-    "pi-package"
+    "pi-package",
+    "extension",
+    "coding-workflow",
+    "test-gate",
+    "tdd"
   ],
   "license": "MIT",
-  "dependencies": {
-    "js-yaml": "^4.1.0"
+  "files": [
+    "src/",
+    "index.ts",
+    "lib/",
+    "skills/",
+    "mocks/",
+    "workflows/"
+  ],
+  "devDependencies": {
+    "@vitest/coverage-v8": "^4.1.8",
+    "vitest": "^4.1.8"
   },
   "peerDependencies": {
-    "@mariozechner/pi-coding-agent": ">=0.1.0",
-    "@mariozechner/pi-tui": "*",
-    "@mariozechner/pi-ai": "*",
+    "@earendil-works/pi-ai": "*",
+    "@earendil-works/pi-tui": "*",
+    "@mariozechner/pi-coding-agent": "*",
     "@sinclair/typebox": "*"
   },
   "peerDependenciesMeta": {
-    "@mariozechner/pi-tui": {
+    "@earendil-works/pi-tui": {
       "optional": true
     },
-    "@mariozechner/pi-ai": {
+    "@earendil-works/pi-ai": {
       "optional": true
     }
   },
   "scripts": {
-    "typecheck": "tsc --noEmit",
+    "typecheck": "npx tsc --noEmit",
     "test": "vitest run"
-  },
-  "devDependencies": {
-    "@types/node": "^24.0.0",
-    "@types/js-yaml": "^4.0.0"
   }
 }

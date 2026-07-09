@@ -1,0 +1,371 @@
+---
+name: mid-detail-plan
+description: >-
+  Use when the user says "mid 详细计划", "中等功能实施设计", "issues+nfr+架构+计划一起做",
+  "批量设计实施", or has finished mid-plan and needs issues.md + non-functional-design.md
+  + code-architecture.md + execution-plan.md (+ code-skeleton) + detail.json (CW detail action 入参).
+  纯设计 skill，不写实现代码。对应 CW action: detail.
+  Not for L3 heavy (use full-*). Not for requirements/architecture (that is mid-plan).
+---
+
+# mid-detail-plan（实施 4 合 1，L2 标准档）
+
+> **对应 CW action: `detail`**（coding-workflow tool）。本 skill 产出 detail.json + review-fix-loop
+> 收敛后落盘 4 份 review 文件。完成后调 `cw(action=detail, topicId, detailJson)`——CW 预检
+> changes/review-{issues,nfr,code-arch,execution}.md 存在 → 跑机器检查（issues/nfr/code-arch/execution）全量报告 →
+> pass 后返回 nextAction（→ dev）。
+
+在 mid-plan 之后，一次性产出 `issues.md` + `non-functional-design.md` + `code-architecture.md`（+ code-skeleton）+ `execution-plan.md`。
+**内容**对齐 full-issues + full-nfr + full-code-arch + full-execution-plan 全量；**编排**改为
+ctx-build → 主 agent 锚 issues → 2 drafter 并行（nfr ‖ code-arch）→ 主 agent 收 execution → review-fix-loop → 一致性终检。
+
+> **[铁律] 本 skill 产出 4 份 deliverable，但不写实现代码。** code-skeleton 是验证设计假设的**可编译骨架**（full-code-arch 的 Step 7），
+> 不是实现 body——实现 body 属于后续 Wave 执行（走 `coding-execute` skill）。
+>
+> **✅ 执行衔接：mid 产出交接给 coding-execute。** coding-execute 内部的执行收尾机器门（coding-execute 阶段）同时支持两种格式——
+> lite 的 plan.md（U*/E* 用例）与 mid/full 的 execution-plan.md（T{UC}.{N} 用例 + 测试验收清单）。mid 执行与 lite 共享
+> 同一套 TDD + worktree 隔离 + test-runner 落盘 + 机器门链路。见下方 Step 6a 交接说明。
+
+## 依赖链（必须正视，决定并行度）
+
+```
+requirements/architecture（mid-plan 已完成）
+        │
+        ▼
+    issues（根，需用户拍板 P0/P1）
+        │
+        ├──────────┬───────────┐
+        ▼          ▼           ▼
+       nfr      code-arch    （并行）
+        │       (+skeleton)
+        └────┬─────┘
+             ▼
+        execution（读 code-arch 时序图 + nfr 回灌表）
+```
+
+- **issues 是根**且最需用户拍板 P0/P1 → 主 agent 锚定（Step 1）
+- **nfr ‖ code-arch 是唯一天然并行点** → 2 drafter 真并行（Step 2）
+- **execution 必须等 code-arch**（Wave 依赖从时序图读）+ **nfr 回灌表**（测试验收清单来源 B）→ 主 agent 收尾（Step 3）
+
+> 不能无脑「2 subagent 完成全部 4 份文档」——依赖链不允许。接受依赖链，吃满唯一的并行点。
+
+## 前置
+
+- **mid-plan 已完成**：`{topic}/requirements.md` + `system-architecture.md` + `decisions.md`（含 confirmed 决策）。未完成 → `/skill:mid-plan`
+- **范围守门已过**：`_progress.md` 的 `complexity_tier: L2`
+
+## 执行流程
+
+| 步骤 | 做什么 | read 参考 |
+|------|--------|----------|
+| 0. context-builder | 派 fresh subagent 压缩 mid-plan 产出 → 阶段工作摘要注入主 agent | `../full-shared/references/context-builder.md` |
+| 1. issues + batch-ask | 主 agent 产 issues.md → 批量 ask P0/P1 → 纳入 + 机器检查 | `../full-issues/references/{fog-of-war\|issue-template\|deliverable-template}.md` + `../mid-shared/references/batch-ask.md` |
+| 2. 2 drafter 并行 | 派 Drafter-A（nfr）‖ Drafter-B（code-arch+skeleton），wait:false | `../full-nfr/references/{nfr-dimensions\|deliverable-template}.md` + `../full-code-arch/references/{deep-module-vocabulary\|sequence-template\|skeleton-spike\|deliverable-template}.md` |
+| 3. execution + 回灌对齐 | 主 agent 产 execution-plan（读 code-arch 时序图）+ 补 code-arch 来源 B + 验证 nfr 指针 + 验收清单 + 机器检查全跑 | `../full-execution-plan/references/{vertical-slice\|wave-template\|deliverable-template}.md` |
+| 4. review-fix-loop | 派 5~6 路并行 reviewer（跨 4 份文档）→ 汇总 → 收敛（MAX=2） | `../mid-shared/references/review-fix-loop.md` + 本 SKILL「维度审查分配」节 |
+| 5. 一致性终检 | 派 1 fresh subagent 全文档一致性检查（合并 full 6b 反哺 + 6c 终检） | `../full-execution-plan/references/consistency-check.md` |
+| 6a. 定稿 + gate | 残留 D-不可逆 ask + 定稿 4 份 .md + detail.json + cw(detail) gate | — |
+| 6b. 渲染（可选）| 派 fresh subagent 渲染 4 HTML（gate 通过后，预算紧张可延后）| `coding-visualizer` skill |
+
+Announce at start: "我正在使用 mid-detail-plan skill 来高效产出实施设计 4 件套（L2 标准档）。"
+
+## Step 0：context-builder（压缩上游）
+
+mid-detail-plan 上游较多（读 mid-plan 的 2 份 + decisions.md + 长期文档），派 **context-builder subagent**（fresh）：
+- 读 `{topic}/decisions.md`（已确认决策）+ `requirements.md` + `system-architecture.md` + 相关长期文档（NFR.md/ADR/ARCHITECTURE.md）
+- 输出**阶段工作摘要**注入主 agent context：
+  - **不可推翻的决策清单**（decisions.md 里 status=confirmed 的 D-不可逆，带 ID）
+  - **本阶段设计树入口**（从上游推导 issues/nfr/code-arch/execution 该遍历的节点）
+  - **与上游的接口契约**（必须遵守的 grep 规则/Port/不变式）
+  - **相关长期约束**
+
+> **为何压缩传递：** 主 agent 直接裸读全部上游会 context 爆炸→compact→丢「用户在 mid-plan 确认过 X」。压缩成摘要注入，既轻量又让已确认决策从文件重新进入上下文。规范详见 `../full-shared/references/context-builder.md`。
+
+派发模板按 context-builder.md 的 task prompt（fresh，context 注入 decisions.md）。
+
+## Step 1：issues + batch-ask（主 agent 锚定）
+
+### 1a. 主 agent 产 issues.md
+
+读 `../full-issues/references/fog-of-war.md`（决策图构建 + 拆分维度 checklist）+ `issue-template.md`（方案对比格式）+ `deliverable-template.md`（含「上游覆盖核验」表）。
+
+沿 issue 决策树起草：
+```
+Issue 决策图（根：从 system-architecture 的挑战推导）
+├── P0 阻塞项（前沿，必须先做）→ 每 issue 方案 A/B/C → 取舍 → blocked_by
+├── P1 核心项（同 P0 结构）
+├── P2 重要项（迷雾，标注 ? 先不展开）
+└── P3 延后项（后续迭代）
+```
+
+**生成候选 issue 先按 4 轴扫**（fog-of-war.md 拆分维度：状态§5/模块§7/边界§8/挑战§10 + 兜底）→ 再标 P 级。**P 级不是拆分维度，先用轴扫再标 P 级**。从 system-architecture.md 的 §5/§7/§8/§10 推导 issue。
+
+### 1b. 批量 ask P0/P1（issues 最需用户拍板）
+
+读 `../mid-shared/references/batch-ask.md`。
+
+**本步骤必问决策点（D-不可逆 + K，agent 最易自作主张，务必逐条问）：**
+
+1. **P0/P1 划线** — 每个候选阻塞项问："不做它，后续真的无法推进 / 目标真的无法达成吗？"【D】
+2. **取舍原则的局部例外** — 全局默认"长期架构优先、较少考虑成本"，但每个 P0/P1 issue 要问例外。【D】
+3. **DESIGN-IT-TWICE 的最终选定** — 触发并行 subagent 发散的根本性架构选择，最终选定必须 ask_user。【D-不可逆】
+4. **迷雾展开判断** — "够不够清晰 / 还有没有没说的需求"必须问用户，不能 agent 自判收敛。【K/D】
+5. **P3 延后项逐条确认** — 每个标 P3 的问是否同意延后 + 理由。【D】
+
+按 batch-ask B3 批量提问（一次 4~8 个，每问附推荐+方案对比）。**P0/P1 划线是最高频被 agent 吞的决策**，重点标红。
+
+### 1c. 纳入 + 机器检查
+
+1. 即时 append decisions.md（stage:mid-detail-plan）
+2. 更新 issues.md
+3. 机器检查：CW gate 在 `cw(action=detail)` 调用时自动跑 issues 机器检查，FAIL 当场修（幽灵 #N、空 N/A、❌/待补残留、P0/P1 缺 ≥2 方案、P 级与 blocked_by 不一致）
+
+## Step 2：2 drafter 并行（nfr ‖ code-arch，wait:false）
+
+读 `../mid-shared/references/review-fix-loop.md` 的派发工程（wait:false 同消息多 start）。
+
+**派发配置：** 2 个 drafter 同消息 `wait:false` 派发，各自独立产出主体 + 各自跑机器检查。完成后 notifier 唤醒主 agent。
+
+> **并行前提：** nfr 和 code-arch 都读 issues.md（已定稿）+ architecture（已完成），无写冲突（产出不同文件）。唯一依赖：code-arch 的 test-matrix §6 来源 B（NFR 用例）依赖 nfr 回灌表——**Drafter-B 先写来源 A（功能用例），来源 B 留占位**，Step 3 主 agent 补。
+
+### Drafter-A：non-functional-design.md（nfr）
+
+```
+subagent(action:'start', startParam:{
+  agent: "general-purpose",
+  wait: false,
+  context: "<decisions.md 内容>",
+  cwd: "<topic 对应项目目录，可写 .xyz-harness>",
+  task: """
+  你是独立 drafter（nfr），上下文与主 agent 隔离。产出 non-functional-design.md。
+
+  read：
+  - {topic}/issues.md（已定稿，每个 issue 的已决策方案）
+  - {topic}/requirements.md + system-architecture.md（上游）
+  - ../full-nfr/references/nfr-dimensions.md（7 维度模板）
+  - ../full-nfr/references/deliverable-template.md（骨架）
+  - 项目根 NFR.md（长期约束，若有）
+
+  沿副作用分析树产出：每个 issue 的已决策方案 → 7 维度（安全/数据/性能/并发/稳定性/兼容性/可观测性）副作用分析 + 缓解。
+  不适用维度写理由（防偷懒跳过）。不确定性高的副作用（并发死锁/缓存命中率）标记为需 code-arch 骨架验证。
+  **「缓解项回灌登记表」**：每条缓解标「验收方式」（代码测试/性能混沌/人工/不可验），其中「验收方式=代码测试」的会被 code-arch test-matrix 来源 B 引用。
+
+  产出后自检结构硬伤（占位符/缺维度/回灌表残缺），机器检查由 CW gate 在 cw(action=detail) 调用时统一执行。
+  写到 {topic}/non-functional-design.md。不写其他文件。
+  """
+})
+```
+
+### Drafter-B：code-architecture.md + code-skeleton
+
+```
+subagent(action:'start', startParam:{
+  agent: "general-purpose",
+  wait: false,
+  context: "<decisions.md 内容>",
+  cwd: "<topic 对应项目目录>",
+  task: """
+  你是独立 drafter（code-arch），上下文与主 agent 隔离。产出 code-architecture.md + code-skeleton/（可编译骨架）。
+
+  read：
+  - {topic}/issues.md + system-architecture.md（上游）
+  - {topic}/requirements.md（用例，推导 API 入口）
+  - ../full-code-arch/references/{deep-module-vocabulary|sequence-template|skeleton-spike|deliverable-template}.md
+  - 项目根 ARCHITECTURE.md + TEST-STRATEGY.md（若有，测试手册复用）
+
+  沿代码契约树产出：工程目录 + API 契约（签名表，标注接线层级）+ 功能时序图（类方法级，含异常路径）+ 包依赖图。
+  **test-matrix §6**：来源 0（项目已有测试，先读复用）+ 来源 A（功能用例，从时序图 alt/else 枚举异常用例，**每条标测试层 unit/integration/e2e/perf-chaos**（MidDetailSchema 4 层，plan-parser.ts:69-74 锁定）；并发/性能风险用例标 perf-chaos，端到端业务流标 e2e，模块间集成标 integration，纯逻辑单测算 unit）。**每条同时标 dependsOn + parallelGroup**（ADR-029 决策 4，测试调度字段，与 lite 同 schema）——dependsOn 标前置用例 ID（硬依赖，上游 fail abort 下游），parallelGroup 标资源冲突分组（同组可并行）。详见 `../lite-shared/references/test-case-schema.md`「测试调度设计」章节。
+  **来源 B（NFR 用例）留占位** {PLACEHOLDER_NFR_SOURCE_B}——nfr 还在并行产出，主 agent Step 3 会从 nfr 回灌表补。
+  **Step 7 骨架验证**：按 skeleton-spike.md 产 code-skeleton/（可编译骨架，验证签名/调用链/依赖方向，非实现 body）。
+  签名设计标注接线层级（模块内直调/跨模块 port/adapter 真引 SDK）。
+
+  产出后自检结构硬伤（占位符/签名表残缺/时序图缺），机器检查由 CW gate 在 cw(action=detail) 调用时统一执行。
+  写到 {topic}/code-architecture.md + {topic}/code-skeleton/。不写其他文件。
+  """
+})
+```
+
+> **[铁律] code-skeleton 须达 full-code-arch 同等骨架质量。** mid detail gate 复用 full-code-arch 全套 P1 骨架检查：必须达 **Level 1 接线**（`checkWiringDensity`——签名表声明 import 的模块在骨架真实 import，无空头声明）+ **通过项目类型检查器**（`checkTypecheck`——`tsc --noEmit` / 项目对应类型检查无错）。CW detail gate 会跑 `check-code-arch` 全套 P1 检查（接线密度 + 类型检查 + 签名表一致），未达标 = gate FAIL，不进 dev。mid agent 产骨架时**不得**以「mid 是轻量档」为由降低骨架质量门槛——骨架质量门槛是 tier 无关的（mid 仅压缩编排/收敛轮次，不压缩可编译骨架的硬标准）。
+
+### 2c. drafter 返回处理
+
+- **两路都 DONE**：进 Step 3
+- **某路 NEEDS_CONTEXT**：补 context 重派该路
+- **某路 BLOCKED**：评估（上下文问题补 / 能力不足换强模型 / 任务太大拆 / 上游有误上报用户）。**不原样重试**
+
+## Step 3：execution + 回灌对齐（主 agent 收尾）
+
+### 3a. 回灌对齐（并行产物对齐）
+
+Drafter-A（nfr）和 Drafter-B（code-arch）并行产出后，主 agent 做一次**回灌对齐**（处理并行遗留的依赖）：
+
+1. **补 code-arch test-matrix 来源 B**——从 nfr 回灌表筛 `验收方式=代码测试` 的缓解项，为每条生成 ≥1 测试用例，补入 code-architecture.md §6（替换 `{PLACEHOLDER_NFR_SOURCE_B}` 占位）
+2. **验证 nfr 的 ⑤指针**——nfr 回灌表里「去 ⑤某用例」的指针，核对 code-arch §6 真有对应用例（PHANTOM/MISMATCH 标 gap）
+3. **nfr 的 ④性能混沌类缓解项**——筛 `验收方式=性能混沌` 的，标记给 execution Step 3b 编排为独立 perf/chaos Wave
+
+### 3b. 主 agent 产 execution-plan.md
+
+读 `../full-execution-plan/references/{vertical-slice|wave-template|deliverable-template}.md` + code-architecture.md §4 时序图。
+
+沿 Wave 编排树产出：
+```
+Wave 编排（根：从时序图推导）
+├── Wave 0: Prefactor → 是否有让后续更易的前置重构？
+├── Wave 1-N: 垂直切片（P0/P1）→ blocked_by 从时序图读
+└── P3 延后项 → 标注「后续迭代」+ 理由
+```
+
+- 从 code-architecture.md §4 时序图推导 Wave 依赖（功能 B 调用 A → Wave(B) blocked_by Wave(A)）
+- Wave 表只列功能 Wave（都有代码改动）；**不设「验收 Wave」**——整体回归由 CW test 阶段承担（test gate 重算 T* 用例 + 覆盖率）
+- **[MANDATORY] 定稿含「测试验收清单」**——code-arch §6 test-matrix 全量用例（来源 A + B）按归属 Wave + **测试层（unit/integration/e2e/perf-chaos）** + **dependsOn/parallelGroup**（ADR-029 决策 4 测试调度）列全，供下游 coding-execute 分层验收（coding-execute 的执行收尾机器门自动识别 mid 的 T{UC}.{N} 用例 + 测试执行层；integration/e2e/perf-chaos 属 real 层，unit 属 mock 层——check-execute.ts:31 MID_LAYER_REAL 集合定义）
+- **性能混沌类缓解项**编排为独立 perf/chaos Wave 或 pre-prod gate（不混入功能 Wave）
+
+### 3c. 机器检查（CW gate 统一执行）
+
+机器检查（nfr/code-arch/execution）由 CW gate 在 `cw(action=detail)` 调用时统一串行执行（agent 不再手动自跑脚本）。复跑确认 drafter 已修——FAIL 当场修后重新调用直到 PASS。
+
+> 注：一致性终检（consistency-final）由 Step 5 的 fresh subagent 产出 `changes/consistency-final.md`，属 agent 侧人工检查，不在此处机器门范围内。
+
+## Step 4：review-fix-loop（5~6 路跨文档维度审查）
+
+读 `../mid-shared/references/review-fix-loop.md`（完整 loop 协议）+ 本节维度分配。
+
+### 维度审查分配（5~6 路并行，wait:false，跨 4 份文档）
+
+| 路 | 认知帧 | 读什么 | 复用 reference |
+|---|---|---|---|
+| **issues 覆盖重建** | 反向（他证） | **禁读 issues.md**，从 system-architecture 独立重建可拆元素（4 轴）→ diff（MISSING/PHANTOM/MISMATCH） | `../full-issues/references/fog-of-war.md` 角色 A（覆盖重建者） |
+| **nfr 副作用 + 回灌指针** | 对齐（正向） | non-functional-design.md + issues.md + architecture | `../full-nfr/references/nfr-dimensions.md`（7 维覆盖 + 回灌指针核对） |
+| **code 契约 + test-matrix 禁读重建** | 反向（他证） | code-architecture.md + skeleton + 上游；**禁读 §6 test-matrix**，从时序图 alt/else + nfr 回灌表独立重建测试用例 → diff | `../full-code-arch/SKILL.md` 5 视角 + 重建帧 |
+| **Wave 依赖 + 测试闭环** | 对齐（正向） | execution-plan.md + code-architecture §4 时序图 + test-matrix | `../full-execution-plan/SKILL.md` 组 A（编排结构）+ 组 B（测试闭环） |
+| **红队 · 反过度编排** | 反向（删/质疑） | 全部 4 份 + 骨架 | `../full-shared/references/review-agent.md` 红队节（port/seam/分层/Wave 是否过度，deletion test） |
+
+> **第 6 路（可选，状态复杂时）：异常猎手**——触发条件：状态复杂度信号≥中（4+ 状态/单状态机）或跨边界数≥中（2+ 外部系统）。
+> 失败帧（bottom-up），从 code-architecture.md §5 状态转换路径 / §8 跨进程边界扫异常路径。
+> Task prompt 见 `../mid-shared/references/review-fix-loop.md`「L3a · 异常猎手」节（含 hunting 清单）。
+
+**派发：** 5~6 路 `wait:false` 同消息派发，context 注入 decisions.md。
+**汇总：** 按 review-fix-loop L4 汇总去重。
+**收敛：** 按 L5/L6（无 must_fix → CONVERGED；有 → 修复回 L1，round ≥ MAX=2 → 进 Step 5）。
+
+> **跨文档 reviewer 的反哺**：reviewer 发现「code-arch 某决策与 architecture 矛盾」「nfr 某缓解项在 code-arch 走不通」等跨文档矛盾，标 `[BACKFED from mid-detail-plan]` 进 must_fix。Step 5 终检会复扫。
+
+## Step 5：全文档一致性终检（1 fresh subagent）
+
+loop 收敛后，派 **1 个 fresh subagent** 做全文档一致性检查——合并 full 的 Step 6b（反哺）+ Step 6c（全文档一致性终检）。
+
+读 `../full-execution-plan/references/consistency-check.md`（终检 spec）。
+
+**派发配置：** Agent=general-purpose，Context=fresh，读取=全部 6 份 deliverable + decisions.md + CONTEXT.md，产出=`{topic}/changes/consistency-final.md`。
+
+> **[MANDATORY] consistency-final.md 必须写 frontmatter `verdict: CONSISTENT`**（或 INCONSISTENT）—— CW execution gate（check-execution.ts）读 **frontmatter** 不读 `## Verdict` heading，缺 frontmatter = gate FAIL。详见 `../full-execution-plan/references/consistency-check.md`「frontmatter 契约（CW gate）」节。
+
+**检查项：**
+1. **跨文档矛盾**——逐对核对（requirements↔architecture、architecture↔issues、issues↔nfr、issues↔code-arch、nfr↔code-arch、code-arch↔execution）：
+   - aggregate 边界 / 状态机 / 模块划分是否跨文档一致
+   - nfr 缓解项落地方式与 code-arch 签名表是否相符
+   - execution Wave 依赖与 code-arch 时序图是否一致
+2. **decisions.md 一致性**——每条 confirmed 决策在对应 .md 有真实章节（source 溯源不断），无 §TBD 残留
+3. **测试闭环**——execution 验收清单用例 ID 集合 = code-arch §6 test-matrix 全量（来源 A + B）
+4. **反哺处理**——loop 中标的 `[BACKFED]` 是否已修订上游 .md
+
+**结果：** CONSISTENT → 进 Step 6a；INCONSISTENT → 矛盾当 must_fix 回 Step 3 修复（涉及 D-不可逆须 ask_user）。
+
+> **为何合并 6b+6c：** full 每阶段各做一次 6b（反哺）+ execution 做一次 6c（终检）= 7 次。mid 把 4 份文档的反哺 + 终检合并成 1 次全文档扫描——因为 4 份文档是同一 step 产出的（时序紧凑），跨文档矛盾集中暴露，一次终检兜底比逐文档反哺高效。
+
+### review 落盘（AC-15.3，CW detail gate 前置）
+
+一致性终检 CONSISTENT 后，必须把 review-fix-loop + 终检的结论落盘到 `changes/` 目录，供 CW detail gate
+的机器检查预检（#7 review 桩机制——CW detail gate 的机器检查覆盖 issues / nfr /
+code-arch / execution 四个维度，每个维度都期望对应 review 文件）：
+
+```
+changes/review-issues.md       ← issues 维度的 review 结论
+changes/review-nfr.md          ← nfr 维度的 review 结论
+changes/review-code-arch.md    ← code-arch 维度的 review 结论
+changes/review-execution.md    ← execution 维度的 review 结论
+```
+
+每份 review 文件含 frontmatter `verdict: APPROVED`（CONSISTENT + CONVERGED 才落 APPROVED）。
+
+> CW detail action 调用前会预检这 4 个文件是否存在（`findMissingReviewStubs` with DETAIL_REVIEW_SLUGS），
+> 缺失返 hint 不跑 gate（agent 不再面对裸 FAIL）。落盘是 skill 的职责（CW 不造假桩）。
+
+## Step 6a：定稿 + cw(detail) gate（必须）
+
+1. **二次 ask**（残留 D-不可逆）：loop + 终检后残留的 D-不可逆 must_fix，按 batch-ask 二次 ask 协议打包提问。
+2. **主 agent 定稿** 4 份 .md（frontmatter `verdict: pass`，decisions.md 溯源核对）。
+3. **产出 detail.json**（CW `detail` action 的入参，D-006 结构化 JSON）。
+
+**detail.json schema 见 `../lite-shared/references/cw-json-schemas.md`「detail.json」节**（字段约束 + format 锁定）。
+关键提醒：`format` 必须 === `"mid-detail"`（D-003）；`testCases[].id` 用 `T2.4` 格式；`testCases[].assertion` 是自然语言断言（**无 expected 字段**，mid 信声明 D-008）。
+
+detail.json 写到 `.xyz-harness/{topic}/detail.json`。写完后调 CW：
+
+```
+cw(action=detail, topicId="<create 时返回的 topicId>", detailJson=<JSON.parse(detail.json 文件内容)，必须传 object 不能传 string>)
+```
+
+**[MANDATORY] `detailJson` 必须是 object**（`JSON.parse` 后的值），不是 JSON 字符串。
+传 string 会被 CW 在 `assertFormat` 拒（报 `invalid plan json: not an object`），因为 schema 声明的是 `type: object`。
+
+CW detail gate 预检 `changes/review-{issues,nfr,code-arch,execution}.md` 存在 → 跑机器检查（issues/nfr/code-arch/execution）全量报告 →
+通过后返回 `nextAction: {action:"dev", skill:"coding-execute", waves:[...]}`。
+
+gate fail → 修 mustFix（全量报告会一次性返回所有层的错误）后重调 cw(action=detail)。
+连续失败超阈值时 guidance 会含「熔断」提示——检查是否机器检查误判，必要时 ask_user 人工审查。
+
+## Step 6b：HTML 渲染（可选，gate 通过后）
+
+> 此步骤是**可选的可视化增强**，不阻塞 dev 阶段。预算紧张时可跳过，在 retrospect 后补。
+
+**派 fresh subagent 渲染 HTML**（4 个，wait:false 并行，加载 coding-visualizer）：
+- issues.md → hero=决策 DAG 图（节点按 P 级着色）
+- non-functional-design.md → hero=风险矩阵热力图（issue×7 维度）
+- code-architecture.md → hero=包依赖图 + 核心时序图
+- execution-plan.md → hero=Wave 依赖 DAG 图（并行组标注）
+
+## Self-Check
+
+**[MANDATORY] 全部满足才算 mid-detail-plan 完成。**
+
+上游 + 基建：
+- [ ] context-builder 已派发，阶段工作摘要已注入主 agent（不可推翻决策清单可见）
+- [ ] mid-plan 产出的 confirmed 决策未被当 gap 重报（decisions.md 纪律）
+
+issues：
+- [ ] issues.md 按 4 轴扫再标 P 级（非先标 P 再凑）
+- [ ] P0/P1 划线 / DESIGN-IT-TWICE 选定 / P3 延后 已批量 ask_user（非 agent 自决）
+- [ ] CW gate 机器检查通过（issues，由 `cw(action=detail)` 触发）
+
+drafter 并行：
+- [ ] 2 drafter wait:false 同消息并行派发（未串行）
+- [ ] nfr 7 维度全覆盖（不适用有理由）+ 回灌登记表完整
+- [ ] code-arch 含 test-matrix（来源 0+A，**来源 A 每条标测试层 unit/integration/e2e/perf-chaos**，来源 B 占位）+ code-skeleton（可编译骨架）
+- [ ] CW gate 机器检查通过（nfr/code_arch，由 `cw(action=detail)` 触发）
+
+execution + 对齐：
+- [ ] 回灌对齐已做（来源 B 已补 + nfr ⑤指针已验证 + 性能混沌类已标记）
+- [ ] execution-plan 从 code-arch 时序图推导 Wave 依赖
+- [ ] 测试验收清单全量（来源 A+B，**按测试层 unit/integration/e2e/perf-chaos 可分组**）
+- [ ] CW gate 机器检查通过（execution，由 `cw(action=detail)` 触发）
+
+loop + 终检：
+- [ ] review-fix-loop 5~6 路并行，禁读重建路禁读了对应 deliverable
+- [ ] 汇总 must_fix 去重 + 交叉验证标注，跨文档矛盾已标 [BACKFED]
+- [ ] loop 收敛（CONVERGED 或 round=MAX 残留已二次 ask）
+- [ ] consistency-final.md verdict: CONSISTENT
+
+定稿：
+- [ ] 4 份 .md frontmatter 含 `verdict: pass`
+- [ ] decisions.md 每条溯源指向真实章节
+
+可选（预算紧张时可延后到 retrospect 后补）：
+- [ ] 4 个 HTML 已渲染并 open，hero 图就位（Step 6b，不阻塞 dev 阶段）
+
+## 标记说明
+
+| 标记 | 含义 | 修改约束 |
+|------|------|----------|
+| [铁律] | 阶段核心不可逾越的边界 | 不允许削弱或移除 |
+| [MANDATORY] | 流程强制要求 | 必须严格遵守 |

@@ -1,0 +1,665 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>mid-* 工作流设计 — design 与 lite 之间的开发档位</title>
+<style>
+/*
+ * design.css — design-visual-explainer 公共样式
+ * 从 issues.html (feat-system-prompt-loader) 抽出，作为 6 阶段产物骨架的统一底座。
+ * 阶段特有类（.issue / .wave-card / .uc / .risk-* 等）放各骨架局部 style，不在此文件。
+ *
+ * render.sh 通过占位符注释 INLINE:design.css 将本文件内联进产物 HTML。
+ */
+* { margin: 0; padding: 0; box-sizing: border-box; }
+:root {
+  --font-body: 'Bricolage Grotesque', 'PingFang SC', system-ui, sans-serif;
+  --font-mono: 'Space Mono', 'JetBrains Mono', 'SF Mono', Consolas, monospace;
+  --bg: #f6f8f8; --surface: #ffffff; --surface-2: #eef2f1; --surface-elevated: #ffffff;
+  --border: rgba(15, 40, 40, 0.08); --border-bright: rgba(15, 40, 40, 0.16);
+  --text: #0f2a2a; --text-dim: #5a6b6b;
+  --accent: #0d9488; --accent-dim: rgba(13, 148, 136, 0.10);
+  --slate: #334155; --slate-dim: rgba(51, 65, 85, 0.10);
+  --green: #059669; --green-dim: rgba(5, 150, 105, 0.12);
+  --red: #dc2626; --red-dim: rgba(220, 38, 38, 0.10);
+  --orange: #c2410c; --orange-dim: rgba(194, 65, 12, 0.10);
+  --amber: #b45309; --amber-dim: rgba(180, 83, 9, 0.12);
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #0a1414; --surface: #111d1d; --surface-2: #182626; --surface-elevated: #162121;
+    --border: rgba(180, 220, 220, 0.07); --border-bright: rgba(180, 220, 220, 0.15);
+    --text: #e3efee; --text-dim: #8aa0a0;
+    --accent: #2dd4bf; --accent-dim: rgba(45, 212, 191, 0.13);
+    --slate: #94a3b8; --slate-dim: rgba(148, 163, 184, 0.12);
+    --green: #34d399; --green-dim: rgba(52, 211, 153, 0.13);
+    --red: #f87171; --red-dim: rgba(248, 113, 113, 0.12);
+    --orange: #fb923c; --orange-dim: rgba(251, 146, 60, 0.12);
+    --amber: #fbbf24; --amber-dim: rgba(251, 191, 36, 0.14);
+  }
+}
+html { scroll-behavior: smooth; }
+body { font-family: var(--font-body); color: var(--text); line-height: 1.65; background: var(--bg); background-image: radial-gradient(ellipse at 50% -5%, var(--accent-dim) 0%, transparent 55%); padding: 32px; overflow-wrap: break-word; }
+.grid > *, .flex > *, [style*="display:grid"] > *, [style*="display:flex"] > * { min-width: 0; }
+h1 { font-size: 38px; font-weight: 700; letter-spacing: -1px; margin-bottom: 6px; text-wrap: balance; }
+h2 { font-size: 22px; font-weight: 600; letter-spacing: -0.3px; margin: 56px 0 18px; padding-bottom: 10px; border-bottom: 1px solid var(--border); scroll-margin-top: 70px; }
+h3 { font-size: 16px; font-weight: 700; margin: 26px 0 12px; color: var(--accent); font-family: var(--font-mono); letter-spacing: 0.2px; scroll-margin-top: 70px; }
+h4 { font-size: 13px; font-weight: 600; margin: 18px 0 8px; color: var(--slate); font-family: var(--font-mono); }
+p { margin-bottom: 12px; }
+.subtitle { color: var(--text-dim); font-size: 13px; margin-bottom: 8px; font-family: var(--font-mono); }
+code { font-family: var(--font-mono); font-size: 0.92em; }
+strong { font-weight: 600; }
+
+/* Layout: TOC + main 双栏 */
+.wrap { max-width: 1380px; margin: 0 auto; display: grid; grid-template-columns: 168px 1fr; gap: 0 44px; }
+.main { min-width: 0; }
+header.doc-head { margin-bottom: 28px; }
+.badge-row { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 14px; }
+.tag { font-family: var(--font-mono); font-size: 10px; font-weight: 600; text-transform: uppercase; letter-spacing: 1px; padding: 4px 10px; border-radius: 20px; background: var(--accent-dim); color: var(--accent); border: 1px solid color-mix(in srgb, var(--accent) 30%, transparent); }
+.tag--slate { background: var(--slate-dim); color: var(--slate); border-color: color-mix(in srgb, var(--slate) 30%, transparent); }
+.tag--green { background: var(--green-dim); color: var(--green); border-color: color-mix(in srgb, var(--green) 30%, transparent); }
+.tag--amber { background: var(--amber-dim); color: var(--amber); border-color: color-mix(in srgb, var(--amber) 30%, transparent); }
+
+/* TOC sidebar + scroll-spy */
+.toc { position: sticky; top: 24px; align-self: start; padding: 14px 0; grid-row: 1/-1; max-height: calc(100dvh - 48px); overflow-y: auto; }
+.toc-title { font-family: var(--font-mono); font-size: 9px; font-weight: 700; text-transform: uppercase; letter-spacing: 2px; color: var(--text-dim); padding: 0 0 10px; margin-bottom: 8px; border-bottom: 1px solid var(--border); }
+.toc a { display: block; font-size: 11px; color: var(--text-dim); text-decoration: none; padding: 4px 8px; border-radius: 5px; border-left: 2px solid transparent; transition: all .15s; line-height: 1.35; margin-bottom: 1px; }
+.toc a:hover { color: var(--text); background: var(--surface-2); }
+.toc a.active { color: var(--text); border-left-color: var(--accent); background: var(--accent-dim); }
+
+/* TL;DR 摘要框 */
+.tldr { background: var(--surface-elevated); border: 1px solid color-mix(in srgb, var(--accent) 35%, var(--border)); border-radius: 14px; padding: 20px 24px; margin: 24px 0 8px; box-shadow: 0 4px 18px rgba(13,148,136,.06); }
+.tldr__label { font-family: var(--font-mono); font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: 1.8px; color: var(--accent); margin-bottom: 10px; display: flex; align-items: center; gap: 8px; }
+.tldr__label::before { content: ''; width: 8px; height: 8px; border-radius: 50%; background: currentColor; }
+.tldr ul { list-style: none; padding: 0; }
+.tldr li { padding: 5px 0 5px 18px; position: relative; font-size: 14px; line-height: 1.55; }
+.tldr li::before { content: '→'; position: absolute; left: 0; color: var(--accent); font-weight: 600; }
+.tldr code { font-family: var(--font-mono); font-size: 12px; background: var(--accent-dim); color: var(--accent); padding: 1px 6px; border-radius: 3px; }
+
+/* Mermaid zoom/pan 外壳（与 zoom.js 的选择器契约绑定，勿改名） */
+.mermaid-wrap { position: relative; background: var(--surface); border: 1px solid var(--border); border-radius: 12px; padding: 32px 24px; overflow: auto; margin-bottom: 24px; display: flex; justify-content: center; align-items: center; min-height: 400px; cursor: grab; }
+.mermaid-wrap.is-panning { cursor: grabbing; user-select: none; }
+.zoom-controls { position: absolute; top: 8px; right: 8px; display: flex; gap: 2px; z-index: 10; background: var(--surface); border: 1px solid var(--border); border-radius: 6px; padding: 2px; }
+.zoom-controls button { width: 28px; height: 28px; border: none; background: transparent; color: var(--text-dim); font-family: var(--font-mono); font-size: 14px; cursor: pointer; border-radius: 4px; display: flex; align-items: center; justify-content: center; transition: background .15s, color .15s; }
+.zoom-controls button:hover { background: var(--border); color: var(--text); }
+.diagram-shell { position: relative; }
+.diagram-shell__hint { font-family: var(--font-mono); font-size: 11px; color: var(--text-dim); margin-bottom: 8px; opacity: .7; }
+.mermaid-viewport { position: relative; overflow: hidden; width: 100%; height: 100%; min-height: 300px; }
+.mermaid-canvas { position: absolute; top: 0; left: 0; }
+.zoom-label { font-family: var(--font-mono); font-size: 10px; color: var(--text-dim); padding: 0 6px; white-space: nowrap; }
+.mermaid .nodeLabel { font-family: var(--font-body) !important; font-size: 14px !important; }
+.mermaid .edgeLabel { font-family: var(--font-mono) !important; font-size: 12px !important; }
+.mermaid .node rect, .mermaid .node circle, .mermaid .node polygon { stroke-width: 1.5px !important; }
+
+/* 数据表格（功能清单/AC 清单/追溯表/签名表/决策记录） */
+.table-wrap { background: var(--surface); border: 1px solid var(--border); border-radius: 12px; overflow: hidden; margin: 16px 0 24px; }
+.table-scroll { overflow-x: auto; -webkit-overflow-scrolling: touch; }
+.data-table { width: 100%; border-collapse: collapse; font-size: 13px; line-height: 1.55; }
+.data-table thead { position: sticky; top: 0; z-index: 2; }
+.data-table th { background: var(--surface-2); font-family: var(--font-mono); font-size: 10px; font-weight: 600; text-transform: uppercase; letter-spacing: 1px; color: var(--text-dim); text-align: left; padding: 13px 16px; border-bottom: 2px solid var(--border-bright); white-space: nowrap; }
+.data-table td { padding: 11px 16px; border-bottom: 1px solid var(--border); vertical-align: top; }
+.data-table tbody tr:nth-child(even) { background: var(--accent-dim); }
+.data-table tbody tr:hover { background: var(--border); }
+.data-table tbody tr:last-child td { border-bottom: none; }
+.data-table code { font-family: var(--font-mono); font-size: 11px; background: var(--accent-dim); color: var(--accent); padding: 1px 5px; border-radius: 3px; }
+
+/* Callout 提示框 */
+.callout { background: var(--surface-2); border: 1px solid var(--border); border-left: 3px solid var(--accent); border-radius: 0 8px 8px 0; padding: 14px 18px; font-size: 13px; line-height: 1.6; color: var(--text-dim); margin: 20px 0; }
+.callout strong { color: var(--text); font-weight: 600; }
+.callout code { font-family: var(--font-mono); font-size: 11px; background: var(--accent-dim); color: var(--accent); padding: 1px 5px; border-radius: 3px; }
+
+/* 章节小标题（mono 大写，区别于 h2） */
+.sec-head { font-family: var(--font-mono); font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: 1.5px; color: var(--accent); margin: 40px 0 14px; padding-bottom: 8px; border-bottom: 1px solid var(--border); }
+
+/* 卡片组件（架构概览 / 决策记录 / 模块概览） */
+.ve-card { background: var(--surface); border: 1px solid var(--border); border-radius: 12px; padding: 18px 20px; display: flex; flex-direction: column; gap: 8px; }
+.ve-card--elevated { box-shadow: 0 4px 18px rgba(13,148,136,.06); }
+.ve-card__label { font-family: var(--font-mono); font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: 1.2px; color: var(--accent); display: flex; align-items: center; gap: 6px; }
+.ve-card__label::before { content: ''; width: 7px; height: 7px; border-radius: 50%; background: currentColor; }
+.ve-card h3 { margin: 0; color: var(--text); font-family: var(--font-body); font-size: 17px; letter-spacing: -0.2px; }
+.ve-card p { margin: 0; font-size: 13.5px; color: var(--text-dim); line-height: 1.55; }
+.card-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 16px; margin: 18px 0 28px; }
+.node-list { list-style: none; padding: 0; margin: 0; }
+.node-list li { padding: 4px 0 4px 16px; position: relative; font-size: 13px; line-height: 1.5; color: var(--text-dim); }
+.node-list li::before { content: '›'; position: absolute; left: 0; color: var(--accent); font-weight: 700; }
+.node-list code { font-family: var(--font-mono); font-size: 11.5px; background: var(--accent-dim); color: var(--accent); padding: 1px 5px; border-radius: 3px; }
+
+/* 状态药丸（AC 清单 / 追溯表状态列） */
+.status { display: inline-flex; align-items: center; gap: 5px; font-family: var(--font-mono); font-size: 11px; font-weight: 600; padding: 2px 8px; border-radius: 5px; white-space: nowrap; }
+.status::before { content: ''; width: 6px; height: 6px; border-radius: 50%; background: currentColor; }
+.status--match { background: var(--green-dim); color: var(--green); }
+.status--warn { background: var(--amber-dim); color: var(--amber); }
+.status--gap { background: var(--red-dim); color: var(--red); }
+.status--na { background: var(--slate-dim); color: var(--slate); }
+
+/* 热力图单元格（④ NFR 风险矩阵） */
+.heatmap-cell { text-align: center; font-size: 15px; padding: 8px; }
+.heatmap-cell--good { background: var(--green-dim); }
+.heatmap-cell--warn { background: var(--amber-dim); }
+.heatmap-cell--bad { background: var(--red-dim); }
+.heatmap-cell--na { background: transparent; color: var(--text-dim); }
+
+/* 图例 */
+.legend { display: flex; flex-wrap: wrap; gap: 14px; margin: 16px 0; font-size: 12px; color: var(--text-dim); font-family: var(--font-mono); }
+.legend-item { display: flex; align-items: center; gap: 6px; }
+.legend-swatch { width: 14px; height: 14px; border-radius: 3px; }
+
+/* Footer */
+footer.doc-foot { margin-top: 48px; padding-top: 20px; border-top: 1px solid var(--border); font-size: 12px; color: var(--text-dim); font-family: var(--font-mono); }
+
+/* 入场动画 */
+@keyframes fadeUp { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: translateY(0); } }
+.animate { animation: fadeUp .35s ease-out both; animation-delay: calc(var(--i, 0) * .04s); }
+
+/* 响应式 */
+@media (prefers-reduced-motion: reduce) { *, *::before, *::after { animation-duration: .01ms !important; transition-duration: .01ms !important; } }
+@media (max-width: 1000px) {
+  .wrap { grid-template-columns: 1fr; }
+  .toc { position: sticky; top: 0; z-index: 200; max-height: none; display: flex; gap: 4px; align-items: center; overflow-x: auto; background: var(--bg); border-bottom: 1px solid var(--border); padding: 10px 0; grid-row: auto; }
+  .toc-title { display: none; }
+  .toc a { white-space: nowrap; flex-shrink: 0; border-left: none; border-bottom: 2px solid transparent; border-radius: 4px 4px 0 0; padding: 6px 10px; font-size: 10px; }
+  .toc a.active { border-left: none; border-bottom-color: var(--accent); background: var(--surface); }
+  h2, h3 { scroll-margin-top: 60px; }
+  body { padding: 16px; }
+}
+@media (max-width: 768px) { body { padding: 12px; } h1 { font-size: 26px; } }
+
+
+/* ===== 本页特有：三档对比泳道 + 资源条 ===== */
+.lane-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 18px; margin: 18px 0 8px; }
+.lane { background: var(--surface); border: 1px solid var(--border); border-radius: 14px; padding: 20px 18px 16px; display: flex; flex-direction: column; }
+.lane--mid { border-color: color-mix(in srgb, var(--accent) 55%, var(--border)); box-shadow: 0 8px 26px rgba(13,148,136,.13); position: relative; }
+.lane--mid::before { content: 'NEW · 新档位'; position: absolute; top: -11px; left: 50%; transform: translateX(-50%); background: var(--accent); color: #fff; font-family: var(--font-mono); font-size: 9px; font-weight: 700; letter-spacing: 1.2px; padding: 4px 11px; border-radius: 11px; white-space: nowrap; }
+.lane__head { text-align: center; padding-bottom: 13px; margin-bottom: 14px; border-bottom: 1px solid var(--border); }
+.lane__title { font-size: 18px; font-weight: 700; letter-spacing: -.3px; }
+.lane__sub { font-family: var(--font-mono); font-size: 10.5px; color: var(--text-dim); margin-top: 3px; }
+.lane__stages { display: flex; flex-direction: column; flex: 1; }
+.stage { background: var(--surface-2); border: 1px solid var(--border); border-radius: 9px; padding: 9px 11px; position: relative; }
+.stage__num { font-family: var(--font-mono); font-size: 9px; color: var(--accent); font-weight: 700; letter-spacing: .6px; }
+.stage__name { font-weight: 600; font-size: 13px; line-height: 1.3; }
+.stage__note { font-size: 11px; color: var(--text-dim); margin-top: 3px; line-height: 1.4; }
+.stage + .stage { margin-top: 15px; }
+.stage + .stage::before { content: '↓'; position: absolute; top: -12px; left: 50%; transform: translateX(-50%); color: var(--accent); font-size: 11px; opacity: .55; }
+.lane__cost { margin-top: 16px; padding-top: 13px; border-top: 1px dashed var(--border-bright); display: flex; flex-direction: column; gap: 6px; }
+.cost-row { display: flex; justify-content: space-between; align-items: baseline; font-size: 11.5px; font-family: var(--font-mono); }
+.cost-row .k { color: var(--text-dim); }
+.cost-row .v { font-weight: 700; }
+.v--hi { color: var(--red); } .v--mid { color: var(--accent); } .v--lo { color: var(--green); }
+@media (max-width: 820px) { .lane-grid { grid-template-columns: 1fr; } }
+
+/* 资源消耗水平条 */
+.bar-row { display: grid; grid-template-columns: 90px 1fr 60px; gap: 12px; align-items: center; margin: 10px 0; font-size: 12px; }
+.bar-row .bar-label { font-family: var(--font-mono); color: var(--text-dim); font-size: 11px; }
+.bar-track { background: var(--surface-2); border: 1px solid var(--border); border-radius: 6px; height: 16px; overflow: hidden; position: relative; min-width: 0; }
+.bar-fill { height: 100%; border-radius: 5px 0 0 5px; }
+.bar-fill--design { background: var(--red-dim); border-right: 2px solid var(--red); }
+.bar-fill--mid { background: var(--accent-dim); border-right: 2px solid var(--accent); }
+.bar-fill--lite { background: var(--green-dim); border-right: 2px solid var(--green); }
+.bar-row .bar-val { font-family: var(--font-mono); font-size: 11px; text-align: right; }
+
+/* 公式 callout */
+.formula { font-family: var(--font-mono); font-size: 13.5px; background: var(--surface-2); border: 1px dashed var(--border-bright); border-radius: 8px; padding: 14px 18px; margin: 14px 0 20px; line-height: 1.9; color: var(--text); overflow-x: auto; }
+.formula b { color: var(--accent); }
+
+/* reviewer 路线卡 */
+.route-card { background: var(--surface); border: 1px solid var(--border); border-left: 3px solid var(--accent); border-radius: 0 9px 9px 0; padding: 11px 15px; margin: 10px 0; }
+.route-card__name { font-family: var(--font-mono); font-size: 12px; font-weight: 700; color: var(--accent); }
+.route-card__frame { font-size: 11px; color: var(--text-dim); font-family: var(--font-mono); margin-left: 8px; }
+.route-card__ref { font-size: 11px; color: var(--text-dim); margin-top: 4px; }
+.route-card__ref code { font-size: 10.5px; }
+</style>
+</head>
+<body>
+<div class="wrap">
+<nav class="toc" id="toc">
+  <div class="toc-title">目录</div>
+  <a href="#hero">三档对比</a>
+  <a href="#pain">痛点剖析</a>
+  <a href="#overview">总览</a>
+  <a href="#skill-a">Skill A</a>
+  <a href="#skill-b">Skill B</a>
+  <a href="#loop">review-fix-loop</a>
+  <a href="#dimensions">维度审查</a>
+  <a href="#cost">资源对比</a>
+  <a href="#tradeoff">取舍风险</a>
+</nav>
+<main class="main">
+<header class="doc-head">
+  <h1>mid-* 工作流设计</h1>
+  <p class="subtitle">介于 design 与 lite 之间的开发档位 — 内容对齐 design，编排对齐 lite</p>
+  <div class="badge-row">
+    <span class="tag">draft 设计分析</span>
+    <span class="tag tag--slate">2 skill · mid-design + mid-build</span>
+    <span class="tag tag--amber">复用 design 全部资产</span>
+  </div>
+</header>
+
+<div class="tldr animate" id="tldr" style="--i:0">
+  <div class="tldr__label">核心结论</div>
+  <ul>
+    <li><strong>design 慢的根因不是「步骤多」，而是两个乘法叠加：</strong>阶段数 × 每阶段循环步数 × 每步的串行等待。<code>ask_user</code> 一问一答（40~80 次串行往返）是 wall-clock 最大杀手。</li>
+    <li><strong>方案：</strong>新建 <code>mid-design</code>（需求+架构）+ <code>mid-build</code>（实施 4 合 1）两个 skill。<strong>内容</strong>对齐 design 全量 6 份 deliverable + 质量门；<strong>编排</strong>改为 draft → batch-ask → review-fix-loop（lite 风格）。</li>
+    <li><strong>核心抽象 review-fix-loop：</strong>把 design 的「追踪+审查+反哺」三道独立检查折叠成一路，跨 deliverable 合并维度，MAX=2 轮收敛 + 残留打包二次 ask。</li>
+    <li><strong>预期收益：</strong>ask_user 往返 40~80 → 3~5；subagent 派发 30~48 → ~20。最大节省在用户串行等待。</li>
+  </ul>
+</div>
+
+<!-- ========== HERO: 三档对比泳道 ========== -->
+<h2 class="sec-head" id="hero">主角图 · 三档对比泳道</h2>
+<p style="font-size:13.5px;color:var(--text-dim);margin-bottom:4px">三列高度差直观传达 <b style="color:var(--text)">mid 介于 design（深/长）与 lite（浅/短）之间</b>。每列底部为该档位的资源代价。</p>
+
+<div class="lane-grid">
+  <!-- design -->
+  <div class="lane animate" style="--i:1">
+    <div class="lane__head">
+      <div class="lane__title" style="color:var(--red)">design-*</div>
+      <div class="lane__sub">重 · 6+1 阶段 · 每阶段深度收敛</div>
+    </div>
+    <div class="lane__stages">
+      <div class="stage"><span class="stage__num">STEP 0</span><div class="stage__name">design-init</div><div class="stage__note">项目文档容器 + 回读验证</div></div>
+      <div class="stage"><span class="stage__num">①</span><div class="stage__name">clarity</div><div class="stage__note">requirements.md · 6 步循环</div></div>
+      <div class="stage"><span class="stage__num">②</span><div class="stage__name">architecture</div><div class="stage__note">system-architecture.md · 6 步循环</div></div>
+      <div class="stage"><span class="stage__num">③</span><div class="stage__name">issues</div><div class="stage__note">issues.md · 6 步循环</div></div>
+      <div class="stage"><span class="stage__num">④</span><div class="stage__name">nfr</div><div class="stage__note">non-functional-design.md · 6 步循环</div></div>
+      <div class="stage"><span class="stage__num">⑤</span><div class="stage__name">code-arch</div><div class="stage__note">code-architecture.md + skeleton · 6 步循环</div></div>
+      <div class="stage"><span class="stage__num">⑥</span><div class="stage__name">execution</div><div class="stage__note">execution-plan.md · 6 步循环 + 终检</div></div>
+      <div class="stage"><span class="stage__num">收尾</span><div class="stage__name">design-closeout</div><div class="stage__note">沉淀长期文档 + 归档</div></div>
+    </div>
+    <div class="lane__cost">
+      <div class="cost-row"><span class="k">ask_user 往返</span><span class="v v--hi">40~80</span></div>
+      <div class="cost-row"><span class="k">subagent 派发</span><span class="v v--hi">30~48</span></div>
+      <div class="cost-row"><span class="k">适用</span><span class="v v--hi">L3 重型</span></div>
+    </div>
+  </div>
+
+  <!-- mid (NEW) -->
+  <div class="lane lane--mid animate" style="--i:2">
+    <div class="lane__head">
+      <div class="lane__title" style="color:var(--accent)">mid-*</div>
+      <div class="lane__sub">中 · 2 阶段 · draft+batch-ask+loop</div>
+    </div>
+    <div class="lane__stages">
+      <div class="stage"><span class="stage__num">STEP 0</span><div class="stage__name">design-init</div><div class="stage__note">复用（建文档容器）</div></div>
+      <div class="stage"><span class="stage__num">SKILL A</span><div class="stage__name">mid-design</div><div class="stage__note">requirements + architecture<br/>draft → batch-ask → review-fix-loop</div></div>
+      <div class="stage"><span class="stage__num">SKILL B</span><div class="stage__name">mid-build</div><div class="stage__note">issues + nfr + code-arch + execution<br/>ctx-build → drafters ‖ → loop → 终检</div></div>
+      <div class="stage"><span class="stage__num">产出</span><div class="stage__name">execution-plan.md</div><div class="stage__note">Wave 编排 + 测试验收清单</div></div>
+    </div>
+    <div class="lane__cost">
+      <div class="cost-row"><span class="k">ask_user 往返</span><span class="v v--mid">3~5</span></div>
+      <div class="cost-row"><span class="k">subagent 派发</span><span class="v v--mid">~20</span></div>
+      <div class="cost-row"><span class="k">适用</span><span class="v v--mid">L2 标准（新默认）</span></div>
+    </div>
+  </div>
+
+  <!-- lite -->
+  <div class="lane animate" style="--i:3">
+    <div class="lane__head">
+      <div class="lane__title" style="color:var(--green)">lite-*</div>
+      <div class="lane__sub">轻 · 不碰架构</div>
+    </div>
+    <div class="lane__stages">
+      <div class="stage"><span class="stage__num">STEP 1</span><div class="stage__name">lite-plan</div><div class="stage__note">plan.md 单文件（6 章节）</div></div>
+      <div class="stage"><span class="stage__num">STEP 2</span><div class="stage__name">lite-execute</div><div class="stage__note">Wave 并行 + TDD + 验收</div></div>
+      <div class="stage"><span class="stage__num">STEP 3</span><div class="stage__name">lite-retrospect</div><div class="stage__note">轻量自检清单</div></div>
+    </div>
+    <div class="lane__cost">
+      <div class="cost-row"><span class="k">ask_user 往返</span><span class="v v--lo">1~3</span></div>
+      <div class="cost-row"><span class="k">subagent 派发</span><span class="v v--lo">5~10</span></div>
+      <div class="cost-row"><span class="k">适用</span><span class="v v--lo">L1 小功能</span></div>
+    </div>
+  </div>
+</div>
+
+<!-- ========== 痛点剖析 ========== -->
+<h2 id="pain">一、痛点剖析 · design 为什么慢</h2>
+<p>根因不是「步骤多」本身，而是两个乘法效应叠加：</p>
+<div class="formula">
+总耗时 ≈ <b>(阶段数)</b> × <b>(每阶段循环步骤数)</b> × <b>(每步的串行等待)</b><br/>
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;= <b>6 阶段</b> × <b>6 步循环</b> × (ask_user 串行 + subagent 串行往返)
+</div>
+
+<div class="table-wrap animate" style="--i:4">
+  <div class="table-scroll">
+    <table class="data-table">
+      <thead><tr><th>浪费来源</th><th>design 现状</th><th>代价</th></tr></thead>
+      <tbody>
+        <tr><td><b>Grilling 一问一答</b></td><td>每阶段 Step 1.1 强制「一次一个问题」</td><td>每阶段 5~15 次 <code>ask_user</code> 串行往返 — <span style="color:var(--red);font-weight:700">wall-clock 最大杀手</span></td></tr>
+        <tr><td>6 步循环重复 6 次</td><td>每阶段独立 tracing→gap→收敛→review→backfeed</td><td>每阶段 ~5~8 个 subagent，6 阶段 = 30~48 次 dispatch</td></tr>
+        <tr><td>每阶段独立胶水开销</td><td>context-builder ×6 + 渲染 HTML ×6 + backfeed ×6</td><td>跨阶段本可合并的动作被阶段边界切碎</td></tr>
+        <tr><td>追踪与审查分两道</td><td>Step 2/4 追踪找 gap + Step 6 审查判质量</td><td>两类 fresh subagent 串行跑，且每阶段都来一遍</td></tr>
+      </tbody>
+    </table>
+  </div>
+</div>
+<div class="callout">
+  <strong>关键洞察：</strong> design 的 6 步循环是为「单阶段深度收敛」设计的，但你真正需要的是「跨阶段快速过一遍」。lite 太轻（无架构决策），design 太重（每阶段都深度收敛）— 中间缺一个「内容对齐 design、编排对齐 lite」的档位。<code>mid-*</code> 就是补这个空缺。
+</div>
+
+<!-- ========== 总览 ========== -->
+<h2 id="overview">二、新工作流总览</h2>
+<p>定位：<strong>内容 = design 全量</strong>（6 份 deliverable 一个不少 + 机器检查 + 红队门），<strong>编排 = lite 风格</strong>（draft → batch-ask → review-fix-loop）。复用 design 的全部 references/templates/scripts，只换编排骨架。</p>
+
+<section class="diagram-shell animate" style="--i:5">
+  <p class="diagram-shell__hint">线性总览 · Ctrl/Cmd+wheel 缩放 · 拖动平移 · 双击适配</p>
+  <div class="mermaid-wrap">
+    <div class="zoom-controls">
+      <button type="button" data-action="zoom-in" title="放大">+</button>
+      <button type="button" data-action="zoom-out" title="缩小">&minus;</button>
+      <button type="button" data-action="zoom-fit" title="适配">⊡</button>
+      <button type="button" data-action="zoom-one" title="1:1">1:1</button>
+      <button type="button" data-action="zoom-expand" title="新窗口">⤢</button>
+      <span class="zoom-label">Loading...</span>
+    </div>
+    <div class="mermaid-viewport"><div class="mermaid mermaid-canvas"></div></div>
+  </div>
+  <script type="text/plain" class="diagram-source">
+flowchart LR
+  INIT["design-init\n初始化项目文档"] --> SA["Skill A · mid-design\n需求 + 架构"]
+  SA --> SB["Skill B · mid-build\n实施 4 合 1"]
+  SB --> EP["execution-plan.md\nWave 编排 + 验收清单"]
+  EP --> IMPL(["后续：subagent 按 Wave 执行\nlite-execute / design-execution"])
+  IMPL -.->|"复用"| CLOSE["design-closeout\n沉淀 + 归档"]
+  </script>
+</section>
+
+<!-- ========== Skill A ========== -->
+<h2 id="skill-a">三、Skill A · mid-design（需求 + 架构）</h2>
+<p>把 design 的「一问一答 Grilling」+「追踪/审查分离」<b>折叠成 draft → batch-ask → review-fix-loop</b>。替代 design 的 N 次一问一答（每问附推荐答案 + 理由，分类打包）。</p>
+
+<section class="diagram-shell animate" style="--i:6">
+  <p class="diagram-shell__hint">Skill A 内部 · stadium=ask_user · 菱形=决策 · 虚线=反馈</p>
+  <div class="mermaid-wrap">
+    <div class="zoom-controls">
+      <button type="button" data-action="zoom-in" title="放大">+</button>
+      <button type="button" data-action="zoom-out" title="缩小">&minus;</button>
+      <button type="button" data-action="zoom-fit" title="适配">⊡</button>
+      <button type="button" data-action="zoom-one" title="1:1">1:1</button>
+      <button type="button" data-action="zoom-expand" title="新窗口">⤢</button>
+      <span class="zoom-label">Loading...</span>
+    </div>
+    <div class="mermaid-viewport"><div class="mermaid mermaid-canvas"></div></div>
+  </div>
+  <script type="text/plain" class="diagram-source">
+flowchart TD
+  A0["扫描代码 + 读 CONTEXT/AGENTS/ARCHITECTURE"]
+  A1["主 agent 统一起草\nrequirements + architecture 初稿\n（agent opinionated）"]
+  A2(["ask_user 批量提问\n4~8 决策点 + 推荐答案\nD-不可逆 / D-可逆 / K 分类"])
+  A3["纳入答案 → 定稿初稿\n+ append decisions.md"]
+  A4["机器检查自跑\ncheck_clarity + check_architecture"]
+  A5{"review-fix-loop\n收敛?"}
+  A6(["二次 ask_user\n仅残留 D-不可逆"])
+  A7["定稿 .md + 渲染 HTML\n（1 fresh subagent）"]
+  A0 --> A1 --> A2 --> A3 --> A4 --> A5
+  A5 -.->|"有 must_fix · round<MAX"| A4
+  A5 -->|"收敛 / 超限"| A6 --> A7
+  </script>
+</section>
+<div class="callout">
+  <strong>审查维度（4 路并行）：</strong> ① 需求完整性（对齐/补齐）② 架构合理性+边界 ③ <b>禁读重建</b>（禁读两份初稿，从源码重建 Actor/用例/模型/边界 → diff，对抗同源盲区）④ 红队（反过度设计）。前两路正同向，后两路反向 — 提供 bias 对冲。
+</div>
+
+<!-- ========== Skill B ========== -->
+<h2 id="skill-b">四、Skill B · mid-build（实施 4 合 1）</h2>
+<p>架构之后的 4 份文档整合到 1 个 skill。<b>依赖链决定了真并行只有 1 个点</b>（nfr ‖ code-arch），其余按依赖串行：issues 是根 → nfr/code-arch 并行 → execution 依赖 code-arch。</p>
+
+<section class="diagram-shell animate" style="--i:7">
+  <p class="diagram-shell__hint">Skill B 内部 · B4→B5‖B6 为并行 fork · 虚线=反馈</p>
+  <div class="mermaid-wrap">
+    <div class="zoom-controls">
+      <button type="button" data-action="zoom-in" title="放大">+</button>
+      <button type="button" data-action="zoom-out" title="缩小">&minus;</button>
+      <button type="button" data-action="zoom-fit" title="适配">⊡</button>
+      <button type="button" data-action="zoom-one" title="1:1">1:1</button>
+      <button type="button" data-action="zoom-expand" title="新窗口">⤢</button>
+      <span class="zoom-label">Loading...</span>
+    </div>
+    <div class="mermaid-viewport"><div class="mermaid mermaid-canvas"></div></div>
+  </div>
+  <script type="text/plain" class="diagram-source">
+flowchart TD
+  B0["派 context-builder（fresh）\n压缩 Skill A 产出 → 工作摘要"]
+  B1["主 agent 产 issues.md"]
+  B2(["ask_user 批量拍板 P0/P1"])
+  B3["机器检查 check_issues"]
+  B4["派 2 drafter 并行 wait:false"]
+  B5["Drafter-A\nnon-functional-design.md\n读 issues · 7 维副作用"]
+  B6["Drafter-B\ncode-architecture + skeleton\n读 issues + architecture"]
+  B7["主 agent 产 execution-plan\n读 code-arch 时序图\n+ 验收清单脚本生成"]
+  B8["机器检查全跑\ncheck_nfr + code_arch + execution"]
+  B9{"review-fix-loop\n收敛?"}
+  B10["全文档一致性终检\n（合并 design 的 6b 反哺 + 6c 终检）"]
+  B11(["残留 D-不可逆 → ask_user"])
+  B12["定稿全部 + 渲染 HTML"]
+  B0 --> B1 --> B2 --> B3 --> B4
+  B4 --> B5
+  B4 --> B6
+  B5 --> B7
+  B6 --> B7
+  B7 --> B8 --> B9
+  B9 -.->|"有 must_fix"| B8
+  B9 -->|"收敛"| B10 --> B11 --> B12
+  </script>
+</section>
+<div class="callout">
+  <strong>依赖链（必须正视）：</strong> <code>requirements/architecture → issues → {nfr ‖ code-arch} → execution</code>。issues 是根且最需用户拍板，主 agent 锚定；nfr/code-arch 是唯一天然并行点，2 个 drafter 真并行；execution 必须等 code-arch。不能无脑「2 subagent 完成全部 4 份文档」。
+</div>
+
+<!-- ========== review-fix-loop ========== -->
+<h2 id="loop">五、核心抽象 · review-fix-loop</h2>
+<p>两个 skill 共用的循环。建议沉淀为 <code>mid-shared/references/review-fix-loop.md</code>。<b>与 design 6 步循环的本质区别：</b>把追踪+审查合并为一路（reviewer 既找 gap 又判质量），跨 deliverable 合并维度，MAX=2 轮收敛。</p>
+
+<section class="diagram-shell animate" style="--i:8">
+  <p class="diagram-shell__hint">loop 协议 · 虚线=反馈回机器检查 · stadium=跳出/ask</p>
+  <div class="mermaid-wrap">
+    <div class="zoom-controls">
+      <button type="button" data-action="zoom-in" title="放大">+</button>
+      <button type="button" data-action="zoom-out" title="缩小">&minus;</button>
+      <button type="button" data-action="zoom-fit" title="适配">⊡</button>
+      <button type="button" data-action="zoom-one" title="1:1">1:1</button>
+      <button type="button" data-action="zoom-expand" title="新窗口">⤢</button>
+      <span class="zoom-label">Loading...</span>
+    </div>
+    <div class="mermaid-viewport"><div class="mermaid mermaid-canvas"></div></div>
+  </div>
+  <script type="text/plain" class="diagram-source">
+flowchart TD
+  L1["L1 · 主 agent 跑机器检查 check_*.py\nFAIL 当场修，不进 subagent（零成本前置门）"]
+  L2["L2 · 派 N 路 fresh reviewer 并行 wait:false\n各跑正交认知帧"]
+  L3["L3 · 各路先复跑机器检查（幂等）+ 跑认知帧\n禁读重建路：重建阶段禁读对应 deliverable"]
+  L4["L4 · 汇总：must_fix 并集去重\n多路同报=HIGH-CONFIDENCE\n相反=CROSS-VALIDATED → D-不可逆转 ask"]
+  L5{"L5 · 无 must_fix?"}
+  L6(["L6 · round++ · 修复初稿\n回 L1 重检查"])
+  L7(["round≥MAX · 残留 D-不可逆\n打包二次 ask_user"])
+  L8(["跳出 loop · CONVERGED"])
+  L1 --> L2 --> L3 --> L4 --> L5
+  L5 -->|"否"| L6
+  L6 -.->|"反馈"| L1
+  L5 -->|"超限"| L7
+  L5 -->|"是"| L8
+  </script>
+</section>
+
+<h3>design 6 步循环 vs mid review-fix-loop</h3>
+<div class="table-wrap animate" style="--i:9">
+  <div class="table-scroll">
+    <table class="data-table">
+      <thead><tr><th>维度</th><th>design 6 步循环（每阶段）</th><th>mid review-fix-loop</th></tr></thead>
+      <tbody>
+        <tr><td>追踪 vs 审查</td><td>分两道（Step2/4 找 gap + Step6 判质量）</td><td><b>合并</b>为一路（reviewer 既找 gap 又判质量）</td></tr>
+        <tr><td>收敛机制</td><td>Step4 独立复核 subagent 判 CONVERGED</td><td>loop 无 must_fix 即收敛（隐式）</td></tr>
+        <tr><td>反哺</td><td>每阶段 Step6b 独立 backfeed subagent</td><td>折叠进 Skill B 一致性终检 + 跨 deliverable reviewer</td></tr>
+        <tr><td>维度数</td><td>每阶段各自的 N 视角</td><td><b>跨 deliverable 合并</b>（Skill B 5 路覆盖 4 份文档）</td></tr>
+        <tr><td>轮次</td><td>max-rounds L2=3</td><td><b>MAX=2</b>（更激进，靠 batch-ask 兜底）</td></tr>
+        <tr><td>bias 对冲</td><td>追踪/审查两道隔离</td><td>禁读重建路 + 红队路天然反向</td></tr>
+      </tbody>
+    </table>
+  </div>
+</div>
+<div class="callout">
+  <strong>取舍：</strong> 合并追踪+审查会损失「找 gap」与「判质量」的视角隔离（design 有意分两道防 confirmation bias）。缓解：禁读重建路 + 红队路天然反向，提供 bias 对冲。
+</div>
+
+<!-- ========== 维度审查分配 ========== -->
+<h2 id="dimensions">六、维度审查分配表</h2>
+<p>reviewer 清单 — 跨 deliverable 合并维度，<b>差异化</b>是 ensemble 关键（认知帧正交才不浪费派发）。</p>
+
+<h3>Skill A（4 路并行）</h3>
+<div class="route-card animate" style="--i:10"><span class="route-card__name">需求完整性</span><span class="route-card__frame">对齐/补齐</span><div class="route-card__ref">读 requirements.md + 源码 · 复用 <code>design-clarity</code> 5 视角</div></div>
+<div class="route-card animate" style="--i:11"><span class="route-card__name">架构合理性 + 边界</span><span class="route-card__frame">对齐/补齐</span><div class="route-card__ref">读 system-architecture.md + requirements · 复用 <code>architecture-perspectives.md</code></div></div>
+<div class="route-card animate" style="--i:12"><span class="route-card__name">禁读重建</span><span class="route-card__frame">反向 · 他证</span><div class="route-card__ref"><b>禁读两份初稿</b>，只读 CONTEXT+源码，重建 Actor/用例/模型/边界 → diff · 范式抄 <code>design-clarity</code> 重建器</div></div>
+<div class="route-card animate" style="--i:13"><span class="route-card__name">红队 · 反过度设计</span><span class="route-card__frame">反向 · 删</span><div class="route-card__ref">读两份初稿 + 上游 · 复用 <code>design-shared/references/review-agent.md</code> 红队节</div></div>
+
+<h3>Skill B（5~6 路，跨 4 份文档）</h3>
+<div class="route-card animate" style="--i:14"><span class="route-card__name">issues 覆盖重建</span><span class="route-card__frame">反向</span><div class="route-card__ref">禁读 issues.md，从 architecture 重建可拆元素 → diff（MISSING/PHANTOM/MISMATCH）· <code>fog-of-war.md</code> 角色 A</div></div>
+<div class="route-card animate" style="--i:15"><span class="route-card__name">nfr 副作用 + 回灌指针</span><span class="route-card__frame">正向</span><div class="route-card__ref">nfr 7 维覆盖 + ③ 指针反向核对 · <code>nfr-dimensions.md</code></div></div>
+<div class="route-card animate" style="--i:16"><span class="route-card__name">code 契约 + test-matrix 禁读重建</span><span class="route-card__frame">反向</span><div class="route-card__ref">签名/时序 + <b>禁读 §6 重建测试用例</b> · <code>design-code-arch</code> 5 视角 + 重建帧</div></div>
+<div class="route-card animate" style="--i:17"><span class="route-card__name">Wave 依赖 + 测试闭环</span><span class="route-card__frame">正向</span><div class="route-card__ref">execution Wave 结构 + 测试验收清单闭环 · <code>design-execution</code> 组 A/B</div></div>
+<div class="route-card animate" style="--i:18"><span class="route-card__name">红队 · 反过度编排</span><span class="route-card__frame">反向 · 删</span><div class="route-card__ref">port/seam/分层/Wave 是否过度 · <code>review-agent.md</code> 红队节</div></div>
+
+<!-- ========== 资源消耗对比 ========== -->
+<h2 id="cost">七、资源消耗对比</h2>
+<div class="bar-row"><span class="bar-label">design</span><div class="bar-track"><div class="bar-fill bar-fill--design" style="width:100%"></div></div><span class="bar-val">40~80</span></div>
+<div class="bar-row"><span class="bar-label">mid</span><div class="bar-track"><div class="bar-fill bar-fill--mid" style="width:6.5%"></div></div><span class="bar-val">3~5</span></div>
+<div class="bar-row"><span class="bar-label">lite</span><div class="bar-track"><div class="bar-fill bar-fill--lite" style="width:4%"></div></div><span class="bar-val">1~3</span></div>
+<p style="font-family:var(--font-mono);font-size:11px;color:var(--text-dim);margin:4px 0 22px">↑ ask_user 串行往返（wall-clock 主因）</p>
+
+<div class="bar-row"><span class="bar-label">design</span><div class="bar-track"><div class="bar-fill bar-fill--design" style="width:100%"></div></div><span class="bar-val">30~48</span></div>
+<div class="bar-row"><span class="bar-label">mid</span><div class="bar-track"><div class="bar-fill bar-fill--mid" style="width:42%"></div></div><span class="bar-val">~20</span></div>
+<div class="bar-row"><span class="bar-label">lite</span><div class="bar-track"><div class="bar-fill bar-fill--lite" style="width:17%"></div></div><span class="bar-val">5~10</span></div>
+<p style="font-family:var(--font-mono);font-size:11px;color:var(--text-dim);margin:4px 0 22px">↑ subagent 派发次数</p>
+
+<div class="table-wrap animate" style="--i:19">
+  <div class="table-scroll">
+    <table class="data-table">
+      <thead><tr><th>指标</th><th>design（L2 标准）</th><th>mid（新）</th><th>节省</th></tr></thead>
+      <tbody>
+        <tr><td>阶段数</td><td>6+1</td><td><b>2</b></td><td>−5</td></tr>
+        <tr><td>ask_user 往返</td><td>40~80</td><td>3~5</td><td><span class="status status--match">~90%↓</span></td></tr>
+        <tr><td>subagent dispatch</td><td>30~48</td><td>~20（A:9 + B:11）</td><td><span class="status status--match">~40%↓</span></td></tr>
+        <tr><td>context-builder</td><td>5~6</td><td>1</td><td>−4~5</td></tr>
+        <tr><td>渲染 HTML</td><td>6</td><td>2</td><td>−4</td></tr>
+        <tr><td>一致性终检</td><td>1（仅 execution）</td><td>1（合并 backfeed）</td><td>持平</td></tr>
+      </tbody>
+    </table>
+  </div>
+</div>
+<div class="callout">
+  <strong>最大收益在 ask_user 往返：</strong>从 40~80 次串行等待压到 3~5 次 — 这是 wall-clock 的主要节省来源。
+</div>
+
+<!-- ========== 取舍与风险 ========== -->
+<h2 id="tradeoff">八、取舍与风险（必须明知）</h2>
+<div class="table-wrap animate" style="--i:20">
+  <div class="table-scroll">
+    <table class="data-table">
+      <thead><tr><th>牺牲了什么</th><th>风险</th><th>缓解</th></tr></thead>
+      <tbody>
+        <tr><td>一问一答的 Grilling 质量</td><td>批量提问让用户认知负荷升高，决策深度可能下降</td><td>每问附强推荐 + 分类打包；D-不可逆二次确认</td></tr>
+        <tr><td>追踪/审查两道隔离</td><td>bias 对冲变弱</td><td>禁读重建路 + 红队路提供反向视角</td></tr>
+        <tr><td>阶段边界天然 checkpoint</td><td>跨 deliverable 一致性更难</td><td>Skill B 终检 + 跨文档 reviewer 兜底</td></tr>
+        <tr><td>每阶段独立 gate</td><td>design_status 7 阶段状态机不能直接套</td><td>mid 用自己的 2 段状态 or 复用 todo</td></tr>
+        <tr><td>Skill B drafter 并行受限</td><td>nfr/code-arch 真并行只有 1 个点</td><td>接受依赖链，issues 主 agent 锚定</td></tr>
+      </tbody>
+    </table>
+  </div>
+</div>
+
+<h3>适用边界（mid 的范围守门）</h3>
+<div class="card-grid">
+  <div class="ve-card ve-card--elevated animate" style="--i:21">
+    <div class="ve-card__label" style="color:var(--green)">✅ 适合 mid</div>
+    <h3>中等复杂度</h3>
+    <p>design 的 L2 档：多模块单系统、3~5 Wave、2~3 NFR 维度</p>
+  </div>
+  <div class="ve-card animate" style="--i:22">
+    <div class="ve-card__label" style="color:var(--red)">↑ 升级 design</div>
+    <h3>L3 重型</h3>
+    <p>多系统/跨组织、状态机复杂、高并发合规 — 深度收敛不可省</p>
+  </div>
+  <div class="ve-card animate" style="--i:23">
+    <div class="ve-card__label" style="color:var(--amber)">↓ 降级 lite</div>
+    <h3>L1 小功能</h3>
+    <p>无架构改动 — 单/少模块，plan.md 单文件即够</p>
+  </div>
+</div>
+
+<footer class="doc-foot">mid-* 工作流设计 · design-visual-explainer 渲染 · 内容对齐 design 全量 · 编排对齐 lite</footer>
+</main>
+</div>
+<script type="module">/*
+ * zoom.js — design-visual-explainer 公共脚本
+ * 从 issues.html (feat-system-prompt-loader) 抽出，含 Mermaid zoom/pan/fit/expand + TOC scroll-spy。
+ * render.sh 通过占位符注释 INLINE:zoom.js 将本文件内联进产物 HTML 的 script[type=module]。
+ *
+ * 依赖：mermaid@11 + @mermaid-js/layout-elk（CDN ESM import）。
+ * CSS 契约：.diagram-shell 及内部 .mermaid-wrap/.mermaid-viewport/.mermaid-canvas/.diagram-source/.zoom-label
+ *          + [data-action] 按钮（zoom-in/out/fit/one/expand）— 类名与 design.css 绑定，勿改名。
+ */
+import mermaid from 'https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.esm.min.mjs';
+import elkLayouts from 'https://cdn.jsdelivr.net/npm/@mermaid-js/layout-elk/dist/mermaid-layout-elk.esm.min.mjs';
+
+const config = { fitPadding: 28, minHeight: 360, maxHeightPx: 960, maxHeightVh: 0.84, maxInitialZoom: 1.8, minZoom: 0.08, maxZoom: 6.5, zoomStep: 0.14, readabilityFloor: 0.58 };
+const clamp = (n, lo, hi) => Math.max(lo, Math.min(hi, n));
+let activeDrag = null;
+addEventListener('mousemove', (e) => activeDrag?.onMove(e));
+addEventListener('mouseup', () => { activeDrag?.onEnd(); activeDrag = null; });
+const isDark = matchMedia('(prefers-color-scheme: dark)').matches;
+
+mermaid.registerLayoutLoaders(elkLayouts);
+mermaid.initialize({
+  startOnLoad: false, theme: 'base', look: 'classic', layout: 'elk',
+  themeVariables: {
+    fontFamily: "'Bricolage Grotesque', 'PingFang SC', system-ui, sans-serif", fontSize: '14px',
+    // Dark mode: dark filled nodes + bright semantic borders/text (keeps page bg #0a1414 and lineColor #5eead4 intact)
+    primaryColor: isDark ? '#0d2424' : '#ccfbf1', primaryBorderColor: isDark ? '#5eead4' : '#0d9488', primaryTextColor: isDark ? '#e3efee' : '#134e3a',
+    secondaryColor: isDark ? '#111d1d' : '#fffbeb', secondaryBorderColor: isDark ? '#115e59' : '#d97706', secondaryTextColor: isDark ? '#5eead4' : '#92400e',
+    tertiaryColor: isDark ? '#1a1a1a' : '#f8fafc', tertiaryBorderColor: isDark ? '#64748b' : '#64748b', tertiaryTextColor: isDark ? '#e2e8f0' : '#334155',
+    lineColor: isDark ? '#5eead4' : '#5f8a85',
+    noteBkgColor: isDark ? '#0d2424' : '#f0fdfa', noteTextColor: isDark ? '#e3efee' : '#134e3a', noteBorderColor: isDark ? '#2dd4bf' : '#0d9488',
+  }
+});
+
+function initDiagram(shell) {
+  const wrap = shell.querySelector('.mermaid-wrap');
+  const viewport = shell.querySelector('.mermaid-viewport');
+  const canvas = shell.querySelector('.mermaid-canvas');
+  const source = shell.querySelector('.diagram-source');
+  const label = shell.querySelector('.zoom-label');
+  if (!wrap || !viewport || !canvas || !source || !label) { console.error('initDiagram: missing elements', shell); return; }
+  let zoom = 1, fitMode = 'contain', panX = 0, panY = 0, svgW = 0, svgH = 0;
+  let sx = 0, sy = 0, spx = 0, spy = 0, touchDist = 0, touchCx = 0, touchCy = 0;
+  function constrainPan() { const vpW = viewport.clientWidth, vpH = viewport.clientHeight; const rW = svgW*zoom, rH = svgH*zoom, pad = config.fitPadding; panX = (rW+pad*2<=vpW)?(vpW-rW)/2:clamp(panX,vpW-rW-pad,pad); panY = (rH+pad*2<=vpH)?(vpH-rH)/2:clamp(panY,vpH-rH-pad,pad); }
+  function applyTransform() { const svg = canvas.querySelector('svg'); if (!svg||!svgW) return; constrainPan(); svg.style.width=(svgW*zoom)+'px'; svg.style.height=(svgH*zoom)+'px'; canvas.style.transform=`translate(${panX}px,${panY}px)`; label.textContent=Math.round(zoom*100)+'% \u2014 '+fitMode; }
+  function canPan() { return svgW*zoom+config.fitPadding*2>viewport.clientWidth || svgH*zoom+config.fitPadding*2>viewport.clientHeight; }
+  function computeSmartFit() { const vpW=viewport.clientWidth,vpH=viewport.clientHeight; const aW=Math.max(80,vpW-config.fitPadding*2),aH=Math.max(80,vpH-config.fitPadding*2); const contain=Math.min(aW/svgW,aH/svgH); let z=contain,mode='contain'; if(contain<config.readabilityFloor){const chartR=svgH/svgW,vpR=vpH/Math.max(vpW,1); if(chartR>=vpR){z=aW/svgW;mode='width-priority';}else{z=aH/svgH;mode='height-priority';}} return {zoom:clamp(z,config.minZoom,config.maxInitialZoom),mode}; }
+  function fitDiagram() { if(!svgW)return; const fit=computeSmartFit(); zoom=fit.zoom; fitMode=fit.mode; panX=(viewport.clientWidth-svgW*zoom)/2; panY=(viewport.clientHeight-svgH*zoom)/2; applyTransform(); }
+  function setOneToOne() { zoom=clamp(1,config.minZoom,config.maxZoom); fitMode='1:1'; panX=(viewport.clientWidth-svgW*zoom)/2; panY=(viewport.clientHeight-svgH*zoom)/2; applyTransform(); }
+  function zoomAround(factor,cx,cy) { const next=clamp(zoom*factor,config.minZoom,config.maxZoom); const ratio=next/zoom; panX=cx-ratio*(cx-panX); panY=cy-ratio*(cy-panY); zoom=next; fitMode='custom'; applyTransform(); }
+  function readSvgNaturalSize(svg) { let w=0,h=0; if(svg.viewBox?.baseVal?.width>0){w=svg.viewBox.baseVal.width;h=svg.viewBox.baseVal.height;} if(!w){w=parseFloat(svg.getAttribute('width'))||0;h=parseFloat(svg.getAttribute('height'))||0;} if(!w){const b=svg.getBBox();w=b.width;h=b.height;} if(!w){const r=svg.getBoundingClientRect();w=r.width||1000;h=r.height||700;} if(!svg.getAttribute('viewBox'))svg.setAttribute('viewBox',`0 0 ${w} ${h}`); return {w,h}; }
+  function setAdaptiveHeight() { if(!svgW)return; const usableW=Math.max(280,wrap.getBoundingClientRect().width-2); const idealH=(svgH/svgW)*usableW+config.fitPadding*2; const maxVp=Math.floor(innerHeight*config.maxHeightVh); const hardMax=Math.min(config.maxHeightPx,Math.max(config.minHeight+40,maxVp)); wrap.style.height=Math.round(clamp(idealH,config.minHeight,hardMax))+'px'; }
+  function openInNewTab() { const svg=canvas.querySelector('svg'); if(!svg)return; const clone=svg.cloneNode(true); clone.style.width=''; clone.style.height=''; const bg=isDark?'#0a1414':'#f6f8f8'; const html=`<!DOCTYPE html><html><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Diagram</title><style>body{margin:0;min-height:100vh;display:flex;align-items:center;justify-content:center;background:${bg};padding:40px;box-sizing:border-box}svg{max-width:100%;max-height:90vh;height:auto}</style></head><body>${clone.outerHTML}</body></html>`; open(URL.createObjectURL(new Blob([html],{type:'text/html'})),'_blank'); }
+  async function render() { try { const code=source.textContent.trim(); if(!code){label.textContent='Error: Empty source';return;} const id='diagram-'+Date.now()+'-'+Math.random().toString(36).slice(2,8); const {svg}=await mermaid.render(id,code); canvas.innerHTML=svg; const svgNode=canvas.querySelector('svg'); if(!svgNode){label.textContent='Error: No SVG';return;} const size=readSvgNaturalSize(svgNode); svgW=size.w; svgH=size.h; svgNode.removeAttribute('width'); svgNode.removeAttribute('height'); svgNode.style.maxWidth='none'; svgNode.style.display='block'; setAdaptiveHeight(); fitDiagram(); } catch(err){ console.error('Mermaid render failed:',err); label.textContent='Error: '+(err.message||'Render failed'); } }
+  const actions = { 'zoom-in':()=>zoomAround(1+config.zoomStep,viewport.clientWidth/2,viewport.clientHeight/2), 'zoom-out':()=>zoomAround(1/(1+config.zoomStep),viewport.clientWidth/2,viewport.clientHeight/2), 'zoom-fit':fitDiagram, 'zoom-one':setOneToOne, 'zoom-expand':openInNewTab };
+  Object.entries(actions).forEach(([a,h])=>wrap.querySelector(`[data-action="${a}"]`)?.addEventListener('click',h));
+  viewport.addEventListener('dblclick',fitDiagram);
+  viewport.addEventListener('wheel',(e)=>{ if(e.ctrlKey||e.metaKey){e.preventDefault();const rect=viewport.getBoundingClientRect();const f=e.deltaY<0?1+config.zoomStep:1/(1+config.zoomStep);zoomAround(f,e.clientX-rect.left,e.clientY-rect.top);return;} if(canPan()){e.preventDefault();panX-=e.deltaX;panY-=e.deltaY;applyTransform();} },{passive:false});
+  viewport.addEventListener('mousedown',(e)=>{ if(e.target.closest('.zoom-controls')||!canPan())return; wrap.classList.add('is-panning'); sx=e.clientX;sy=e.clientY;spx=panX;spy=panY;e.preventDefault(); activeDrag={onMove:(ev)=>{panX=spx+(ev.clientX-sx);panY=spy+(ev.clientY-sy);applyTransform();},onEnd:()=>wrap.classList.remove('is-panning')}; });
+  viewport.addEventListener('touchstart',(e)=>{ if(e.touches.length===1){sx=e.touches[0].clientX;sy=e.touches[0].clientY;spx=panX;spy=panY;} else if(e.touches.length===2){const dx=e.touches[0].clientX-e.touches[1].clientX,dy=e.touches[0].clientY-e.touches[1].clientY;touchDist=Math.sqrt(dx*dx+dy*dy);const r=viewport.getBoundingClientRect();touchCx=(e.touches[0].clientX+e.touches[1].clientX)/2-r.left;touchCy=(e.touches[0].clientY+e.touches[1].clientY)/2-r.top;} },{passive:true});
+  viewport.addEventListener('touchmove',(e)=>{ if(e.touches.length===1&&canPan()){if(touchDist>0){sx=e.touches[0].clientX;sy=e.touches[0].clientY;spx=panX;spy=panY;touchDist=0;}e.preventDefault();panX=spx+(e.touches[0].clientX-sx);panY=spy+(e.touches[0].clientY-sy);applyTransform();}else if(e.touches.length===2&&touchDist>0){e.preventDefault();const dx=e.touches[0].clientX-e.touches[1].clientX,dy=e.touches[0].clientY-e.touches[1].clientY;const d=Math.sqrt(dx*dx+dy*dy);zoomAround(d/touchDist,touchCx,touchCy);touchDist=d;} },{passive:false});
+  new ResizeObserver(()=>{if(svgW){setAdaptiveHeight();fitDiagram();}}).observe(wrap);
+  render();
+}
+document.querySelectorAll('.diagram-shell').forEach(initDiagram);
+
+/* TOC scroll-spy：高亮当前 section 对应的 TOC 链接 */
+(function() {
+  const toc = document.getElementById('toc'); if (!toc) return;
+  const links = toc.querySelectorAll('a'); const sections = [];
+  links.forEach(link => { const el = document.getElementById(link.getAttribute('href').slice(1)); if (el) sections.push({ el, link }); });
+  sections.forEach(s => new IntersectionObserver(entries => { entries.forEach(entry => { if (entry.isIntersecting) { links.forEach(l => l.classList.remove('active')); s.link.classList.add('active'); if (innerWidth <= 1000) s.link.scrollIntoView({ behavior: 'smooth', block: 'nearest', inline: 'center' }); } }); }, { rootMargin: '-10% 0px -80% 0px' }).observe(s.el));
+  links.forEach(link => link.addEventListener('click', e => { e.preventDefault(); const el = document.getElementById(link.getAttribute('href').slice(1)); if (el) { el.scrollIntoView({ behavior: 'smooth', block: 'start' }); history.replaceState(null, '', '#' + el.id); } }));
+})();
+</script>
+</body>
+</html>

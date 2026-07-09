@@ -1,0 +1,116 @@
+<!DOCTYPE html>
+<!--
+  issues.html 骨架 — full-issues（③ Issue 拆分）阶段产物模板。
+  固定外壳（TOC/header/main/footer/zoom JS）+ issue 特有样式 + AGENT-FILL 槽位。
+  agent 填好 AGENT-FILL 后跑 render.sh 得自包含产物。
+
+  主角图：graph LR 决策 DAG（带 classDef P 级着色）。
+  特有 CSS：.issue / .sol / .pick / .ac-list / .pill（issue 卡片方案对比）。
+-->
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Issue 决策图 — {{TOPIC}}</title>
+<style>
+/* INLINE: design.css */
+
+/* === issues 阶段特有样式 === */
+.issue { background: var(--surface); border: 1px solid var(--border); border-radius: 14px; padding: 22px 26px; margin-bottom: 22px; }
+.issue--p0 { border-left: 4px solid var(--green); }
+.issue--p1 { border-left: 4px solid var(--amber); }
+.issue--p3 { border-left: 4px solid var(--slate); opacity: .92; }
+.issue__head { display: flex; align-items: baseline; gap: 12px; margin-bottom: 6px; flex-wrap: wrap; }
+.issue__num { font-family: var(--font-mono); font-size: 18px; font-weight: 700; color: var(--accent); }
+.issue__title { font-size: 18px; font-weight: 700; letter-spacing: -0.2px; flex: 1; }
+.issue__meta { display: flex; flex-wrap: wrap; gap: 14px; font-size: 12px; color: var(--text-dim); margin: 10px 0 14px; font-family: var(--font-mono); }
+.issue__meta strong { color: var(--text); }
+.issue__section { margin: 16px 0; }
+.issue__section h4 { font-size: 11px; text-transform: uppercase; letter-spacing: 1.2px; color: var(--accent); margin-bottom: 8px; }
+.sol { background: var(--surface-2); border: 1px solid var(--border); border-radius: 10px; padding: 14px 18px; margin-bottom: 10px; }
+.sol--chosen { border-left: 3px solid var(--green); background: var(--green-dim); }
+.sol__head { font-family: var(--font-mono); font-size: 12px; font-weight: 700; color: var(--accent); margin-bottom: 8px; display: flex; align-items: center; gap: 8px; }
+.sol--chosen .sol__head { color: var(--green); }
+.sol__head::before { content: '◇'; }
+.sol--chosen .sol__head::before { content: '✓'; }
+.sol ul { margin: 6px 0 6px 20px; }
+.sol li { font-size: 13px; line-height: 1.6; margin-bottom: 3px; }
+.sol__proscons { font-size: 13px; line-height: 1.6; margin: 4px 0; }
+.sol__proscons strong { font-family: var(--font-mono); font-size: 11px; }
+.pick { background: var(--accent-dim); border: 1px solid color-mix(in srgb, var(--accent) 30%, transparent); border-radius: 10px; padding: 12px 16px; font-size: 13px; line-height: 1.6; margin-top: 10px; }
+.pick strong { color: var(--accent); }
+.ac-list { list-style: none; padding: 0; }
+.ac-list li { font-size: 13px; line-height: 1.6; padding: 5px 0 5px 26px; position: relative; }
+.ac-list li::before { content: '☐'; position: absolute; left: 4px; color: var(--accent); font-size: 14px; }
+.ac-list code { font-family: var(--font-mono); font-size: 11px; background: var(--surface-2); color: var(--text-dim); padding: 1px 5px; border-radius: 3px; }
+.pill { display: inline-block; font-family: var(--font-mono); font-size: 10px; font-weight: 600; padding: 2px 8px; border-radius: 5px; white-space: nowrap; }
+.pill--ok { background: var(--green-dim); color: var(--green); }
+.pill--na { background: var(--slate-dim); color: var(--slate); }
+</style>
+</head>
+<body>
+<div class="wrap">
+<nav class="toc" id="toc">
+  <div class="toc-title">目录</div>
+  <!-- AGENT-FILL: toc-links — 按 section 生成锚点。格式：<a href="#id">标题</a>。建议至少含：TL;DR / 决策DAG / 上游覆盖核验 / P0 / P1 / P3 / 决策记录 -->
+</nav>
+<main class="main">
+<header class="doc-head">
+  <h1>Issue 决策图</h1>
+  <p class="subtitle">{{TOPIC}} · ③ Issue 拆分 · upstream: system-architecture.md</p>
+  <div class="badge-row">
+    <!-- AGENT-FILL: badges — P 级统计标签。格式：<span class="tag tag--green">P0: N 项</span> 等 -->
+  </div>
+</header>
+
+<!-- AGENT-FILL: tldr — TL;DR 摘要框。结构：
+<div class="tldr" id="tldr">
+  <div class="tldr__label">TL;DR · 核心结论</div>
+  <ul><li>...</li></ul>
+</div>
+-->
+
+<!-- AGENT-FILL: hero-diagram — 决策 DAG 主角图。结构：
+<h2 id="dag">地图总览 — 决策 DAG</h2>
+<div class="diagram-shell">
+  <p class="diagram-shell__hint">节点=issue，边=blocked_by · 拖动平移、Ctrl+滚轮缩放</p>
+  <div class="mermaid-wrap">
+    <div class="zoom-controls">
+      <button data-action="zoom-in" title="放大">+</button>
+      <button data-action="zoom-out" title="缩小">−</button>
+      <button data-action="zoom-fit" title="适配">⊡</button>
+      <button data-action="zoom-one" title="1:1">1:1</button>
+      <button data-action="zoom-expand" title="新窗口">⤢</button>
+      <span class="zoom-label">— contain</span>
+    </div>
+    <div class="mermaid-viewport"><div class="mermaid mermaid-canvas"></div></div>
+  </div>
+  <script type="text/plain" class="diagram-source">
+graph LR
+  I1["#1 标题<br/>描述<br/>P0"]:::p0
+  ...
+  classDef p0 fill:#3f1818,stroke:#f87171,stroke-width:2px,color:#fecaca
+  classDef p1 fill:#38250d,stroke:#fb923c,stroke-width:2px,color:#fed7aa
+  classDef p2 fill:#0c243a,stroke:#38bdf8,stroke-width:2px,color:#bae6fd
+  classDef p3 fill:#1a202c,stroke:#64748b,stroke-dasharray:5 5,color:#94a3b8
+  </script>
+</div>
+-->
+
+<!-- AGENT-FILL: coverage — 上游覆盖核验表。按 fog-of-war 4 轴（模块/状态/边界/挑战）。用 .data-table + .pill--ok/.pill--na -->
+
+<!-- AGENT-FILL: p0-issues — P0 阻塞项。每个 issue 用 .issue.issue--p0 卡片，含方案对比(.sol/.sol--chosen/.pick) + 验收标准(.ac-list) -->
+
+<!-- AGENT-FILL: p1-issues — P1 核心项。同 P0 结构，class 改 issue--p1 -->
+
+<!-- AGENT-FILL: p3-issues — P3 延后项。用 .issue.issue--p3（简卡，仅问题描述+延后理由） -->
+
+<!-- AGENT-FILL: decisions — 决策记录表。用 .data-table -->
+
+<footer class="doc-foot">{{TOPIC}} · Issue 决策图 · upstream: system-architecture.md</footer>
+</main>
+</div>
+
+<script type="module">/* INLINE: zoom.js */</script>
+</body>
+</html>

@@ -277,6 +277,8 @@ export class AskUserComponent implements Component {
 			}
 		} else if (!q.multiSelect && !onOther) {
 			if (matchesKey(data, "enter")) {
+				// FR-14（答案回改）：不检查 confirmed —— 用户回退到已答 tab 重新
+				// Enter 即覆盖旧答案。freeTextValue 同步清空，防 Other 残留。
 				state.selectedIndex = state.cursorIndex;
 				state.freeTextValue = null;
 				this.afterConfirm(state, q);
@@ -482,8 +484,11 @@ export class AskUserComponent implements Component {
 		this.done(buildResult(this.questions, this.states));
 	}
 
-	/** 取消。public 供 signal abort 监听器复用 _resolved 守卫（FR-12 竞态） */
+	/** 取消。public 供 signal abort 监听器复用 _resolved 守卫（FR-12 竞态）。
+	 *  守卫在方法内：signal abort 可能在用户已 submit/cancel 后才触发，
+	 *  此时必须 no-op，避免二次调 done（FR-12）。 */
 	cancel(): void {
+		if (this._resolved) return;
 		this._resolved = true;
 		this.done(null);
 	}

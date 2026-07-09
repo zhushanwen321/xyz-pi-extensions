@@ -2,13 +2,13 @@
 
 > 状态：draft（决策前探索）
 > 日期：2026-06-14
-> 关联：ADR-022（in-process 决策）、ADR-024（L1+L2 持久化）
+> 关联：ADR-025（in-process 决策）、ADR-027（L1+L2 持久化）
 
 ## 背景
 
-ADR-022 将 agent 执行从 spawn 子进程改为 in-process `createAgentSession()`。这个决策对 coding agent 的主力场景（高频、短生命周期、需完整工具集）是正确的，但它有一个根本性短板：**运行中的 background agent 无法跨进程恢复（L3）**。
+ADR-025 将 agent 执行从 spawn 子进程改为 in-process `createAgentSession()`。这个决策对 coding agent 的主力场景（高频、短生命周期、需完整工具集）是正确的，但它有一个根本性短板：**运行中的 background agent 无法跨进程恢复（L3）**。
 
-前面的分析得出结论：in-process 和 spawn **不是二选一，而是按 agent 配置选择**。本文档分析如何在不推翻 ADR-022 的前提下，引入 spawn 作为可选执行后端，形成混合模式。
+前面的分析得出结论：in-process 和 spawn **不是二选一，而是按 agent 配置选择**。本文档分析如何在不推翻 ADR-025 的前提下，引入 spawn 作为可选执行后端，形成混合模式。
 
 ## 目标
 
@@ -260,6 +260,6 @@ const result = await runtime.runAgent({
 
 ## 结论
 
-混合模式在架构上是 in-process 的自然扩展，不与 ADR-022 冲突。分阶段实现（先骨架后 L3）能控制复杂度。但**是否值得做的关键在于 L3 的实际需求频率**——如果"跨重启恢复运行中的 subagent"是真实痛点，则值得投入；如果只是理论能力，in-process + L1/L2 持久化已经覆盖绝大多数场景。
+混合模式在架构上是 in-process 的自然扩展，不与 ADR-025 冲突。分阶段实现（先骨架后 L3）能控制复杂度。但**是否值得做的关键在于 L3 的实际需求频率**——如果"跨重启恢复运行中的 subagent"是真实痛点，则值得投入；如果只是理论能力，in-process + L1/L2 持久化已经覆盖绝大多数场景。
 
-建议：先完成 in-process 路线的 L1/L2（已由 ADR-024 完成），观察实际使用中是否频繁遇到"希望 background agent 跨重启存活"的场景。若确认是真实需求，再启动 spawn 后端实现。
+建议：先完成 in-process 路线的 L1/L2（已由 ADR-027 完成），观察实际使用中是否频繁遇到"希望 background agent 跨重启存活"的场景。若确认是真实需求，再启动 spawn 后端实现。

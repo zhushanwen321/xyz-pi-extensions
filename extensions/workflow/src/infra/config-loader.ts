@@ -54,31 +54,47 @@ interface CacheEntry {
  *
  * Falls back to cwd if no marker is found.
  */
-function findWorkspaceRoot(): string {
-  let dir = process.cwd();
+function findWorkspaceRoot(cwd?: string): string {
+  const dir = cwd ?? process.cwd();
   const root = resolve("/");
 
+  // Phase 1: bare repo 优先——先全路径扫一遍找 .bare（repo 根特有标记），
+  // 避免 monorepo 子包的 .pi/.git 在中间层拦截（如 extensions/workflow/.pi）。
+  let probe = dir;
   for (let i = 0; i < WORKSPACE_ROOT_MAX_DEPTH; i++) {
- // Check for bare repo marker
-    const barePath = resolve(dir, ".bare");
-    if (fsSync.existsSync(barePath)) {
-      return dir;
+    if (fsSync.existsSync(resolve(probe, ".bare"))) {
+      return probe;
     }
- // Check for .pi directory marker (works in normal repos)
-    const piPath = resolve(dir, ".pi");
-    if (fsSync.existsSync(piPath)) {
-      return dir;
-    }
- // Check for .git (normal git repo)
-    const gitPath = resolve(dir, ".git");
-    if (fsSync.existsSync(gitPath)) {
-      return dir;
-    }
-    if (dir === root) break;
-    dir = resolve(dir, "..");
+    if (probe === root) break;
+    probe = resolve(probe, "..");
   }
 
-  return process.cwd();
+  // Phase 2: 无 .bare 时，找最顶层的 .git（普通 repo 根），而非第一个 .git。
+  // 这样 monorepo 子包的 .pi 不会在中间层误停。
+  let topLevel = dir;
+  probe = dir;
+  for (let i = 0; i < WORKSPACE_ROOT_MAX_DEPTH; i++) {
+    if (fsSync.existsSync(resolve(probe, ".git"))) {
+      topLevel = probe;
+    }
+    if (probe === root) break;
+    probe = resolve(probe, "..");
+  }
+  if (topLevel !== dir) {
+    return topLevel;
+  }
+
+  // Phase 3: fallback——用第一个遇到的 .pi（保留原行为，兼容非 git 项目）
+  probe = dir;
+  for (let i = 0; i < WORKSPACE_ROOT_MAX_DEPTH; i++) {
+    if (fsSync.existsSync(resolve(probe, ".pi"))) {
+      return probe;
+    }
+    if (probe === root) break;
+    probe = resolve(probe, "..");
+  }
+
+  return dir;
 }
 
 // ── Constants ─────────────────────────────────────────────────
@@ -192,6 +208,115 @@ function safeEvalObject(literal: string): Record<string, unknown> | undefined {
   }
 }
 
+// ── npm package manifest discovery ───────────────────────────
+
+/**
+ * Read and parse a package.json file, returning the pi.workflows array.
+ * Returns undefined if the file doesn't exist or has no valid pi.workflows.
+ */
+async function readNpmPackageManifest(
+  pkgDir: string,
+): Promise<string[] | undefined> {
+  const pkgJsonPath = resolve(pkgDir, "package.json");
+  try {
+    const content = await readFile(pkgJsonPath, "utf-8");
+    const pkg = JSON.parse(content) as Record<string, unknown>;
+    const pi = pkg.pi as Record<string, unknown> | undefined;
+    if (!pi || !Array.isArray(pi.workflows)) {
+      return undefined;
+    }
+    // 过滤非字符串元素（防 [123, null] 等畸形声明，review must_fix #3）
+    return pi.workflows.filter((p): p is string => typeof p === "string");
+  } catch {
+    return undefined;
+  }
+}
+
+/**
+ * Scan npm packages in a node_modules directory for workflow scripts
+ * declared in their pi.workflows manifest.
+ *
+ * Handles both scoped (@scope/pkg) and unscoped packages.
+ * Returns workflows with source="saved".
+ */
+async function scanNpmPackageWorkflows(
+  nodeModulesDir: string,
+): Promise<CachedWorkflowMeta[]> {
+  let entries: string[];
+  try {
+    entries = await readdir(nodeModulesDir);
+  } catch {
+    return [];
+  }
+
+  const results: CachedWorkflowMeta[] = [];
+
+  for (const entry of entries) {
+    const entryPath = resolve(nodeModulesDir, entry);
+
+    if (entry.startsWith("@")) {
+ // Scoped package — iterate children
+      let scopedEntries: string[];
+      try {
+        scopedEntries = await readdir(entryPath);
+      } catch {
+        continue;
+      }
+
+      for (const scopedPkg of scopedEntries) {
+        const scopedPkgDir = resolve(entryPath, scopedPkg);
+        const workflows = await processNpmPackage(scopedPkgDir);
+        results.push(...workflows);
+      }
+    } else {
+ // Unscoped package
+      const workflows = await processNpmPackage(entryPath);
+      results.push(...workflows);
+    }
+  }
+
+  return results;
+}
+
+/**
+ * Process a single npm package: read its pi.workflows manifest and
+ * load workflow scripts from the declared paths.
+ */
+async function processNpmPackage(
+  pkgDir: string,
+): Promise<CachedWorkflowMeta[]> {
+  const workflowPaths = await readNpmPackageManifest(pkgDir);
+
+  // manifest 模式：按声明路径加载
+  if (workflowPaths) {
+    const results: CachedWorkflowMeta[] = [];
+    for (const relPath of workflowPaths) {
+      const absPath = resolve(pkgDir, relPath);
+      try {
+        await access(absPath);
+      } catch {
+        continue;
+      }
+      const result = await extractMetaViaRegex(absPath);
+      if (result.success && result.meta) {
+        results.push({
+          name: result.meta.name,
+          description: result.meta.description,
+          phases: result.meta.phases,
+          path: absPath,
+          available: true,
+          source: "saved",
+        });
+      }
+    }
+    return results;
+  }
+
+  // fallback 模式：无 pi.workflows 声明时，扫描包内 workflows/ 目录（plan.md U2 要求）
+  const fallbackDir = resolve(pkgDir, "workflows");
+  return scanDirectory(fallbackDir, "saved");
+}
+
 // ── Directory scanning ────────────────────────────────────────
 
 /**
@@ -244,28 +369,45 @@ async function scanDirectory(dirPath: string, source: WorkflowSource): Promise<C
 // ── Public API ────────────────────────────────────────────────
 
 /**
- * Load and cache all available workflow scripts from project-level
- * (.pi/workflows/) and user-level (~/.pi/agent/workflows/) directories.
- *
- * Deduplicates by name — project-level workflows take priority over
- * user-level ones with the same name.
- *
- * Never throws. Failed imports are returned with available=false.
+ * 内部实现：从指定目录集加载 workflow，供测试注入 npmDirs。
+ * 生产环境用 loadWorkflows()（固定全局目录）。
  */
-export async function loadWorkflows(): Promise<CachedWorkflowMeta[]> {
-  const workspaceRoot = findWorkspaceRoot();
+async function loadWorkflowsFromDirs(options?: {
+  npmDirs?: string[];
+  cwd?: string;
+}): Promise<CachedWorkflowMeta[]> {
+  const workspaceRoot = findWorkspaceRoot(options?.cwd);
   const projectDir = resolve(workspaceRoot, ".pi/workflows");
   const tmpDir = resolve(workspaceRoot, ".pi/workflows/.tmp");
+
+ // npm package locations to scan for pi.workflows manifest
+  // 扫两条路径：
+  //   1. ~/.pi/agent/npm/node_modules — 正式 npm 安装的扩展（pi install npm:xxx）
+  //   2. ~/.pi/agent/extensions/ — dev symlink 的扩展（本地开发模式）
+  // 项目级 node_modules 是 pnpm workspace 依赖，不是 pi 扩展，不扫
+  // 测试可通过 options.npmDirs 注入临时目录
+  const npmDirs = options?.npmDirs ?? [
+    resolve(homedir(), ".pi", "agent", "npm", "node_modules"),
+    resolve(homedir(), ".pi", "agent", "extensions"),
+  ];
+
+ // Number of non-npm scan results (project, user, tmp)
+  const NON_NPM_RESULT_COUNT = 3;
+
   const results = await Promise.allSettled([
     scanDirectory(projectDir, "saved"),
     scanDirectory(USER_DIR, "saved"),
     scanDirectory(tmpDir, "tmp"),
+    ...npmDirs.map((dir) => scanNpmPackageWorkflows(dir)),
   ]);
   const projectWorkflows = results[0].status === "fulfilled" ? results[0].value : [];
   const userWorkflows = results[1].status === "fulfilled" ? results[1].value : [];
   const tmpWorkflows = results[2].status === "fulfilled" ? results[2].value : [];
+  const npmWorkflows = results.slice(NON_NPM_RESULT_COUNT).flatMap((r) =>
+    r.status === "fulfilled" ? r.value : [],
+  );
 
- // Deduplicate by priority: tmp > project > user
+ // Deduplicate by priority: tmp > project > npm > user
  // Use a Map keyed by name — later entries overwrite earlier ones
   const mergedMap = new Map<string, CachedWorkflowMeta>();
 
@@ -273,7 +415,11 @@ export async function loadWorkflows(): Promise<CachedWorkflowMeta[]> {
   for (const wf of userWorkflows) {
     mergedMap.set(wf.name, wf);
   }
- // Project-level overrides user-level
+ // npm package workflows override user-level
+  for (const wf of npmWorkflows) {
+    mergedMap.set(wf.name, wf);
+  }
+ // Project-level overrides npm
   for (const wf of projectWorkflows) {
     mergedMap.set(wf.name, wf);
   }
@@ -292,6 +438,27 @@ export async function loadWorkflows(): Promise<CachedWorkflowMeta[]> {
   }
 
   return merged;
+}
+
+/**
+ * Load and cache all available workflow scripts from project-level
+ * (.pi/workflows/) and user-level (~/.pi/agent/workflows/) directories.
+ *
+ * Deduplicates by name — project-level workflows take priority over
+ * user-level ones with the same name.
+ *
+ * Never throws. Failed imports are returned with available=false.
+ */
+export async function loadWorkflows(): Promise<CachedWorkflowMeta[]> {
+  return loadWorkflowsFromDirs();
+}
+
+/** 测试专用：注入 npmDirs 以隔离全局目录 */
+export async function loadWorkflowsForTest(
+  npmDirs: string[],
+  cwd?: string,
+): Promise<CachedWorkflowMeta[]> {
+  return loadWorkflowsFromDirs({ npmDirs, cwd });
 }
 
 /**

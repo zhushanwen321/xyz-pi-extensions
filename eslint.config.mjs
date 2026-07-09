@@ -16,6 +16,7 @@ export default [
     ignores: [
       // 独立 JS 脚本（不用 TS 规则检查）
       '.pi/workflows/**',
+      'extensions/*/workflows/**',
       'skills/browser-automation/scripts/**',
     ],
   },

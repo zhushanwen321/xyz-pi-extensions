@@ -78,7 +78,7 @@ export class SubprocessAgentRunner implements AgentRunner {
       let exitCode: number;
 
       try {
-        const result = await runPiProcess(command, cmdArgs, pipeline, controller.signal, env, onEvent);
+        const result = await runPiProcess({ command, cmdArgs, pipeline, signal: controller.signal, env, onEvent, cwd: opts.cwd });
         exitCode = result.exitCode;
         stderr = result.stderr;
       } catch (err) {

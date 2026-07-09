@@ -10,7 +10,7 @@ verdict: pass
 > 3. 编排模式（chain/parallel/wave/fanout）。
 > 4. 编排 × background 的组合关系。
 >
-> 参考实现：`tintinweb/pi-subagents`（spawn 子进程模型）。本 spec 保持 ADR-022 的 in-process 架构不变。
+> 参考实现：`tintinweb/pi-subagents`（spawn 子进程模型）。本 spec 保持 ADR-025 的 in-process 架构不变。
 >
 > **追踪状态**：经 2 轮独立 subagent 5 视角追踪（Round 1: 27 gaps，Round 2: 8 gaps），全部处理。详见 `changes/tracing-round-1.md` 和 `changes/tracing-round-2.md`。
 
@@ -91,7 +91,7 @@ this.pi?.sendMessage(
 - 窗口内的完成事件先入队，定时器到期时合并成一条 `subagent-bg-notify` 消息（content 含所有完成记录的摘要列表），一次 sendMessage + triggerTurn
 - **编排模式不受影响**：编排内部本就在 runtime 内同步汇总（Promise.all），完成时已是一次性 sendMessage（FR-O5.4）
 - **G-028 决策（单个 background 零延迟）**：首个完成事件**立即发送**（不延迟），同时启动 2000ms 合并窗口；窗口内的后续完成事件入队，窗口到期合并发送一条。这样单个 background 零延迟，多个几乎同时完成的 background 被合并。
-- **G-029 定时器清理**：合并窗口的 flush 定时器用 `setTimeout(...).unref()`（不阻止进程退出）；runtime 新增 `dispose()` 方法，在 session 结束时调用，清理所有 pending 定时器并 flush 残留通知（best-effort，ADR-024 不做跨进程恢复）
+- **G-029 定时器清理**：合并窗口的 flush 定时器用 `setTimeout(...).unref()`（不阻止进程退出）；runtime 新增 `dispose()` 方法，在 session 结束时调用，清理所有 pending 定时器并 flush 残留通知（best-effort，ADR-027 不做跨进程恢复）
 - [GAP G-016 仍开放：triggerTurn 在主 agent 正在执行时的排队/注入行为，需在实现时验证 Pi SDK 行为]
 
 **FR-O1.6 history 双写去重（G-004 补充）**：`cancelBackground`（runtime.ts:513）写一条 "cancelled"，`runAgent` 的 abort catch（runtime.ts:377）会再写一条 "failed"。spec 初稿提的"去重由 list 视图的 id + 最新时间戳处理"需要确认 `listHistory` 的合并逻辑：
@@ -377,8 +377,8 @@ LLM 看到全部错误后可一次性修正所有参数重试，避免"修一个
 
 ## Constraints
 
-- **ADR-022 不变**：in-process 执行（`createAgentSession`），不引入 spawn 子进程。background 是 fire-and-forget Promise，不是 OS 进程
-- **ADR-024 不变**：已完成 L1（history.jsonl）+ L2（session 文件）持久化。**不做 L3（跨进程恢复运行中的 background）**
+- **ADR-025 不变**：in-process 执行（`createAgentSession`），不引入 spawn 子进程。background 是 fire-and-forget Promise，不是 OS 进程
+- **ADR-027 不变**：已完成 L1（history.jsonl）+ L2（session 文件）持久化。**不做 L3（跨进程恢复运行中的 background）**
 - **Pi ExtensionAPI 能力**：`sendMessage(msg, {triggerTurn:true})` 已确认可用（`shared/types/mariozechner/index.d.ts:129`）。无需 fs watcher（in-process 架构下 detached promise 完成时直接 sendMessage）
 - **events.on 可选**（G-007）：`pi.events.on` 是可选方法（index.d.ts:142 `on?`）。本 spec 的回注用 sendMessage（不依赖 events 订阅），但若未来需要 events 做内部聚合需确认 on 存在
 - **编排移植范围**：本 spec 移植 `pi-subagents/src/runs/shared/` 的编排逻辑（chain-outputs / parallel-utils / dynamic-fanout），**不移植** spawn/intercom/result-watcher（那是子进程模型的 IPC 机制）

@@ -5,7 +5,7 @@
 // 范围:initSession / dispose / query / cancel / listRunning / collectRecords /
 // onChange / assertReady -- 这些不依赖动态 import Pi SDK(getSdk)。
 //
-// execute() 因 buildSessionRunnerContext 会动态 import session-factory → getSdk(),
+// execute() 因 buildSessionRunnerContext 会动态 import session-runner → getSdk(),
 // 在单测环境无法提供真实 SDK,留给集成测试(见文件末尾 TODO)。
 //
 // 策略:用真实 ModelConfigService 指向 os.tmpdir() 空目录(loadGlobalConfig

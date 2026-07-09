@@ -78,20 +78,28 @@ export function resolveInvocation(extraArgs: string[]): { command: string; args:
  * P1-2: When `signal` is provided, the subprocess receives SIGKILL on
  * abort. The exit code 1 is returned with an explanatory stderr message.
  */
+export interface RunPiProcessOptions {
+  command: string;
+  cmdArgs: string[];
+  pipeline: ParsedPipelineEvent;
+  signal?: AbortSignal;
+  env?: Record<string, string>;
+  onEvent?: (raw: Record<string, unknown>) => void;
+  /** ADR-029 决策 1：per-call worktree 隔离。传给 spawn cwd option，undefined 时继承默认。 */
+  cwd?: string;
+}
+
 export async function runPiProcess(
-  command: string,
-  cmdArgs: string[],
-  pipeline: ParsedPipelineEvent,
-  signal?: AbortSignal,
-  env?: Record<string, string>,
-  onEvent?: (raw: Record<string, unknown>) => void,
+  opts: RunPiProcessOptions,
 ): Promise<{ exitCode: number; stderr: string }> {
+  const { command, cmdArgs, pipeline, signal, env, onEvent, cwd } = opts;
   let stderr = "";
   const exitCode = await new Promise<number>((resolve, reject) => {
     const proc = spawn(command, cmdArgs, {
       shell: false,
       stdio: ["ignore", "pipe", "pipe"],
       env: env ?? process.env,
+      cwd,
     });
     let buffer = "";
     let settled = false;

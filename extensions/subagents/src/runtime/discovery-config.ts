@@ -7,7 +7,7 @@
 // 时读取，主 agent 与子 session 的资源注入都以此文件为单一真相源。
 // 文件缺失或字段非法时，skillDirs/agentDirs 视为空数组，走默认行为（零破坏）。
 //
-// 详见 ADR-025。
+// 详见 ADR-028。
 
 import * as fs from "node:fs";
 import * as path from "node:path";
@@ -90,7 +90,7 @@ function parseDiscoveryConfig(raw: string): DiscoveryConfig {
 /**
  * 带 mtime 缓存的 discovery.json 读取器。
  *
- * discovery.json 在一次 session 内被读取两次（resources_discover + session-factory），
+ * discovery.json 在一次 session 内被读取两次（resources_discover + session-runner），
  * 用 mtime 判断是否需要重新 read+parse，避免重复磁盘 IO。
  *
  * 跨 session 复用：mtime 变了才重读。宿主写文件时用原子写（temp + rename），

@@ -23,11 +23,11 @@ export default defineConfig({
 	},
 	resolve: {
 		alias: {
-			"@mariozechner/pi-tui": path.resolve(
+			"@earendil-works/pi-tui": path.resolve(
 				__dirname,
 				"./node_modules/@earendil-works/pi-tui/dist/index.js",
 			),
-			"@mariozechner/pi-ai": path.resolve(
+			"@earendil-works/pi-ai": path.resolve(
 				__dirname,
 				"./node_modules/@earendil-works/pi-ai/dist/index.js",
 			),

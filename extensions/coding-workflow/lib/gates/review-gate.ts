@@ -1,203 +1,98 @@
 /**
- * Review-Gate — P1 实现。
- * 优先使用 pi.__workflowRun 驱动 workflow 脚本（phase1-review-gate / phase2-review-gate），
- * 不可用时降级到 runSingleAgent（P0 逻辑）。
+ * ReviewGate — phase 结尾的代码审查门。
+ *
+ * 跑 `phase${N}-review-gate` workflow（多轮 must-fix 审查循环），消费其 scriptResult：
+ *   { passed: boolean, rounds: number, lastMustFix: number, reviewPath?: string }
+ * passed=true 放行；passed=false 阻塞并给出剩余 must-fix 指引。
+ *
+ * workflowName 随 phase 变（phase1-review-gate / phase2-review-gate / ...），
+ * 这是与 TestFixLoopGate（固定名）的关键差异。
+ *
+ * 契约来源：lib/gates/__tests__/review-gate.test.ts（每个 DoneReason 分支 + workflowName 推导）。
  */
-
-// fallow-ignore-file — implements Gate interface members consumed via polymorphism
-
-import * as fs from "node:fs";
-import * as path from "node:path";
 
 import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
 
-import { getReviewGateStatePath } from "../helpers.js";
-import { type ReviewGateResult,runReviewGateLoop } from "../review-gate-impl.js";
-import type { Gate, GateContext, GateResult } from "./gate.js";
-import type { WorkflowRunFn } from "./workflow-types.js";
+import { Gate,type GateContext, type GateResult } from "./gate.js";
+import type { WorkflowRunResult } from "./workflow-types.js";
 
-// ─── Types ────────────────────────────────────────────────
+// ── ReviewGate 的 scriptResult 形态 ──────────────────────────
 
-/** Return type from pi.__workflowRun when calling review-gate workflows. */
-interface WorkflowReviewResult {
-	passed: boolean;
-	rounds: number;
-	lastMustFix: number;
-	/** Stagnation: must_fix did not decrease for 2 consecutive rounds */
-	stagnation?: boolean;
-	/** Max rounds reached without passing */
-	maxRounds?: boolean;
-	/** Review file path (Phase 1 only) */
-	reviewPath?: string;
+/**
+ * ReviewGate workflow 的 script 返回值。
+ * 由 workflow extension 的 review-gate 脚本产出，gate 只读不写。
+ */
+interface ReviewScriptResult {
+  /** 审查循环是否全部通过（无剩余 must-fix）。 */
+  passed: boolean;
+  /** 已执行的审查轮数。 */
+  rounds: number;
+  /** 最后一轮剩余的 must-fix 数（passed=true 时为 0）。 */
+  lastMustFix: number;
+  /** 审查报告路径（passed=true 时存在，供上层展示）。 */
+  reviewPath?: string;
 }
 
-/** Type adapter: GateContext.onUpdate has UsageStats, runReviewGateLoop expects unknown. */
-type RunReviewGateLoopOnUpdate = (partial: { content: Array<{ type: string; text: string }>; usage?: unknown }) => void;
+// ── ReviewGate ───────────────────────────────────────────────
 
-// ─── ReviewGate ───────────────────────────────────────────
+export class ReviewGate extends Gate {
+  protected workflowName(ctx: GateContext): string {
+    return `phase${ctx.phase}-review-gate`;
+  }
 
-export class ReviewGate implements Gate {
-	readonly name = "review-gate" as const;
+  protected failPrefix(): string {
+    return "Review-Gate FAILED";
+  }
 
-	// eslint-disable-next-line no-magic-numbers -- timeout 15 minutes in ms
-	private static readonly WORKFLOW_TIMEOUT_MS = 15 * 60_000;
-	// eslint-disable-next-line no-magic-numbers -- max review rounds
-	private static readonly MAX_ROUNDS = 3;
-	// eslint-disable-next-line no-magic-numbers -- Phase 2 complexity routing
-	private static readonly COMPLEXITY_ROUTING_PHASE = 2;
-	// eslint-disable-next-line no-magic-numbers -- stagnation threshold
-	private static readonly STAGNATION_THRESHOLD = 2;
-	// eslint-disable-next-line no-magic-numbers -- JSON indent
-	private static readonly JSON_INDENT = 2;
+  protected interpretResult(
+    result: WorkflowRunResult,
+    _ctx: GateContext,
+  ): GateResult {
+    const script = result.scriptResult as ReviewScriptResult | undefined;
 
-	async run(ctx: GateContext): Promise<GateResult> {
-		const workflowRun = this.getWorkflowRun(ctx.pi);
-		if (workflowRun) {
-			return this.runViaWorkflow(workflowRun, ctx);
-		}
-		return this.runFallback(ctx);
-	}
+    // completed 但无 scriptResult —— workflow 异常终止但未报错
+    if (!script) {
+      return {
+        passed: false,
+        details: { runId: result.runId, source: "workflow" },
+        fixGuidance: `${this.failPrefix()} — workflow returned no result`,
+      };
+    }
 
-	// ── Workflow path (pi.__workflowRun) ────────────────────
+    if (script.passed) {
+      return {
+        passed: true,
+        details: {
+          rounds: script.rounds,
+          reviewPath: script.reviewPath,
+          source: "workflow",
+        },
+      };
+    }
 
-	private async runViaWorkflow(workflowRun: WorkflowRunFn, ctx: GateContext): Promise<GateResult> {
-		const workflowName = `phase${ctx.phase}-review-gate`;
-		const args = this.buildWorkflowArgs(ctx);
+    // passed=false：还有 must-fix 未解决
+    return {
+      passed: false,
+      details: {
+        rounds: script.rounds,
+        lastMustFix: script.lastMustFix,
+        source: "workflow",
+      },
+      fixGuidance: `${this.failPrefix()} — ${script.lastMustFix} must-fix remaining after ${script.rounds} rounds`,
+    };
+  }
 
-		const wfResult = await workflowRun(workflowName, args, ctx.signal, ReviewGate.WORKFLOW_TIMEOUT_MS);
+}
 
-		if (wfResult.reason !== "completed" || wfResult.error) {
-			return {
-				passed: false,
-				fixGuidance: `Review-Gate workflow '${workflowName}' failed (reason=${wfResult.reason}): ${wfResult.error ?? "unknown error"}. Fix the issues, then call coding-workflow-gate(phase=${ctx.phase}) again.`,
-				details: { reason: wfResult.reason, runId: wfResult.runId, source: "workflow" },
-			};
-		}
+// ── 工具：供上层 phase runner 用（类型导出） ─────────────────
 
-		const data = wfResult.scriptResult as WorkflowReviewResult | undefined;
-		if (!data) {
-			return {
-				passed: false,
-				fixGuidance: `Review-Gate workflow '${workflowName}' returned no result. Fix the issues, then call coding-workflow-gate(phase=${ctx.phase}) again.`,
-				details: { reason: wfResult.reason, source: "workflow" },
-			};
-		}
-
-		// Persist review-gate state
-		await this.persistState(ctx.topicDir, ctx.phase, data);
-
-		if (!data.passed) {
-			const reason = data.stagnation
-				? `Stagnation: must_fix did not decrease for ${ReviewGate.STAGNATION_THRESHOLD} consecutive rounds (last=${data.lastMustFix}).`
-				: data.maxRounds
-					? `Max rounds (${data.rounds}) reached (last must_fix=${data.lastMustFix}).`
-					: `Failed after ${data.rounds} rounds (last must_fix=${data.lastMustFix}).`;
-
-			return {
-				passed: false,
-				fixGuidance: `Review-Gate FAILED. ${reason}\n\nFix the issues, then call coding-workflow-gate(phase=${ctx.phase}) again.`,
-				details: {
-					rounds: data.rounds,
-					lastMustFix: data.lastMustFix,
-					stagnation: data.stagnation ?? false,
-					reviewPath: data.reviewPath,
-					source: "workflow",
-				},
-			};
-		}
-
-		return {
-			passed: true,
-			details: {
-				rounds: data.rounds,
-				reviewPath: data.reviewPath,
-				source: "workflow",
-			},
-		};
-	}
-
-	// ── Fallback path (runSingleAgent) ──────────────────────
-
-	private async runFallback(ctx: GateContext): Promise<GateResult> {
-		const result: ReviewGateResult = await runReviewGateLoop(
-			ctx.phaseConfig,
-			ctx.topicDir,
-			ctx.skillResolver,
-			ctx.signal,
-			ctx.onUpdate as RunReviewGateLoopOnUpdate | undefined,
-			ctx.processRegistry,
-		);
-
-		if (!result.passed) {
-			return {
-				passed: false,
-				fixGuidance:
-					`Review-Gate FAILED after ${result.rounds} rounds (last must_fix=${result.lastMustFix}).\n\n${result.summary}\n\nFix the issues above, then call coding-workflow-gate(phase=${ctx.phase}) again.`,
-				details: {
-					rounds: result.rounds,
-					lastMustFix: result.lastMustFix,
-					reviewPath: result.reviewPath,
-					source: "fallback",
-				},
-			};
-		}
-
-		return {
-			passed: true,
-			details: {
-				rounds: result.rounds,
-				reviewPath: result.reviewPath,
-				summary: result.summary,
-				source: "fallback",
-			},
-		};
-	}
-
-	// ── Helpers ─────────────────────────────────────────────
-
-	private getWorkflowRun(pi: ExtensionAPI): WorkflowRunFn | undefined {
-		const api = pi as unknown as Record<string, unknown>;
-		if (typeof api.__workflowRun === "function") {
-			return api.__workflowRun as WorkflowRunFn;
-		}
-		return undefined;
-	}
-
-	private buildWorkflowArgs(ctx: GateContext): Record<string, unknown> {
-		const args: Record<string, unknown> = {
-			topicDir: ctx.topicDir,
-			phase: ctx.phase,
-			maxRounds: ReviewGate.MAX_ROUNDS,
-		};
-
-		// Phase 2: pass complexity for L1/L2 routing
-		if (ctx.phase === ReviewGate.COMPLEXITY_ROUTING_PHASE) {
-			args.complexity = this.resolveComplexity(ctx.topicDir);
-		}
-
-		return args;
-	}
-
-	/** Read plan.md frontmatter for complexity level. Default L1. */
-	private resolveComplexity(topicDir: string): string {
-		const planPath = path.join(topicDir, "plan.md");
-		try {
-			const content = fs.readFileSync(planPath, "utf8");
-			const match = content.match(/^---[\s\S]*?complexity:\s*(L[12])\b/m);
-			return match?.[1] ?? "L1";
-		} catch {
-			return "L1";
-		}
-	}
-
-	/** Write .review-gate-p{N}.json state file for post-hoc inspection. */
-	private async persistState(topicDir: string, phase: number, data: WorkflowReviewResult): Promise<void> {
-		const statePath = getReviewGateStatePath(topicDir, phase);
-		try {
-			await fs.promises.writeFile(statePath, JSON.stringify(data, null, ReviewGate.JSON_INDENT));
-		// eslint-disable-next-line taste/no-silent-catch -- state persistence is non-critical, logging suffices
-		} catch (err) {
-			console.error(`[coding-workflow] Failed to persist review-gate state to ${statePath}: ${err instanceof Error ? err.message : String(err)}`);
-		}
-	}
+/**
+ * 类型守卫：ExtensionAPI 是否具备 gate 所需的 __workflowRun。
+   *
+   * 双重断言理由：__workflowRun 是 workflow 扩展的私有 RPC，SDK 公共类型不
+   * 暴露，运行时探测必需。phase runner 可在调 gate.run 前用它预检，给出更
+   * 友好的提示（而非等到 gate.run 内部抛错）。
+   */
+export function hasReviewWorkflowApi(pi: ExtensionAPI): boolean {
+  return typeof (pi as unknown as { __workflowRun?: unknown }).__workflowRun === "function";
 }
