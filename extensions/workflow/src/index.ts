@@ -115,6 +115,7 @@ export default function workflowExtension(pi: ExtensionAPI): void {
       agentRegistry: state.agentRegistry,
       sessionDir: state.sessionDir,
       activeTempFiles: state.activeTempFiles,
+      eventBus: pi.events,
       scheduleTimeBudget: (runId: string, budgetTimeMs: number) =>
         scheduleTimeBudget(runId, deps, budgetTimeMs),
     };
