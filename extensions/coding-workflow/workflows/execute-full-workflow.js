@@ -1,3 +1,7 @@
+/* eslint-disable */
+// 本文件是 CommonJS workflow 脚本（require/fs/path），由 workflow worker 在独立进程执行，
+// 不是 TypeScript 源码。eslint.config.mjs 的 ignores 也排除了 extensions/*/workflows/**，
+// 此处的 eslint-disable 作为双重保险，防止 CI 环境下 ignore glob 匹配差异导致误报。
 const meta = {
   name: "execute-full-workflow",
   description:
