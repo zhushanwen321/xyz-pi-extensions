@@ -17,8 +17,10 @@ vi.mock("../../infra/workflow-files.js", () => ({
   deleteWorkflow: vi.fn((name: string, _isRunning: (n: string) => boolean) => `Deleted ${name}`),
 }));
 
-// Mock config-loader（lint/list 不实际扫文件系统）
+// Mock config-loader（list action 的 registry.loadAll 不走 config-loader，
+// 但保留 mock 防止任何间接 import 触发真实文件系统扫描）
 vi.mock("../../infra/config-loader.js", () => ({
+  discoverWorkflows: vi.fn(async () => []),
   loadWorkflows: vi.fn(async () => []),
   invalidateCache: vi.fn(),
 }));
@@ -145,6 +147,48 @@ describe("workflow-script lint", () => {
     registerWorkflowScriptTool(api, makeRegistry(), () => false);
     const result = await runAction(registered[0], { action: "lint" });
     expect(result.isError).toBe(true);
+  });
+
+  it("正常 lint：通过 registry.get 读取 sourceCode（不穿透 config-loader）", async () => {
+    const script = makeScript("lint-target");
+    const registry = makeRegistry([script]);
+    // registry.get 默认 mock 返回 scripts[0]，这里明确返回目标脚本
+    (registry.get as ReturnType<typeof vi.fn>).mockResolvedValue(script);
+
+    const { api, registered } = makePi();
+    registerWorkflowScriptTool(api, registry, () => false);
+    const result = await runAction(registered[0], { action: "lint", name: "lint-target" });
+
+    // 走 registry.get，不走 config-loader 的 loadWorkflows
+    expect(registry.get).toHaveBeenCalledWith("lint-target");
+    const { loadWorkflows } = await import("../../infra/config-loader.js");
+    expect(loadWorkflows).not.toHaveBeenCalled();
+    // 脚本无 lint 问题（makeScript 的 sourceCode 是合法的）→ 成功
+    expect(result.isError).toBeUndefined();
+    expect(result.content[0].text).toContain("No issues");
+  });
+
+  it("registry.get 返回 undefined → not found", async () => {
+    const registry = makeRegistry([]);
+    (registry.get as ReturnType<typeof vi.fn>).mockResolvedValue(undefined);
+
+    const { api, registered } = makePi();
+    registerWorkflowScriptTool(api, registry, () => false);
+    const result = await runAction(registered[0], { action: "lint", name: "missing" });
+    expect(result.isError).toBe(true);
+    expect(result.content[0].text).toContain("not found");
+  });
+
+  it("脚本 available=false → not found（不 lint 不可用脚本）", async () => {
+    const script = makeScript("broken", false);
+    const registry = makeRegistry([script]);
+    (registry.get as ReturnType<typeof vi.fn>).mockResolvedValue(script);
+
+    const { api, registered } = makePi();
+    registerWorkflowScriptTool(api, registry, () => false);
+    const result = await runAction(registered[0], { action: "lint", name: "broken" });
+    expect(result.isError).toBe(true);
+    expect(result.content[0].text).toContain("not found");
   });
 });
 

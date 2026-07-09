@@ -15,7 +15,7 @@
  * 参考：domain-models.md §FR-5（tool 收口 4→2）。
  */
 
-import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { mkdirSync, writeFileSync } from "node:fs";
 import { resolve as pathResolve } from "node:path";
 
 import { StringEnum } from "@mariozechner/pi-ai";
@@ -114,7 +114,7 @@ export function registerWorkflowScriptTool(
         case "generate":
           return actionGenerate(params, signal);
         case "lint":
-          return actionLint(params);
+          return actionLint(params, registry);
         case "save":
           return actionSave(params);
         case "delete":
@@ -218,18 +218,20 @@ function actionGenerate(params: ScriptParams, signal: AbortSignal | undefined): 
 
 // ── lint action ──────────────────────────────────────────────
 
-async function actionLint(params: ScriptParams): Promise<TextContent> {
+async function actionLint(
+  params: ScriptParams,
+  registry: WorkflowScriptRegistry,
+): Promise<TextContent> {
   const name = params.name;
   if (!name) {
     return textResult("lint requires 'name' parameter", true);
   }
- // 读脚本源（从 registry 或直接文件系统）
-  const script = await loadScriptSource(name);
-  if (!script) {
+  const source = await loadScriptSource(name, registry);
+  if (!source) {
     return textResult(`Workflow '${name}' not found or not available.`, true);
   }
 
-  const result = lintScript(script);
+  const result = lintScript(source);
   if (result.findings.length === 0) {
     return textResult(`✅ No issues found in '${name}'.`);
   }
@@ -250,18 +252,17 @@ async function actionLint(params: ScriptParams): Promise<TextContent> {
   };
 }
 
-/** 加载脚本源码（lint 用）。从文件系统直接读（registry 不暴露 sourceCode 读取）。 */
-async function loadScriptSource(name: string): Promise<string | undefined> {
-  try {
- // 用 config-loader 找到 path
-    const { loadWorkflows } = await import("../infra/config-loader.js");
-    const all = await loadWorkflows();
-    const wf = all.find((w) => w.name === name && w.available);
-    if (!wf?.path) return undefined;
-    return readFileSync(wf.path, "utf-8");
-  } catch {
-    return undefined;
-  }
+/**
+ * 加载脚本源码（lint 用）。通过 registry port 获取——registry 返回的
+ * WorkflowScript 自带 sourceCode（FR-2：registry 是唯一读文件处），
+ * 不再穿透到 config-loader 直接扫文件系统。
+ */
+async function loadScriptSource(
+  name: string,
+  registry: WorkflowScriptRegistry,
+): Promise<string | undefined> {
+  const script = await registry.get(name);
+  return script?.available ? script.sourceCode : undefined;
 }
 
 // ── save action ──────────────────────────────────────────────

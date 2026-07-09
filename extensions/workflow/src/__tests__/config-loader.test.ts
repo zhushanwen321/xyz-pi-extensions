@@ -1,26 +1,31 @@
 // 测试框架：vitest（从 vitest 导入 describe/it/expect/vi/beforeEach/afterEach）
 // 运行命令：npx vitest run src/__tests__/config-loader.test.ts
 
-import { mkdirSync, mkdtempSync, rmSync,writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import { afterEach,beforeEach, describe, expect, it } from "vitest";
 
 import {
+  discoverWorkflows,
   getWorkflow,
   invalidateCache,
-  loadWorkflowsForTest,
+  type WorkflowScanConfig,
 } from "../infra/config-loader";
 
 // ── Helpers ──────────────────────────────────────────────────
 
 let tmpRoot: string;
+let isolatedUserDir: string;
 let originalCwd: string;
 
 beforeEach(() => {
   originalCwd = process.cwd();
   tmpRoot = mkdtempSync(join(tmpdir(), "pi-workflow-test-"));
+  // 隔离 user 级目录，避免真实 ~/.pi/agent/workflows 的脚本污染测试
+  isolatedUserDir = join(tmpRoot, "user-workflows");
+  mkdirSync(isolatedUserDir, { recursive: true });
   process.chdir(tmpRoot);
 });
 
@@ -28,6 +33,17 @@ afterEach(() => {
   process.chdir(originalCwd);
   rmSync(tmpRoot, { recursive: true, force: true });
 });
+
+/**
+ * 加载 workflow 时注入隔离的 userDir，屏蔽真实 ~/.pi/agent/workflows。
+ * 默认 cwd = tmpRoot（与既有测试一致）。
+ */
+async function loadIsolated(npmDirs: string[] = [], cwd: string = tmpRoot): Promise<
+  import("../infra/config-loader").CachedWorkflowMeta[]
+> {
+  // discoverWorkflows 是唯一发现入口；这里注入隔离 userDir + 空 npmDirs
+  return discoverWorkflows({ npmDirs, cwd, userDir: isolatedUserDir });
+}
 
 function makeWorkflowDir(): string {
   const dir = join(tmpRoot, ".pi", "workflows");
@@ -82,7 +98,7 @@ describe("config-loader", () => {
 
   describe("loadWorkflows()", () => {
     it("returns empty array when no workflow directories exist", async () => {
-      const workflows = await loadWorkflowsForTest([], tmpRoot);
+      const workflows = await loadIsolated();
       expect(workflows).toEqual([]);
     });
 
@@ -95,7 +111,7 @@ describe("config-loader", () => {
 module.exports = { meta };`,
       );
 
-      const workflows = await loadWorkflowsForTest([], tmpRoot);
+      const workflows = await loadIsolated();
       expect(workflows).toHaveLength(1);
       expect(workflows[0].name).toBe("hello");
       expect(workflows[0].description).toBe("Hello workflow");
@@ -112,7 +128,7 @@ module.exports = { meta };`,
         `const meta = { name: 'local-meta', description: 'No exports needed', phases: ['a'] };`,
       );
 
-      const workflows = await loadWorkflowsForTest([], tmpRoot);
+      const workflows = await loadIsolated();
       expect(workflows).toHaveLength(1);
       expect(workflows[0].name).toBe("local-meta");
       expect(workflows[0].description).toBe("No exports needed");
@@ -123,7 +139,7 @@ module.exports = { meta };`,
       const dir = makeWorkflowDir();
       writeScript(dir, "bad", `console.log("no meta here");`);
 
-      const workflows = await loadWorkflowsForTest([], tmpRoot);
+      const workflows = await loadIsolated();
       expect(workflows).toHaveLength(1);
       expect(workflows[0].available).toBe(false);
       expect(workflows[0].name).toBe("bad"); // fallback to stem name
@@ -139,7 +155,7 @@ const x = agent;
 console.log($ARGS, $WORKSPACE, $BUDGET);`,
       );
 
-      const workflows = await loadWorkflowsForTest([], tmpRoot);
+      const workflows = await loadIsolated();
       expect(workflows).toHaveLength(1);
       expect(workflows[0].available).toBe(true);
       expect(workflows[0].name).toBe("complex");
@@ -153,7 +169,7 @@ console.log($ARGS, $WORKSPACE, $BUDGET);`,
         `export const meta = { name: 'esm-meta', description: 'ESM export syntax', phases: ['init'] };`,
       );
 
-      const workflows = await loadWorkflowsForTest([], tmpRoot);
+      const workflows = await loadIsolated();
       expect(workflows).toHaveLength(1);
       expect(workflows[0].name).toBe("esm-meta");
       expect(workflows[0].available).toBe(true);
@@ -168,7 +184,7 @@ console.log($ARGS, $WORKSPACE, $BUDGET);`,
 module.exports = { meta };`,
       );
 
-      const workflows = await loadWorkflowsForTest([], tmpRoot);
+      const workflows = await loadIsolated();
       expect(workflows).toHaveLength(1);
       expect(workflows[0].available).toBe(true);
       expect(workflows[0].name).toBe("mod-exports");
@@ -179,7 +195,7 @@ module.exports = { meta };`,
       writeScript(dir, "good", `const meta = { name: 'good', description: '', phases: [] };`);
       writeScript(dir, "bad", `// no meta`);
 
-      const workflows = await loadWorkflowsForTest([], tmpRoot);
+      const workflows = await loadIsolated();
       expect(workflows).toHaveLength(2);
       const good = workflows.find((w) => w.name === "good")!;
       const bad = workflows.find((w) => w.name === "bad")!;
@@ -193,7 +209,7 @@ module.exports = { meta };`,
       writeFileSync(join(dir, "types.d.ts"), "// types", "utf-8");
       writeFileSync(join(dir, "config.json"), "{}", "utf-8");
 
-      const workflows = await loadWorkflowsForTest([], tmpRoot);
+      const workflows = await loadIsolated();
       expect(workflows).toHaveLength(1);
       expect(workflows[0].name).toBe("valid");
     });
@@ -207,7 +223,7 @@ module.exports = { meta };`,
         "utf-8",
       );
 
-      const workflows = await loadWorkflowsForTest([], tmpRoot);
+      const workflows = await loadIsolated();
       expect(workflows).toHaveLength(1);
       expect(workflows[0].name).toBe("esm-workflow");
     });
@@ -225,7 +241,7 @@ module.exports = { meta };`,
           },
         ]);
 
-        const workflows = await loadWorkflowsForTest([join(tmpRoot, "node_modules")], tmpRoot);
+        const workflows = await loadIsolated([join(tmpRoot, "node_modules")]);
         expect(workflows).toHaveLength(1);
         expect(workflows[0].name).toBe("npm-greet");
         expect(workflows[0].description).toBe("NPM workflow");
@@ -242,7 +258,7 @@ module.exports = { meta };`,
           },
         ]);
 
-        const workflows = await loadWorkflowsForTest([join(tmpRoot, "node_modules")], tmpRoot);
+        const workflows = await loadIsolated([join(tmpRoot, "node_modules")]);
         expect(workflows).toHaveLength(1);
  // Normalize paths to handle macOS /private/var symlink
         expect(workflows[0].path).toContain("/node_modules/@zhushanwen/pi-example/workflows/build.js");
@@ -258,7 +274,7 @@ module.exports = { meta };`,
           },
         ]);
 
-        const workflows = await loadWorkflowsForTest([join(tmpRoot, "node_modules")], tmpRoot);
+        const workflows = await loadIsolated([join(tmpRoot, "node_modules")]);
         expect(workflows).toHaveLength(1);
         expect(workflows[0].source).toBe("saved");
       });
@@ -273,18 +289,16 @@ module.exports = { meta };`,
           },
         ]);
 
-        const workflows = await loadWorkflowsForTest([join(tmpRoot, "node_modules")], tmpRoot);
+        const workflows = await loadIsolated([join(tmpRoot, "node_modules")]);
         expect(workflows).toHaveLength(1);
         expect(workflows[0].name).toBe("deploy");
         expect(workflows[0].phases).toEqual(["build", "push"]);
       });
 
       it("U5: npm package workflows have priority over user-level workflows", async () => {
-        // Create user-level workflow
-        const userDir = join(tmpRoot, ".pi", "agent", "workflows");
-        mkdirSync(userDir, { recursive: true });
+        // Create user-level workflow in the isolated user dir
         writeScript(
-          userDir,
+          isolatedUserDir,
           "same-name",
           `const meta = { name: 'same-name', description: 'User version', phases: ['user'] };`,
         );
@@ -299,7 +313,7 @@ module.exports = { meta };`,
           },
         ]);
 
-        const workflows = await loadWorkflowsForTest([join(tmpRoot, "node_modules")], tmpRoot);
+        const workflows = await loadIsolated([join(tmpRoot, "node_modules")]);
         expect(workflows).toHaveLength(1);
         expect(workflows[0].name).toBe("same-name");
         expect(workflows[0].description).toBe("NPM version");
@@ -311,7 +325,7 @@ module.exports = { meta };`,
           extensions: ["./index.ts"],
         }, []);
 
-        const workflows = await loadWorkflowsForTest([join(tmpRoot, "node_modules")], tmpRoot);
+        const workflows = await loadIsolated([join(tmpRoot, "node_modules")]);
         expect(workflows).toHaveLength(0);
       });
 
@@ -326,7 +340,7 @@ module.exports = { meta };`,
           },
         ]);
 
-        const workflows = await loadWorkflowsForTest([join(tmpRoot, "node_modules")], tmpRoot);
+        const workflows = await loadIsolated([join(tmpRoot, "node_modules")]);
         const fb = workflows.find((w) => w.name === "fallback-wf");
         expect(fb).toBeDefined();
         expect(fb!.available).toBe(true);
@@ -337,7 +351,7 @@ module.exports = { meta };`,
           workflows: ["./workflows/missing.js"],
         }, []);
 
-        const workflows = await loadWorkflowsForTest([join(tmpRoot, "node_modules")], tmpRoot);
+        const workflows = await loadIsolated([join(tmpRoot, "node_modules")]);
         expect(workflows).toHaveLength(0);
       });
 
@@ -347,8 +361,71 @@ module.exports = { meta };`,
           workflows: "not-an-array",
         });
 
-        const workflows = await loadWorkflowsForTest([join(tmpRoot, "node_modules")], tmpRoot);
+        const workflows = await loadIsolated([join(tmpRoot, "node_modules")]);
         expect(workflows).toHaveLength(0);
+      });
+
+      // 根因 1（主因）：pi.workflows 声明为目录（如 pi-coding-workflow 的
+      // ["./workflows"]）时，manifest 模式对目录 readFile 会 EISDIR 空转。
+      // 修复后目录声明走 scanDirectory。
+      it("RC1-dir: discovers workflows when pi.workflows declares a directory", async () => {
+        makeNpmPackage("@zhushanwen/pi-coding-workflow", {
+          workflows: ["./workflows"],
+        }, [
+          {
+            name: "workflows/execute-full-workflow.js",
+            content: `const meta = { name: 'execute-full-workflow', description: 'Dir-declared workflow', phases: ['setup', 'execute'] };`,
+          },
+          {
+            name: "workflows/another.js",
+            content: `const meta = { name: 'another', description: 'Sibling in same dir', phases: [] };`,
+          },
+        ]);
+
+        const workflows = await loadIsolated([join(tmpRoot, "node_modules")]);
+        const names = workflows.map((w) => w.name).sort();
+        expect(names).toEqual(["another", "execute-full-workflow"]);
+        expect(workflows.every((w) => w.available)).toBe(true);
+      });
+
+      // 根因 1 防御补充：manifest 全失败（声明的路径都不存在）时，
+      // 应 fallback 到包内 workflows/ 目录扫描，而非返回空。
+      it("RC1-fallback: falls back to workflows/ dir when manifest paths all miss", async () => {
+        makeNpmPackage("@zhushanwen/pi-stale-manifest", {
+          // manifest 指向已不存在的文件，但 workflows/ 目录里有合法脚本
+          workflows: ["./workflows/deprecated.js"],
+        }, [
+          {
+            name: "workflows/current.js",
+            content: `const meta = { name: 'current', description: 'Found via fallback', phases: [] };`,
+          },
+        ]);
+
+        const workflows = await loadIsolated([join(tmpRoot, "node_modules")]);
+        const current = workflows.find((w) => w.name === "current");
+        expect(current).toBeDefined();
+        expect(current!.available).toBe(true);
+      });
+
+      // 根因 3：scanDirectory 用 Dirent.isFile() 过滤会漏掉 symlink。
+      // 修复后指向普通文件的 symlink 被纳入扫描。
+      it("RC3-symlink: discovers workflow scripts reachable only via symlink", async () => {
+        const dir = makeWorkflowDir();
+        // 真实文件放在 user 级目录外（模拟 dotfiles/多机同步的集中存放）
+        const externalDir = join(tmpRoot, "external-scripts");
+        mkdirSync(externalDir, { recursive: true });
+        writeFileSync(
+          join(externalDir, "linked-wf.js"),
+          `const meta = { name: 'linked-wf', description: 'Via symlink', phases: ['a'] };`,
+          "utf-8",
+        );
+        // 在扫描目录内创建 symlink 指向真实文件
+        symlinkSync(join(externalDir, "linked-wf.js"), join(dir, "linked-wf.js"));
+
+        const workflows = await loadIsolated();
+        const linked = workflows.find((w) => w.name === "linked-wf");
+        expect(linked).toBeDefined();
+        expect(linked!.available).toBe(true);
       });
     });
   });
@@ -368,7 +445,7 @@ module.exports = { meta };`,
       ]);
       invalidateCache();
 
-      const workflows = await loadWorkflowsForTest([join(tmpRoot, "node_modules")], tmpRoot);
+      const workflows = await loadIsolated([join(tmpRoot, "node_modules")]);
       const fixture = workflows.find((w) => w.name === "fixture-demo");
       expect(fixture).toBeDefined();
       expect(fixture!.source).toBe("saved");
@@ -447,7 +524,7 @@ module.exports = { meta };`,
       );
 
       invalidateCache();
-      const workflows = await loadWorkflowsForTest([], tmpRoot);
+      const workflows = await loadIsolated();
       expect(workflows).toHaveLength(1);
       expect(workflows[0].phases).toEqual([
         { title: "Review" },
@@ -464,7 +541,7 @@ module.exports = { meta };`,
       );
 
       invalidateCache();
-      const workflows = await loadWorkflowsForTest([], tmpRoot);
+      const workflows = await loadIsolated();
       expect(workflows).toHaveLength(1);
       expect(workflows[0].phases).toEqual([
         "Init",
@@ -484,9 +561,151 @@ module.exports = { meta };`,
       );
 
       invalidateCache();
-      const workflows = await loadWorkflowsForTest([], tmpRoot);
+      const workflows = await loadIsolated();
       expect(workflows).toHaveLength(1);
       expect(workflows[0].phases).toEqual(["Valid", { title: "Ok" }]);
+    });
+  });
+
+  // ── 根因 2：bare+worktree 下 project 级 .pi/workflows 的发现 ────
+  // findWorkspaceRoot 原本在检测到 .bare 后固定返回 workspace 根（.bare
+  // 所在层），导致用户把 .pi/workflows 放在当前 worktree 内时扫不到。
+  // 修复后：若 cwd 是 workspace 根的直接子目录（即 worktree 根）且自身
+  // 有 .pi，优先用 cwd。
+  describe("bare+worktree: project-level .pi/workflows discovery", () => {
+    let wsRoot: string;
+
+    beforeEach(() => {
+      // 构造 bare+worktree 结构：
+      //   <tmpRoot>/ws/.bare              ← workspace 根标记
+      //   <tmpRoot>/ws/main/              ← worktree 根（cwd）
+      //   <tmpRoot>/ws/main/.pi/workflows/ ← project 级脚本（应被发现）
+      wsRoot = join(tmpRoot, "ws");
+      mkdirSync(join(wsRoot, ".bare"), { recursive: true });
+      mkdirSync(join(wsRoot, "main", ".pi", "workflows"), { recursive: true });
+      writeFileSync(
+        join(wsRoot, "main", ".pi", "workflows", "worktree-wf.js"),
+        `const meta = { name: 'worktree-wf', description: 'In current worktree', phases: [] };`,
+        "utf-8",
+      );
+    });
+
+    it("RC2: discovers .pi/workflows inside the current worktree (not workspace root)", async () => {
+      const cwd = join(wsRoot, "main");
+      const workflows = await loadIsolated([], cwd);
+      const wf = workflows.find((w) => w.name === "worktree-wf");
+      expect(wf).toBeDefined();
+      expect(wf!.available).toBe(true);
+      // 路径应在 worktree 内，而非 workspace 根
+      expect(wf!.path).toContain("/ws/main/.pi/workflows/");
+    });
+
+    it("RC2: falls back to workspace root when worktree has no .pi", async () => {
+      // 另一个无 .pi 的 worktree——应退回 workspace 根行为
+      const otherWorktree = join(wsRoot, "no-pi-wt");
+      mkdirSync(otherWorktree, { recursive: true });
+      // workspace 根放一个脚本，验证回退后能发现
+      mkdirSync(join(wsRoot, ".pi", "workflows"), { recursive: true });
+      writeFileSync(
+        join(wsRoot, ".pi", "workflows", "shared-wf.js"),
+        `const meta = { name: 'shared-wf', description: 'At workspace root', phases: [] };`,
+        "utf-8",
+      );
+
+      const workflows = await loadIsolated([], otherWorktree);
+      const shared = workflows.find((w) => w.name === "shared-wf");
+      expect(shared).toBeDefined();
+      expect(shared!.available).toBe(true);
+    });
+  });
+
+  // ── discoverWorkflows：显式 config 注入（单一发现入口）──────
+  // discoverWorkflows 是生产/测试唯一通路。loadWorkflows() 是它的无参 preset。
+  // 测试用显式 config 注入完整目录集，验证只扫这些目录、不碰全局。
+  describe("discoverWorkflows(config)", () => {
+    function makeConfig(overrides?: Partial<WorkflowScanConfig>): WorkflowScanConfig {
+      const projectDir = join(tmpRoot, "cfg-project");
+      const userDir = join(tmpRoot, "cfg-user");
+      const tmpDir = join(tmpRoot, "cfg-tmp");
+      for (const d of [projectDir, userDir, tmpDir]) mkdirSync(d, { recursive: true });
+      return { projectDir, userDir, tmpDir, npmDirs: [], ...overrides };
+    }
+
+    it("只扫 config 声明的目录，不碰全局 ~/.pi/agent/workflows", async () => {
+      const config = makeConfig();
+      writeFileSync(
+        join(config.projectDir, "proj-wf.js"),
+        `const meta = { name: 'proj-wf', description: 'project scope', phases: [] };`,
+        "utf-8",
+      );
+      writeFileSync(
+        join(config.userDir, "user-wf.js"),
+        `const meta = { name: 'user-wf', description: 'user scope', phases: [] };`,
+        "utf-8",
+      );
+      writeFileSync(
+        join(config.tmpDir, "tmp-wf.js"),
+        `const meta = { name: 'tmp-wf', description: 'tmp scope', phases: [] };`,
+        "utf-8",
+      );
+
+      const workflows = await discoverWorkflows(config);
+      const names = workflows.map((w) => w.name).sort();
+      expect(names).toEqual(["proj-wf", "tmp-wf", "user-wf"]);
+      // 不碰全局——即使 ~/.pi/agent/workflows 有脚本也不会出现
+      const globalOnly = workflows.find((w) => w.name === "execute-full-workflow");
+      expect(globalOnly).toBeUndefined();
+    });
+
+    it("config 的 tmp 优先级高于 project 和 user（同 name 去重）", async () => {
+      const config = makeConfig();
+      for (const [dir, desc] of [
+        [config.userDir, "user-version"],
+        [config.projectDir, "project-version"],
+        [config.tmpDir, "tmp-version"],
+      ] as const) {
+        writeFileSync(
+          join(dir, "same.js"),
+          `const meta = { name: 'same', description: '${desc}', phases: [] };`,
+          "utf-8",
+        );
+      }
+
+      const workflows = await discoverWorkflows(config);
+      const same = workflows.find((w) => w.name === "same");
+      expect(same).toBeDefined();
+      expect(same!.description).toBe("tmp-version");
+      expect(same!.source).toBe("tmp");
+    });
+
+    it("config npmDirs 声明的 npm 包被扫描（manifest 目录声明兼容）", async () => {
+      const npmDir = join(tmpRoot, "cfg-npm");
+      const pkgDir = join(npmDir, "@scope", "pkg");
+      mkdirSync(pkgDir, { recursive: true });
+      writeFileSync(
+        join(pkgDir, "package.json"),
+        JSON.stringify({ name: "@scope/pkg", pi: { workflows: ["./wf"] } }),
+        "utf-8",
+      );
+      const wfDir = join(pkgDir, "wf");
+      mkdirSync(wfDir, { recursive: true });
+      writeFileSync(
+        join(wfDir, "npm-wf.js"),
+        `const meta = { name: 'npm-wf', description: 'via npm manifest', phases: [] };`,
+        "utf-8",
+      );
+
+      const config = makeConfig({ npmDirs: [npmDir] });
+      const workflows = await discoverWorkflows(config);
+      const npmWf = workflows.find((w) => w.name === "npm-wf");
+      expect(npmWf).toBeDefined();
+      expect(npmWf!.available).toBe(true);
+    });
+
+    it("空 config（全空目录）返回空数组", async () => {
+      const config = makeConfig();
+      const workflows = await discoverWorkflows(config);
+      expect(workflows).toEqual([]);
     });
   });
 });

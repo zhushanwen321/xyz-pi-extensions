@@ -12,8 +12,6 @@
 import { existsSync, mkdirSync, renameSync, unlinkSync } from "node:fs";
 import { resolve } from "node:path";
 
-import { loadWorkflows } from "./config-loader.js";
-
 // ── Path helpers (computed at call time to respect cwd changes in tests) ──
 
 function getTmpDir(): string {
@@ -29,14 +27,15 @@ function getSavedDir(): string {
 /**
  * 保存临时 workflow：.pi/workflows/.tmp/{name}.js → .pi/workflows/{newName||name}.js
  * 用 rename（tmp 文件保存后消失）。仅 project scope。
+ *
+ * 直接按路径查找 tmp 文件，不调 config-loader 全扫——save 只需知道 tmp 文件
+ * 的路径，不需要 meta 提取或跨目录去重。
+ *
  * @throws 若 tmp workflow 不存在、目标已存在、或 rename 失败
  */
 export async function saveWorkflow(tmpName: string, newName?: string): Promise<string> {
-  const workflows = await loadWorkflows();
-  const target = workflows.find(
-    (wf) => wf.source === "tmp" && wf.name === tmpName,
-  );
-  if (!target) {
+  const srcPath = resolve(getTmpDir(), `${tmpName}.js`);
+  if (!existsSync(srcPath)) {
     throw new Error(`Temporary workflow '${tmpName}' not found`);
   }
 
@@ -49,7 +48,7 @@ export async function saveWorkflow(tmpName: string, newName?: string): Promise<s
   }
 
   mkdirSync(savedDir, { recursive: true });
-  renameSync(target.path, destPath);
+  renameSync(srcPath, destPath);
   return `Saved '${tmpName}' → '${destName}' (${destPath})`;
 }
 
