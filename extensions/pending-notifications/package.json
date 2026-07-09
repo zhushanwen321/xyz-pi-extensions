@@ -19,13 +19,15 @@
   "license": "MIT",
   "files": [
     "src/",
-    "index.ts"
+    "index.ts",
+    "mocks/"
   ],
   "devDependencies": {
     "vitest": "^4.1.8"
   },
   "peerDependencies": {
-    "@mariozechner/pi-coding-agent": "*"
+    "@mariozechner/pi-coding-agent": "*",
+    "@sinclair/typebox": "*"
   },
   "scripts": {
     "typecheck": "npx tsc --noEmit",

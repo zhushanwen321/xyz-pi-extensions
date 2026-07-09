@@ -10,4 +10,10 @@ export default defineConfig({
 		include: ["src/__tests__/**/*.test.ts"],
 		root: __dirname,
 	},
+	resolve: {
+		alias: {
+			// typebox 在测试环境用 mock（与 workflow extension 一致），真实类型由 Pi 运行时提供
+			"@sinclair/typebox": path.resolve(__dirname, "mocks/typebox.ts"),
+		},
+	},
 });

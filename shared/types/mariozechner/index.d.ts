@@ -158,7 +158,7 @@ declare module "@mariozechner/pi-coding-agent" {
 		getCommands(): Array<{ name: string }>;
 		getThinkingLevel(): string;
 		setThinkingLevel(level: string): void;
-		events: { emit(channel: string, data: unknown): void; on?(channel: string, handler: (...args: any[]) => void): void };
+		events: { emit(channel: string, data: unknown): void; on(channel: string, handler: (...args: any[]) => void): () => void };
 		// 扩展间私有协议（goal/workflow 用 __ 前缀注入字段）
 		[key: `__${string}`]: unknown;
 	}
