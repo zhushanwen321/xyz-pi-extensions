@@ -214,10 +214,13 @@ export function visibleLen(s: string): number {
 }
 
 /** Pad an ANSI-escaped string to a target *visible* width.
- *  Delegates to pi-tui's truncateToWidth with pad=true for accurate CJK/emoji handling.
+ *  只 pad 不截断：超宽时原样返回（调用方负责先截断）。
+ *  对齐 subagents 的 padToVisible 语义。
  */
 export function padVisible(s: string, width: number): string {
-  return truncateToWidth(s, width, "", true);
+  const vl = visibleLen(s);
+  if (vl >= width) return s;
+  return s + " ".repeat(width - vl);
 }
 
 // ── Phase group (filters empty phases) ────────────────────────

@@ -181,8 +181,8 @@ export function createWorkflowsView(
       if (state.agentIdx >= agents.length) state.agentIdx = Math.max(0, agents.length - 1);
     }
 
- // 渲染缓存：与 main 同构。width 变化或交互后 invalidate，避免每帧重算。
-    const cache = { width: undefined as number | undefined, lines: undefined as string[] | undefined };
+ // 渲染缓存：缓存 key = width×rows，终端 resize 改高度时缓存失效（防行数不匹配终端）
+    const cache = { key: undefined as string | undefined, lines: undefined as string[] | undefined };
     const requestRender = () => tui.requestRender();
 
  // ── 轮询 tick：engine 无事件推送，view 自轮询 trace 变化 ──
@@ -190,7 +190,7 @@ export function createWorkflowsView(
  // 行数固定后，diff-redraw 引擎能正确逐行对比，不会出现残影。
     const tick = setInterval(() => {
       if (state.disposed) return;
-      cache.width = undefined;
+      cache.key = undefined;
       cache.lines = undefined;
       requestRender();
     }, TICK_MS);
@@ -238,7 +238,7 @@ export function createWorkflowsView(
         }
         state.level = (state.level - 1) as NavLevel;
         state.promptExpanded = false;
-        cache.width = undefined;
+        cache.key = undefined;
         requestRender();
         return;
       }
@@ -261,7 +261,7 @@ export function createWorkflowsView(
           if (r.handled) {
             state.detailScrollOffset = r.scrollOffset;
             state.followTail = r.followTail;
-            cache.width = undefined;
+            cache.key = undefined;
             requestRender();
             return;
           }
@@ -283,7 +283,7 @@ export function createWorkflowsView(
           state.promptExpanded = false;
           resetDetailScroll(); // 切 agent → 底部对齐（对齐 subagents 进详情即钉底）
         }
-        cache.width = undefined;
+        cache.key = undefined;
         requestRender();
         return;
       }
@@ -308,7 +308,7 @@ export function createWorkflowsView(
             resetDetailScroll(); // 切 agent → 底部对齐
           }
         }
-        cache.width = undefined;
+        cache.key = undefined;
         requestRender();
         return;
       }
@@ -327,7 +327,7 @@ export function createWorkflowsView(
           state.promptExpanded = !state.promptExpanded;
           // 展开/折叠改变内容长度，render 路径 clamp 收敛；保持当前锚点语义
         }
-        cache.width = undefined;
+        cache.key = undefined;
         requestRender();
         return;
       }
@@ -336,11 +336,11 @@ export function createWorkflowsView(
       if (data === "p") {
         if (run.state.status === "running") {
           void actions.pause(run.runId)
-            .then(() => { cache.width = undefined; requestRender(); })
+            .then(() => { cache.key = undefined; requestRender(); })
             .catch((err: Error) => ctx.ui.notify(`Pause failed: ${err.message}`, "error"));
         } else if (run.state.status === "paused") {
           void actions.resume(run.runId)
-            .then(() => { cache.width = undefined; requestRender(); })
+            .then(() => { cache.key = undefined; requestRender(); })
             .catch((err: Error) => ctx.ui.notify(`Resume failed: ${err.message}`, "error"));
         }
         return;
@@ -348,7 +348,7 @@ export function createWorkflowsView(
       if (data === "a") {
         if (run.state.status === "running" || run.state.status === "paused") {
           void actions.abort(run.runId)
-            .then(() => { cache.width = undefined; requestRender(); })
+            .then(() => { cache.key = undefined; requestRender(); })
             .catch((err: Error) => ctx.ui.notify(`Abort failed: ${err.message}`, "error"));
         }
         return;
@@ -360,7 +360,7 @@ export function createWorkflowsView(
         state.saveInputValue = run.spec.scriptName;
         state.saveMessage = "";
         state.saveMsgOk = false;
-        cache.width = undefined;
+        cache.key = undefined;
         requestRender();
         return;
       }
@@ -377,7 +377,7 @@ export function createWorkflowsView(
  // Escape → 退出 save 模式
       if (matchesKey(data, Key.escape)) {
         state.saveMode = false;
-        cache.width = undefined;
+        cache.key = undefined;
         requestRender();
         return;
       }
@@ -387,7 +387,7 @@ export function createWorkflowsView(
         if (!name) {
           state.saveMessage = "Please enter a name";
           state.saveMsgOk = false;
-          cache.width = undefined;
+          cache.key = undefined;
           requestRender();
           return;
         }
@@ -396,13 +396,13 @@ export function createWorkflowsView(
             state.saveMessage = msg;
             state.saveMsgOk = true;
             state.saveMode = false;
-            cache.width = undefined;
+            cache.key = undefined;
             requestRender();
           })
           .catch((err: Error) => {
             state.saveMessage = err.message;
             state.saveMsgOk = false;
-            cache.width = undefined;
+            cache.key = undefined;
             requestRender();
           });
         return;
@@ -413,7 +413,7 @@ export function createWorkflowsView(
         if (state.saveInputValue.length > 0) {
           state.saveInputValue = state.saveInputValue.slice(0, -1);
         }
-        cache.width = undefined;
+        cache.key = undefined;
         requestRender();
         return;
       }
@@ -421,7 +421,7 @@ export function createWorkflowsView(
       if (data.length === 1 && data.charCodeAt(0) >= PRINTABLE_CHAR_MIN) {
         state.saveMessage = "";
         state.saveInputValue += data;
-        cache.width = undefined;
+        cache.key = undefined;
         requestRender();
         return;
       }
@@ -431,13 +431,14 @@ export function createWorkflowsView(
  // ── Component（SDK 规范：render(width) → string[] + handleInput + invalidate） ──
     return {
       invalidate(): void {
-        cache.width = undefined;
+        cache.key = undefined;
         cache.lines = undefined;
       },
       render(width: number): string[] {
-        if (cache.lines && cache.width === width) return cache.lines;
-        clampSelections();
         const height = tui.terminal.rows;
+        const key = `${width}x${height}`;
+        if (cache.lines && cache.key === key) return cache.lines;
+        clampSelections();
  // 缺陷 #1 修复：每次 render 从 run.state.trace 实时读（toArray 返回内部数组引用，
  // 后续 trace.append 会反映到 view），不再用 factory 时的冻结快照。
         const liveGroups = buildPhaseGroups([...run.state.trace.toArray()]);
@@ -446,7 +447,7 @@ export function createWorkflowsView(
         const lines = raw.length < height
           ? [...raw, ...Array.from({ length: height - raw.length }, () => "")]
           : raw;
-        cache.width = width;
+        cache.key = key;
         cache.lines = lines;
         return lines;
       },
@@ -612,6 +613,25 @@ function mergeBody(
   }
 }
 
+// 分屏视图固定头部行数（title + separator = 2）。
+const SPLIT_HEADER_LINES = 2;
+
+/** 计算滚动视口起始 index，确保选中项可见（居中策略，参考 subagents renderLeftColumn）。
+ *  返回 [startIdx, viewportH]：startIdx 是内容区第一个可见项的 index，viewportH 是内容区可显示行数。 */
+function computeViewport(
+  totalCount: number,
+  selectedIdx: number,
+  bodyH: number,
+): { startIdx: number; viewportH: number } {
+  const viewportH = Math.max(0, bodyH - SPLIT_HEADER_LINES);
+  if (viewportH <= 0) return { startIdx: 0, viewportH: 0 };
+  if (totalCount <= viewportH) return { startIdx: 0, viewportH };
+  // 选中项居中，到列表顶/底贴边
+  const maxStart = Math.max(0, totalCount - viewportH);
+  const center = Math.floor(selectedIdx - viewportH / OVERLAY_CENTER_DIVISOR);
+  return { startIdx: Math.max(0, Math.min(center, maxStart)), viewportH };
+}
+
 // ── Level 0: Phase selection ──────────────────────────────────
 
 function renderLevel0(
@@ -627,75 +647,36 @@ function renderLevel0(
   const leftLines: string[] = [];
   const rightLines: string[] = [];
 
- // Left: sidebar title + phase list（固定高度 viewport + 滚动）
+ // Left: sidebar title + phase list（固定高度 viewport + 滚动，只构建可见行）
   leftLines.push(theme.fg("muted", "Phases"));
   leftLines.push("─".repeat(SIDEBAR_WIDTH));
- // phase list 内容行（不含 title 和 separator）
-  const phaseContentStart = leftLines.length;
-  for (let i = 0; i < phases.length; i++) {
+  const { startIdx: phaseStart, viewportH: phaseViewportH } = computeViewport(phases.length, state.phaseIdx, bodyH);
+  for (let i = phaseStart; i < phaseStart + phaseViewportH && i < phases.length; i++) {
     leftLines.push(formatPhaseLine(phases[i], i, i === state.phaseIdx, theme, SIDEBAR_WIDTH));
   }
- // 滚动：确保选中的 phase 在可视区域内
-  const phaseContentLines = leftLines.length - phaseContentStart;
-  const phaseViewportH = bodyH - phaseContentStart; // 可用视口高度
-  if (phaseContentLines > phaseViewportH) {
-    // 调整滚动偏移，确保选中项可见
-    const selectedOffset = state.phaseIdx;
-    if (selectedOffset < state.phaseScrollOffset) {
-      state.phaseScrollOffset = selectedOffset;
-    } else if (selectedOffset >= state.phaseScrollOffset + phaseViewportH) {
-      state.phaseScrollOffset = selectedOffset - phaseViewportH + 1;
-    }
-    // 截取可见区域
-    const visiblePhases = leftLines.slice(phaseContentStart + state.phaseScrollOffset, phaseContentStart + state.phaseScrollOffset + phaseViewportH);
-    leftLines.length = phaseContentStart;
-    leftLines.push(...visiblePhases);
-  }
- // padding 到固定高度
-  while (leftLines.length < bodyH) {
-    leftLines.push("");
-  }
+  // 回写滚动偏移（clamp，防止状态脏值）
+  state.phaseScrollOffset = phaseStart;
+  // padding 到固定高度
+  while (leftLines.length < bodyH) leftLines.push("");
   leftLines.length = bodyH;
 
  // Right: agents in the currently selected phase only（固定高度 viewport + 滚动）
   const selectedPhase = phases[state.phaseIdx] ?? phases[0];
-  if (selectedPhase) {
-    const title = selectedPhase.name
+  rightLines.push(theme.fg("muted", selectedPhase
+    ? (selectedPhase.name
       ? `${selectedPhase.name} · ${selectedPhase.nodes.length} agents · ${formatElapsed(run.meta.startedAt, now)}`
-      : `${selectedPhase.nodes.length} agents · ${formatElapsed(run.meta.startedAt, now)}`;
-    rightLines.push(theme.fg("muted", title));
-    rightLines.push("─".repeat(mainWidth));
-    // agent list 内容行
-    const agentContentStart = rightLines.length;
-    for (const node of selectedPhase.nodes) {
-      rightLines.push(formatAgentOneLiner(node, theme));
+      : `${selectedPhase.nodes.length} agents · ${formatElapsed(run.meta.startedAt, now)}`)
+    : "(no phase)"));
+  rightLines.push("─".repeat(mainWidth));
+  if (selectedPhase) {
+    const { startIdx: agentStart, viewportH: agentViewportH } = computeViewport(selectedPhase.nodes.length, state.agentIdx, bodyH);
+    for (let i = agentStart; i < agentStart + agentViewportH && i < selectedPhase.nodes.length; i++) {
+      rightLines.push(formatAgentOneLiner(selectedPhase.nodes[i], theme));
     }
-    // 滚动：确保选中的 agent 在可视区域内
-    const agentContentLines = rightLines.length - agentContentStart;
-    const agentViewportH = bodyH - agentContentStart; // 可用视口高度
-    if (agentContentLines > agentViewportH) {
-      const selectedOffset = state.agentIdx;
-      if (selectedOffset < state.agentScrollOffset) {
-        state.agentScrollOffset = selectedOffset;
-      } else if (selectedOffset >= state.agentScrollOffset + agentViewportH) {
-        state.agentScrollOffset = selectedOffset - agentViewportH + 1;
-      }
-      const visibleAgents = rightLines.slice(agentContentStart + state.agentScrollOffset, agentContentStart + state.agentScrollOffset + agentViewportH);
-      rightLines.length = agentContentStart;
-      rightLines.push(...visibleAgents);
-    }
-    // padding 到固定高度
-    while (rightLines.length < bodyH) {
-      rightLines.push("");
-    }
-    rightLines.length = bodyH;
-  } else {
-    // 没有 agent 时，padding 到固定高度
-    while (rightLines.length < bodyH) {
-      rightLines.push("");
-    }
-    rightLines.length = bodyH;
+    state.agentScrollOffset = agentStart;
   }
+  while (rightLines.length < bodyH) rightLines.push("");
+  rightLines.length = bodyH;
 
   mergeBody(lines, leftLines, rightLines);
 }
@@ -715,44 +696,31 @@ function renderLevel1(
   const leftLines: string[] = [];
   const rightLines: string[] = [];
 
- // Left: sidebar title + phase list（固定高度 viewport + 滚动）
+ // Left: sidebar title + phase list（固定高度 viewport + 滚动，只构建可见行）
   leftLines.push(theme.fg("muted", "Phases"));
   leftLines.push("─".repeat(SIDEBAR_WIDTH));
-  const phaseContentStart = leftLines.length;
-  for (let i = 0; i < phases.length; i++) {
+  const { startIdx: phaseStart, viewportH: phaseViewportH } = computeViewport(phases.length, state.phaseIdx, bodyH);
+  for (let i = phaseStart; i < phaseStart + phaseViewportH && i < phases.length; i++) {
     leftLines.push(formatPhaseLine(phases[i], i, i === state.phaseIdx, theme, SIDEBAR_WIDTH));
   }
- // 滚动：确保选中的 phase 在可视区域内
-  const phaseContentLines = leftLines.length - phaseContentStart;
-  const phaseViewportH = bodyH - phaseContentStart;
-  if (phaseContentLines > phaseViewportH) {
-    const selectedOffset = state.phaseIdx;
-    if (selectedOffset < state.phaseScrollOffset) {
-      state.phaseScrollOffset = selectedOffset;
-    } else if (selectedOffset >= state.phaseScrollOffset + phaseViewportH) {
-      state.phaseScrollOffset = selectedOffset - phaseViewportH + 1;
-    }
-    const visiblePhases = leftLines.slice(phaseContentStart + state.phaseScrollOffset, phaseContentStart + state.phaseScrollOffset + phaseViewportH);
-    leftLines.length = phaseContentStart;
-    leftLines.push(...visiblePhases);
-  }
-  while (leftLines.length < bodyH) {
-    leftLines.push("");
-  }
+  state.phaseScrollOffset = phaseStart;
+  while (leftLines.length < bodyH) leftLines.push("");
   leftLines.length = bodyH;
 
  // Right: agent list（固定高度 viewport + 滚动）
   const currentPhase = phases[state.phaseIdx];
   const agents = currentPhase?.nodes ?? [];
   if (currentPhase) {
-    const title = currentPhase.name
+    rightLines.push(theme.fg("muted", currentPhase.name
       ? `${currentPhase.name} · ${currentPhase.nodes.length} agents`
-      : `${currentPhase.nodes.length} agents`;
-    rightLines.push(theme.fg("muted", title));
+      : `${currentPhase.nodes.length} agents`));
+    rightLines.push("─".repeat(mainWidth));
+  } else {
+    rightLines.push(theme.fg("muted", "(no phase)"));
     rightLines.push("─".repeat(mainWidth));
   }
-  const agentContentStart = rightLines.length;
-  for (let i = 0; i < agents.length; i++) {
+  const { startIdx: agentStart, viewportH: agentViewportH } = computeViewport(agents.length, state.agentIdx, bodyH);
+  for (let i = agentStart; i < agentStart + agentViewportH && i < agents.length; i++) {
     const node = agents[i];
     const pointer = i === state.agentIdx ? "❯ " : "  ";
     const dot = statusDotStr(node.status, theme);
@@ -774,23 +742,8 @@ function renderLevel1(
       rightLines.push(`${pointer}${dot} ${node.agent}    ${node.model}    ${tokStr} · ${tcCount} tools · ${elapsed}`);
     }
   }
- // 滚动：确保选中的 agent 在可视区域内
-  const agentContentLines = rightLines.length - agentContentStart;
-  const agentViewportH = bodyH - agentContentStart;
-  if (agentContentLines > agentViewportH) {
-    const selectedOffset = state.agentIdx;
-    if (selectedOffset < state.agentScrollOffset) {
-      state.agentScrollOffset = selectedOffset;
-    } else if (selectedOffset >= state.agentScrollOffset + agentViewportH) {
-      state.agentScrollOffset = selectedOffset - agentViewportH + 1;
-    }
-    const visibleAgents = rightLines.slice(agentContentStart + state.agentScrollOffset, agentContentStart + state.agentScrollOffset + agentViewportH);
-    rightLines.length = agentContentStart;
-    rightLines.push(...visibleAgents);
-  }
-  while (rightLines.length < bodyH) {
-    rightLines.push("");
-  }
+  state.agentScrollOffset = agentStart;
+  while (rightLines.length < bodyH) rightLines.push("");
   rightLines.length = bodyH;
 
   mergeBody(lines, leftLines, rightLines);
