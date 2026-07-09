@@ -181,21 +181,25 @@ describe("W2 — draftText migration", () => {
 
 // ── hint line: append-only UX hint ──
 describe("W2 — hint line", () => {
-	it("C-HINT-1: freeform editor hint contains Backspace deletes", () => {
+	it("C-HINT-1: freeform editor hint contains all expected hints", () => {
 		const { c } = make([singleQ]);
 		c.handleInput(DOWN);
 		c.handleInput(DOWN);
 		c.handleInput(ENTER);
 		const lines = c.render(60);
-		const helpLine = lines.find((l) => l.includes("Backspace deletes"));
-		expect(helpLine).toBeDefined();
+		const hintLine = lines.find((l: string) => l.includes("Type to add") && l.includes("Backspace deletes"));
+		expect(hintLine).toBeDefined();
+		expect(hintLine).toContain("Enter submit");
+		expect(hintLine).toContain("Esc back");
 	});
 
-	it("C-HINT-2: comment editor hint contains Backspace deletes", () => {
+	it("C-HINT-2: comment editor hint contains all expected hints", () => {
 		const { c } = make([singleQWithComment]);
 		c.handleInput(ENTER);
 		const lines = c.render(60);
-		const helpLine = lines.find((l) => l.includes("Backspace deletes"));
-		expect(helpLine).toBeDefined();
+		const hintLine = lines.find((l: string) => l.includes("Type to add") && l.includes("Backspace deletes"));
+		expect(hintLine).toBeDefined();
+		expect(hintLine).toContain("Enter submit");
+		expect(hintLine).toContain("Esc back");
 	});
 });

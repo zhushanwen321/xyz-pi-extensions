@@ -63,7 +63,6 @@ export const InputSchema = Type.Object({
 // ── 派生类型 ─────────────────────────────────────────
 export type Option = Static<typeof OptionSchema>;
 export type Question = Static<typeof QuestionSchema>;
-export type Input = Static<typeof InputSchema>;
 
 // ── Result schema（details，renderResult 数据源） ─────
 export const ResultSchema = Type.Object({

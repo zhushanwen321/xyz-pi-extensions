@@ -1,5 +1,5 @@
 // src/index.ts
-import type { AgentToolResult, ExtensionAPI, ExtensionContext, ToolRenderResultOptions } from "@mariozechner/pi-coding-agent";
+import type { AgentToolResult, AgentToolUpdateCallback, ExtensionAPI, ExtensionContext, ToolRenderResultOptions } from "@mariozechner/pi-coding-agent";
 import { Box, Text, TruncatedText, truncateToWidth } from "@mariozechner/pi-tui";
 import { type Static } from "@sinclair/typebox";
 
@@ -76,7 +76,7 @@ If you recommend an option, prefix its label with "(Recommended)" and list it fi
 			_toolCallId: string,
 			params: Static<typeof InputSchema>,
 			signal: AbortSignal | undefined,
-			_onUpdate: unknown,
+			_onUpdate: AgentToolUpdateCallback<AskUserDetails> | undefined,
 			ctx: ExtensionContext,
 		): Promise<ExecuteResult> {
 			const questions = params.questions;

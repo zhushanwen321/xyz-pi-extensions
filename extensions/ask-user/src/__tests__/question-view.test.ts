@@ -2,13 +2,8 @@
 import { describe, expect, it } from "vitest";
 
 import { getSplitPaneWidths, renderQuestionView } from "../question-view";
-import { createQuestionState, type Question, type QuestionState, type ThemeLike } from "../types";
-
-const stubTheme: ThemeLike = {
-	fg: (_t: string, s: string) => s,
-	bg: (_t: string, s: string) => s,
-	bold: (s: string) => s,
-};
+import { createQuestionState, type Question, type QuestionState } from "../types";
+import { stubTheme } from "./fixtures";
 
 const singleQ: Question = {
 	question: "Which database?",

@@ -6,6 +6,7 @@ import { describe, expect, it } from "vitest";
 import { AskUserComponent } from "../component";
 import type { Question, Result } from "../types";
 import {
+	BACKSPACE,
 	DELETE,
 	DOWN,
 	END,
@@ -27,7 +28,7 @@ import {
 } from "./fixtures";
 
 const make = (
-	questions: Question[],
+	questions: Question[] = [singleQ],
 ): { c: AskUserComponent; result: { val: Result | null | undefined } } => {
 	const result = { val: undefined as Result | null | undefined };
 	const c = new AskUserComponent(questions, mockTui, stubTheme, (r) => (result.val = r));
@@ -89,17 +90,19 @@ describe("W3 — extended no-op key coverage (C-KEYMAP-*)", () => {
 		expect(editorLine).not.toContain("H");
 	});
 
-	it("C-KEYMAP-END: End key is no-op in freeform editor", () => {
-		const { c } = make([singleQ]);
+	it("C-KEYMAP-END: End key moves cursor to end of text", () => {
+		const { c } = make();
 		openFreeform(c);
-		c.handleInput("a");
-		c.handleInput(END);
-		c.handleInput("b");
+		c.handleInput("abc");
+		c.handleInput(HOME); // 移到开头
+		c.handleInput(END);  // 移到末尾
+		// 验证在末尾输入 "d" 被追加到末尾
+		c.handleInput("d");
 		const lines = c.render(60);
-		const editorLine = lines.find((l) => l.includes("\x1b[7m"));
-		expect(editorLine).toContain("ab");
-		expect(editorLine).not.toContain("\x1b[A"); expect(editorLine).not.toContain("\x1b[B"); expect(editorLine).not.toContain("\x1b[C"); expect(editorLine).not.toContain("\x1b[D");
-		expect(editorLine).not.toContain("F");
+		const editorLine = lines.find((l: string) => l.includes("\x1b[7m"));
+		// 去除 ANSI 转义码后检查
+		const stripped = editorLine!.replace(/\x1b\[[0-9;]*m/g, "");
+		expect(stripped).toContain("abcd");
 	});
 
 	it("C-KEYMAP-INSERT: Insert key is no-op in freeform editor", () => {
@@ -280,5 +283,33 @@ describe("W3 — single char append via parseKey path (C-PASTE-5 equiv)", () => 
 		const lines = c.render(60);
 		const editorLine = lines.find((l) => l.includes("\x1b[7m"));
 		expect(editorLine).toContain("hello");
+	});
+});
+
+// ── C-BKSP-EDGE: backspace at cursorIndex=0 ──
+
+describe("W3 — backspace at cursorIndex=0 (C-BKSP-EDGE)", () => {
+	it("C-BKSP-EDGE: backspace at cursorIndex=0 is no-op on empty text", () => {
+		const { c } = make();
+		// 打开 freeform 编辑器
+		openFreeform(c);
+		c.handleInput(BACKSPACE); // 空文本 + cursorIndex=0
+		// 不应 crash
+		const lines = c.render(60);
+		// 编辑器仍然可见（反色空格光标）
+		expect(lines.some((l: string) => l.includes("\x1b[7m"))).toBe(true);
+	});
+
+	it("C-BKSP-EDGE-2: backspace at cursorIndex=0 on non-empty text is no-op", () => {
+		const { c } = make();
+		openFreeform(c);
+		c.handleInput("abc");
+		c.handleInput(HOME); // 移到开头
+		c.handleInput(BACKSPACE); // cursorIndex=0，不应删除
+		const lines = c.render(60);
+		const editorLine = lines.find((l: string) => l.includes("\x1b[7m"));
+		// 文本完整保留（去除 ANSI 转义码后检查）
+		const stripped = editorLine!.replace(/\x1b\[[0-9;]*m/g, "");
+		expect(stripped).toContain("abc");
 	});
 });

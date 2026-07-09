@@ -12,6 +12,12 @@ import {
 	type ThemeLike,
 } from "./types";
 
+const SPLIT_PANE_LEFT_RATIO = 0.42;
+const DESCRIPTION_INDENT_MULTI = 10;
+const DESCRIPTION_INDENT_SINGLE = 8;
+const PREVIEW_MIN_WIDTH = 10;
+const QUESTION_TEXT_MARGIN = 2;
+
 export interface DisplayOption {
 	label: string;
 	description?: string;
@@ -71,7 +77,7 @@ export function getSplitPaneWidths(width: number): { left: number; right: number
 	if (width < SPLIT_PANE_MIN_WIDTH) return null;
 	const available = width - SPLIT_PANE_SEPARATOR.length;
 	if (available < SPLIT_PANE_LEFT_MIN + SPLIT_PANE_RIGHT_MIN) return null;
-	const preferredLeft = Math.floor(available * 0.42);
+	const preferredLeft = Math.floor(available * SPLIT_PANE_LEFT_RATIO);
 	const left = Math.max(
 		SPLIT_PANE_LEFT_MIN,
 		Math.min(preferredLeft, available - SPLIT_PANE_RIGHT_MIN),
@@ -151,7 +157,7 @@ function buildOptionLines(
 			const num = i + 1;
 			add(`${prefix} ${box} ${t.fg(labelColor, `${num}. ${opt.label}`)}`);
 			if (opt.description && !hideDescriptions) {
-				const wrapped = wrapTextWithAnsi(t.fg("muted", opt.description), width - 10);
+				const wrapped = wrapTextWithAnsi(t.fg("muted", opt.description), width - DESCRIPTION_INDENT_MULTI);
 				for (const line of wrapped) add(`          ${line}`);
 			}
 		} else {
@@ -161,7 +167,7 @@ function buildOptionLines(
 			const num = i + 1;
 			add(`${prefix} ${check} ${t.fg(labelColor, `${num}. ${opt.label}`)}`);
 			if (opt.description && !hideDescriptions) {
-				const wrapped = wrapTextWithAnsi(t.fg("muted", opt.description), width - 8);
+				const wrapped = wrapTextWithAnsi(t.fg("muted", opt.description), width - DESCRIPTION_INDENT_SINGLE);
 				for (const line of wrapped) add(`        ${line}`);
 			}
 		}
@@ -190,7 +196,7 @@ function buildPreviewLines(
 		if (opt.description?.trim()) text += `\n\n${opt.description}`;
 	}
 
-	const wrapped = wrapTextWithAnsi(t.fg("muted", text), Math.max(10, width));
+	const wrapped = wrapTextWithAnsi(t.fg("muted", text), Math.max(PREVIEW_MIN_WIDTH, width));
 	const lines = wrapped.slice(0, maxLines);
 	if (wrapped.length > maxLines) lines.push(t.fg("dim", "…"));
 	return lines;
@@ -277,13 +283,13 @@ export function renderQuestionView(
 	const divider = (): void => add(t.fg("dim", "─".repeat(Math.max(0, width))));
 
 	// 问题文本（word-wrap）
-	const wrapped = wrapTextWithAnsi(t.fg("text", ` ${q.question}`), width - 2);
+	const wrapped = wrapTextWithAnsi(t.fg("text", ` ${q.question}`), width - QUESTION_TEXT_MARGIN);
 	for (const line of wrapped) add(line);
 
 	// 上下文（如有）
 	if (q.context?.trim()) {
 		divider();
-		const ctxWrapped = wrapTextWithAnsi(t.fg("muted", q.context), width - 2);
+		const ctxWrapped = wrapTextWithAnsi(t.fg("muted", q.context), width - QUESTION_TEXT_MARGIN);
 		for (const line of ctxWrapped) add(line);
 	}
 

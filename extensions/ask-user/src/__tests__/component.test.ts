@@ -915,4 +915,19 @@ describe("AskUserComponent — new behavior (post-refactor)", () => {
 		c.handleInput(ENTER);
 		expect(result.val).toBeUndefined();
 	});
+
+	it("C-TAB-NOLEAK: Tab in options mode with single question is no-op", () => {
+		const c = new AskUserComponent(
+			[{ question: "Pick one", options: [{ label: "A" }, { label: "B" }] }],
+			mockTui,
+			stubTheme,
+			() => {},
+		);
+		c.handleInput(DOWN);
+		c.handleInput(TAB);
+		// 不应 crash，选项仍可见
+		const lines = c.render(60);
+		expect(lines.some((l: string) => l.includes("A"))).toBe(true);
+		expect(lines.some((l: string) => l.includes("B"))).toBe(true);
+	});
 });

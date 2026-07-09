@@ -332,6 +332,10 @@ export class AskUserComponent implements Component {
 	}
 
 	private handleEditorInput(data: string, state: QuestionState, q: Question): void {
+		// 检查 charAt 是否是 UTF-16 高代理（surrogate pair 的前半部分）
+		const isHighSurrogate = (s: string, i: number): boolean =>
+			(s.charCodeAt(i) & 0xFC00) === 0xD800;
+
 		// parseKey 白名单拦截 — 替代旧的 matchesKey 散调 + 兜底 printable 遍历
 		const keyId = parseKey(data);
 
@@ -387,8 +391,10 @@ export class AskUserComponent implements Component {
 			}
 			if (matchesKey(data, "backspace")) {
 				if (state.cursorIndex > 0) {
-					state.draftText = state.draftText.slice(0, state.cursorIndex - 1) + state.draftText.slice(state.cursorIndex);
-					state.cursorIndex--;
+					// 删除整个 code point（surrogate pair 时删 2 个 code unit）
+					const deleteCount = state.cursorIndex >= 2 && isHighSurrogate(state.draftText, state.cursorIndex - 2) ? 2 : 1;
+					state.draftText = state.draftText.slice(0, state.cursorIndex - deleteCount) + state.draftText.slice(state.cursorIndex);
+					state.cursorIndex -= deleteCount;
 				}
 				this.invalidate();
 				this.tui.requestRender();
@@ -396,13 +402,20 @@ export class AskUserComponent implements Component {
 			}
 			// 光标移动
 			if (matchesKey(data, "left")) {
-				state.cursorIndex = Math.max(0, state.cursorIndex - 1);
+				// 跳过 surrogate pair 中间位置
+				const newLeft = state.cursorIndex - 1;
+				state.cursorIndex = newLeft > 0 && isHighSurrogate(state.draftText, newLeft - 1)
+					? newLeft - 1
+					: Math.max(0, newLeft);
 				this.invalidate();
 				this.tui.requestRender();
 				return;
 			}
 			if (matchesKey(data, "right")) {
-				state.cursorIndex = Math.min(state.draftText.length, state.cursorIndex + 1);
+				// 跳过 surrogate pair 中间位置
+				state.cursorIndex = isHighSurrogate(state.draftText, state.cursorIndex)
+					? Math.min(state.draftText.length, state.cursorIndex + 2)
+					: Math.min(state.draftText.length, state.cursorIndex + 1);
 				this.invalidate();
 				this.tui.requestRender();
 				return;

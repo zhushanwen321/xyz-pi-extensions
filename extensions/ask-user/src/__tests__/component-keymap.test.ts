@@ -3,7 +3,7 @@
 import { describe, expect, it } from "vitest";
 
 import { AskUserComponent } from "../component";
-import type { Question, Result } from "../types";
+import type { Question } from "../types";
 import {
 	ALT_DOWN,
 	ALT_LEFT,
@@ -29,7 +29,7 @@ import {
 	HOME,
 	INSERT,
 	LEFT,
-	mockTui,
+	make,
 	multiQWithComment,
 	OSC_BEL,
 	OSC_ST,
@@ -41,7 +41,6 @@ import {
 	SHIFT_RIGHT,
 	SHIFT_UP,
 	singleQ,
-	stubTheme,
 	SUPER_DOWN,
 	SUPER_LEFT,
 	SUPER_RIGHT,
@@ -50,15 +49,6 @@ import {
 	UNKNOWN_SS3,
 	UP,
 } from "./fixtures";
-
-// Helper: make component with mutable result holder
-const make = (
-	questions: Question[],
-): { c: AskUserComponent; result: { val: Result | null | undefined } } => {
-	const result = { val: undefined as Result | null | undefined };
-	const c = new AskUserComponent(questions, mockTui, stubTheme, (r) => (result.val = r));
-	return { c, result };
-};
 
 /** Helper: 打开 comment 编辑器并返回 component（多问题避免单问题 auto-submit） */
 function openComment(): AskUserComponent {

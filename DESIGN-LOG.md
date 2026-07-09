@@ -12,6 +12,7 @@
 | 2026-05-22-batch-operations | 批量操作 | 05-22 | — | — | in-progress |
 | 2026-05-24-subagent-memory-session | subagent memory session | 05-24 | — | — | in-progress |
 | fix-ask-user-arrow-leak | ask-user 方向键泄漏修复 + parseKey 白名单重构 | 07-09 | 07-09 | .xyz-harness/fix-ask-user-arrow-leak/ | archived |
+| fix-ask-user-unknown-csi-leak | unknown CSI/OSC 泄漏修复 | 07-09 | 07-09 | .xyz-harness/fix-ask-user-unknown-csi-leak/ | archived |
 
 ## 状态语义
 
@@ -28,7 +29,5 @@
 | ADR-001 | Subagent 进程隔离架构 | accepted |
 | ADR-002 | Goal 7 态状态机 | accepted |
 | ADR-003 | Goal 强制任务分解 + evidence | accepted |
-
-| fix-ask-user-unknown-csi-leak | 2026-07-09 | archived | ESC 开头硬守卫拦截未知控制序列泄漏 + 9 类形态 17 条回归测试 | 271 tests passed |
 
 > 完整 ADR 清单见 [docs/adr/](./docs/adr/)。
