@@ -112,6 +112,8 @@ export interface QuestionState {
 	commentValue: string | null;
 	/** 当前交互模式 */
 	mode: QuestionMode;
+	/** 编辑器草稿文本（每问题独立持有，迁移到 QuestionState 后替代组件级 editorText） */
+	draftText: string;
 }
 
 /** 创建初始 QuestionState */
@@ -124,5 +126,6 @@ export function createQuestionState(): QuestionState {
 		freeTextValue: null,
 		commentValue: null,
 		mode: "options",
+		draftText: "",
 	};
 }
