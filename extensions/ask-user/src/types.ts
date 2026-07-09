@@ -108,6 +108,9 @@ export interface QuestionState {
 	confirmed: boolean;
 	/** Other 自由文本答案；null=未输入 */
 	freeTextValue: string | null;
+	/** freeform Esc 保存的未提交草稿；null=无草稿。
+	 *  与 freeTextValue（已提交答案）分离，避免放弃的草稿污染答案、触发 auto-confirm。 */
+	freeDraft: string | null;
 	/** 可选评论；null=未输入 */
 	commentValue: string | null;
 	/** 当前交互模式 */
@@ -124,6 +127,7 @@ export function createQuestionState(): QuestionState {
 		selectedIndices: new Set<number>(),
 		confirmed: false,
 		freeTextValue: null,
+		freeDraft: null,
 		commentValue: null,
 		mode: "options",
 		draftText: "",

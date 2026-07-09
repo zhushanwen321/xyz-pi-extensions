@@ -259,7 +259,7 @@ export class AskUserComponent implements Component {
 		// Other row → Enter opens freeform editor
 		if (onOther && matchesKey(data, "enter")) {
 			state.mode = "freeform";
-			state.draftText = state.freeTextValue ?? "";
+			state.draftText = state.freeTextValue ?? state.freeDraft ?? "";
 			this.invalidate();
 			this.tui.requestRender();
 			return;
@@ -343,8 +343,9 @@ export class AskUserComponent implements Component {
 					this.advance();
 					return;
 				}
-				// freeform Esc: save draft to freeTextValue so it persists across tab switches
-				state.freeTextValue = state.draftText || null;
+				// freeform Esc: save draft to freeDraft (separate from submitted freeTextValue)
+				// so discarded drafts don't pollute the answer or trigger auto-confirm.
+				state.freeDraft = state.draftText || null;
 				state.mode = "options";
 				state.draftText = "";
 				this.invalidate();
