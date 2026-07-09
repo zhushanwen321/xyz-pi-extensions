@@ -1,22 +1,16 @@
 /**
  * Workflow Extension — Interface helpers
  *
- * 3 个 helper（D-11/D-12：将原 ApprovalPolicy class 与 NotificationService 降为
- * 接口层薄 helper，避免对只有单一实现的逻辑过度建模）：
- * - requiresConfirmation(script, approved) — tmp 脚本或未批准脚本需用户确认
- * - recordApproval(name, pi) — 持久化用户批准（appendEntry）
- * - notifyDone(pi, runId, run, notified) — run 完成时发 completion notification
+ * notifyDone(pi, runId, run, notified) — run 完成时发 completion notification。
  *
  * 层归属：Interface（依赖 Pi SDK + Engine WorkflowRun 模型）。
  *
- * 参考：domain-models.md §D-11、§D-12。recordApproval 的读取端是 index.ts
- * session_start 的 sessionApprovals 重建。
+ * 参考：domain-models.md §D-12。
  */
 
 import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
 
 import type { WorkflowRun } from "../engine/models/workflow-run.js";
-import type { WorkflowScript } from "../engine/models/workflow-script.js";
 
 // ── 常量 ─────────────────────────────────────────────────────
 
@@ -25,41 +19,6 @@ const MAX_RESULT_LENGTH = 8000;
 const TASK_SHORT_LENGTH = 150;
 const CONTENT_TRUNC_LENGTH = 500;
 const RUNID_CMD_SHORT = 8;
-
-/** appendEntry 的 customType（session_start 重建时识别此标记）。 */
-export const APPROVAL_MEMORY_TYPE = "workflow-approval-memory";
-
-// ── requiresConfirmation（D-11 ApprovalPolicy 降级） ────────
-
-/**
- * 判断 workflow 脚本是否需要用户确认才能运行。
- *
- * 规则（D-11）：
- * - source==="tmp"（.pi/workflows/.tmp/ 临时脚本）→ 始终需确认
- * - 未在 approved Set 中（用户未批准过）→ 需确认
- * - 已批准（approved.has(name)）→ 不需确认
- *
- * @param script WorkflowScript（含 source + name）
- * @param approved 本 session 已批准的脚本名集合（从 entries 重建）
- */
-export function requiresConfirmation(script: WorkflowScript, approved: Set<string>): boolean {
-  return script.source === "tmp" || !approved.has(script.name);
-}
-
-// ── recordApproval（持久化用户批准） ────────────────────────
-
-/**
- * 记录用户对一个 workflow 的批准（持久化到 session entries）。
- *
- * session_start 时从 entries 重建 approved Set（识别 APPROVAL_MEMORY_TYPE 标记），
- * 后续同 session 内不需重复确认。跨 session 通过 entries 持久化。
- *
- * @param name workflow 脚本名
- * @param pi ExtensionAPI（调 appendEntry）
- */
-export async function recordApproval(name: string, pi: ExtensionAPI): Promise<void> {
-  pi.appendEntry(APPROVAL_MEMORY_TYPE, { workflowName: name, approvedAt: new Date().toISOString() });
-}
 
 // ── notifyDone（D-12 NotificationService 降级） ─────────────
 

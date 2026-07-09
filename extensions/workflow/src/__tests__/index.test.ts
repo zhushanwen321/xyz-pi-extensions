@@ -3,9 +3,9 @@
 //
 // factory 集成测试。
 // 不 mock WorkflowOrchestrator（已删）—— mock Engine free functions + Infra 类。
-// 覆盖：session_start 重建 sessionApprovals + D-5 旧格式返回空 + D-4 kill-9 残留
+// 覆盖：D-5 旧格式返回空 + D-4 kill-9 残留
 // running→failed + pi.__workflowRun 新签名(status:"done"+reason) + reentry-guard
-// (2 tool 共享) + tmp workflow 不持久化。
+// (2 tool 共享)。
 
 /* eslint-disable taste/no-unsafe-cast */
 
@@ -57,7 +57,7 @@ vi.mock("../infra/agent-opts-resolver.js", () => ({
   cleanupAllTempFiles: vi.fn(),
 }));
 
-// registry: 默认 get 返回 undefined（not found）。run-approval 测试覆写。
+// registry: 默认 get 返回 undefined（not found）。reentry guard 测试覆写。
 vi.mock("../infra/workflow-script-registry-impl.js", () => ({
   WorkflowScriptRegistryImpl: vi.fn().mockImplementation(function (this: unknown) {
     this.get = vi.fn().mockResolvedValue(undefined);
@@ -140,17 +140,6 @@ function makeSavedScript(name = "deploy-app"): WorkflowScript {
     path: `/project/.pi/workflows/${name}.js`,
     sourceCode: `const meta = { name: "${name}" }; agent({ prompt: "hi" });`,
     meta: { name, description: `Deploy ${name}`, phases: ["build"] },
-    available: true,
-  });
-}
-
-function makeTmpScript(name = "tmp-cleanup"): WorkflowScript {
-  return new WorkflowScript({
-    name,
-    source: "tmp",
-    path: `/project/.pi/workflows/.tmp/${name}.js`,
-    sourceCode: `const meta = { name: "${name}" }; agent({ prompt: "hi" });`,
-    meta: { name, description: `Tmp ${name}`, phases: ["cleanup"] },
     available: true,
   });
 }
@@ -250,161 +239,6 @@ describe("factory registration", () => {
  // registerCommand(name, options) — name is first arg
     const cmdName = pi.registerCommand.mock.calls[0][0];
     expect(cmdName).toBe("workflows");
-  });
-});
-
-describe("workflow run approval gate", () => {
-  beforeEach(() => {
-    vi.clearAllMocks();
-    mockRunWorkflow.mockResolvedValue("run-id-123");
-  });
-
-  it("saved + unapproved + user confirms → runs + persists approval", async () => {
-    const script = makeSavedScript("deploy-app");
-    const { pi, workflowTool } = await bootstrap({ loadAllResult: [script] });
-
-    const ctx = createMockCtx({ hasUI: true, confirmResult: true });
-    const result = await workflowTool.execute(
-      "tc1",
-      { action: "run", name: "deploy-app" },
-      undefined,
-      undefined,
-      ctx,
-    );
-
-    expect(ctx.ui.confirm).toHaveBeenCalledTimes(1);
-    expect(mockRunWorkflow).toHaveBeenCalledTimes(1);
-    expect(result.details).toMatchObject({ action: "run", status: "running", name: "deploy-app" });
- // persisted to session memory
-    expect(pi.appendEntry).toHaveBeenCalledWith(
-      "workflow-approval-memory",
-      expect.objectContaining({ workflowName: "deploy-app" }),
-    );
-  });
-
-  it("saved + unapproved + user declines → does not run", async () => {
-    const script = makeSavedScript("deploy-app");
-    const { workflowTool } = await bootstrap({ loadAllResult: [script] });
-
-    const ctx = createMockCtx({ hasUI: true, confirmResult: false });
-    const result = await workflowTool.execute(
-      "tc2",
-      { action: "run", name: "deploy-app" },
-      undefined,
-      undefined,
-      ctx,
-    );
-
-    expect(ctx.ui.confirm).toHaveBeenCalledTimes(1);
-    expect(mockRunWorkflow).not.toHaveBeenCalled();
-    expect(result.details).toMatchObject({ status: "declined", name: "deploy-app" });
-  });
-
-  it("saved + already approved (same session) → skips confirm", async () => {
-    const script = makeSavedScript("deploy-app");
- // bootstrap with pre-existing approval entries → session_start rehydrates
-    const { workflowTool } = await bootstrap({
-      sessionId: "s-mem",
-      existingEntries: [
-        { customType: "workflow-approval-memory", data: { workflowName: "deploy-app" } },
-      ],
-      loadAllResult: [script],
-    });
-
-    const ctx = createMockCtx({ hasUI: true, confirmResult: true, sessionId: "s-mem" });
-    const result = await workflowTool.execute(
-      "tc3",
-      { action: "run", name: "deploy-app" },
-      undefined,
-      undefined,
-      ctx,
-    );
-
- // rehydrated → no confirm needed
-    expect(ctx.ui.confirm).not.toHaveBeenCalled();
-    expect(mockRunWorkflow).toHaveBeenCalledTimes(1);
-    expect(result.details).toMatchObject({ status: "running" });
-  });
-
-  it("tmp workflow always confirms (never persisted)", async () => {
-    const script = makeTmpScript("tmp-cleanup");
-    const { pi, workflowTool } = await bootstrap({
-      sessionId: "s-tmp",
-      loadAllResult: [script],
-    });
-
- // First call: tmp → confirm
-    const ctx1 = createMockCtx({ hasUI: true, confirmResult: true, sessionId: "s-tmp" });
-    const result1 = await workflowTool.execute(
-      "tc8a",
-      { action: "run", name: "tmp-cleanup" },
-      undefined,
-      undefined,
-      ctx1,
-    );
-    expect(ctx1.ui.confirm).toHaveBeenCalledTimes(1);
-    expect(result1.details).toMatchObject({ status: "running" });
- // tmp must NOT be persisted
-    expect(pi.appendEntry).not.toHaveBeenCalled();
-
-    mockRunWorkflow.mockClear();
-
- // Second call for same tmp → still confirms (not in sessionApprovals)
-    const ctx2 = createMockCtx({ hasUI: true, confirmResult: true, sessionId: "s-tmp" });
-    await workflowTool.execute(
-      "tc8b",
-      { action: "run", name: "tmp-cleanup" },
-      undefined,
-      undefined,
-      ctx2,
-    );
-    expect(ctx2.ui.confirm).toHaveBeenCalledTimes(1);
-    expect(mockRunWorkflow).toHaveBeenCalledTimes(1);
-  });
-
-  it("hasUI=false → RPC fallback (sendUserMessage), still runs", async () => {
-    const script = makeSavedScript("deploy-app");
-    const { pi, workflowTool } = await bootstrap({ loadAllResult: [script] });
-
-    const ctx = createMockCtx({ hasUI: false });
-    const result = await workflowTool.execute(
-      "tc6",
-      { action: "run", name: "deploy-app" },
-      undefined,
-      undefined,
-      ctx,
-    );
-
-    expect(ctx.ui?.confirm).not.toHaveBeenCalled();
-    expect(pi.sendUserMessage).toHaveBeenCalledWith(
-      expect.stringContaining("RPC"),
-      { deliverAs: "steer" },
-    );
-    expect(mockRunWorkflow).toHaveBeenCalledTimes(1);
-    expect(result.details).toMatchObject({ status: "running" });
-  });
-
-  it("approved workflow persists across session_start rehydrate", async () => {
-    const script = makeSavedScript("deploy-app");
-    const { workflowTool } = await bootstrap({
-      sessionId: "s-persist",
-      existingEntries: [
-        { customType: "workflow-approval-memory", data: { workflowName: "deploy-app" } },
-      ],
-      loadAllResult: [script],
-    });
-
-    const ctx = createMockCtx({ hasUI: true, confirmResult: true, sessionId: "s-persist" });
-    const result = await workflowTool.execute(
-      "tc9",
-      { action: "run", name: "deploy-app" },
-      undefined,
-      undefined,
-      ctx,
-    );
-
-    expect(ctx.ui.confirm).not.toHaveBeenCalled();
-    expect(result.details).toMatchObject({ status: "running" });
   });
 });
 

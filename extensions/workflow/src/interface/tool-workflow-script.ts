@@ -95,7 +95,7 @@ export function registerWorkflowScriptTool(
       "save (tmp→permanent), delete, list. Replaces workflow-generate + workflow-lint tools.",
     promptSnippet: "Generate, lint, save, delete, or list workflow scripts",
     promptGuidelines: [
-      "generate: AI writes a tmp workflow script to .pi/workflows/.tmp/. Show path to user, wait for confirmation before running.",
+      "generate: AI writes a tmp workflow script to .pi/workflows/.tmp/. Script can be run immediately via the workflow tool.",
       "lint: Statically check a script for common API misuse (outputSchema, result.output, file state).",
       "save: Promote a tmp script to permanent (.pi/workflows/).",
       "delete: Remove a script (blocked if a run is active).",
@@ -209,7 +209,7 @@ function actionGenerate(params: ScriptParams, signal: AbortSignal | undefined): 
     content: [
       {
         type: "text",
-        text: `Generated workflow script: ${filePath}\nName: ${name}\nShow this path to the user and wait for confirmation before executing.`,
+        text: `Generated workflow script: ${filePath}\nName: ${name}\nReady to run via the workflow tool.`,
       },
     ],
     details: { action: "generate", path: filePath, name, status: "ready" },
