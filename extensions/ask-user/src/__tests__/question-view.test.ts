@@ -273,7 +273,8 @@ describe("renderQuestionView — Other editor mode", () => {
 		);
 		// 统计含输入内容的行数 = input 渲染行数（应被截到 5 行）
 		// 编号 "3. " 现在是 styled 内容的一部分，首行包裹段 "3." 不含 'y'
-		const inputLines = lines.filter((l) => l.includes("y") || l.includes("3."));
+		// 排除 help 行（含 "Type to add" 的提示行也含 'y'）
+		const inputLines = lines.filter((l) => (l.includes("y") || l.includes("3.")) && !l.includes("Type to add"));
 		expect(inputLines.length).toBe(5);
 		// 最后一行带省略号（表示还有更多，光标已被省略号取代）
 		expect(inputLines[inputLines.length - 1]).toContain("…");

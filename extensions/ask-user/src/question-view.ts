@@ -222,7 +222,7 @@ function buildEditorBlock(
 	// 光标行
 	add(` ${t.fg("accent", "█")}`);
 	add("");
-	add(t.fg("dim", " Enter submit · Esc back"));
+	add(t.fg("dim", " Type to add · Backspace deletes · Enter submit · Esc back"));
 	return lines;
 }
 
@@ -298,7 +298,7 @@ export function renderQuestionView(
 		lines.push(...editorBlock);
 		if (state.mode === "freeform") {
 			// freeform 模式 help 行：光标锁在 Other 上，正在输入
-			add(t.fg("dim", " Enter submit · Esc back"));
+			add(t.fg("dim", " Type to add · Backspace deletes · Enter submit · Esc back"));
 		}
 		return lines;
 	}
