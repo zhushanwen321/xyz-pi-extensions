@@ -29,6 +29,22 @@
 
 <!-- 前缀 R-*：降级策略、熔断阈值、重试边界 -->
 
+## 编码规范
+
+### CS-1 键码解析必须复用 SDK parseKey  [from: fix-ask-user-arrow-leak]
+
+- **约束**：终端键码解析必须使用 `@mariozechner/pi-tui` 的 `parseKey()`，禁止自建正则/字符表解析
+- **为什么**：parseKey 覆盖全终端协议（legacy/VT100/Kitty CSI u/modifyOtherKeys），自建解析会遗漏协议变体导致键码泄漏
+- **验证**：`grep -c "import.*parseKey.*pi-tui" component.ts` === 1；`ls parse-key.ts` 无文件
+- **例外**：无
+
+### CS-2 handleInput 路由函数行数上限  [from: fix-ask-user-arrow-leak]
+
+- **约束**：主输入路由函数（handleInput）≤ 40 行（去空行注释），复杂分支拆分为独立方法
+- **为什么**：路由函数是编辑器的入口，过长会导致维护困难和测试覆盖盲区
+- **验证**：`sed -n '/handleInput/,/^}/p' component.ts | grep -v '^$' | grep -v '^\s*//' | wc -l` ≤ 40
+- **例外**：无
+
 ## 兼容性
 
 <!-- 前缀 V-*：API 版本边界、数据迁移约束、向后兼容承诺 -->

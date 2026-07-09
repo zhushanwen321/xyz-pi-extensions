@@ -1,0 +1,1 @@
+fix-ask-user-arrow-leak | 2026-07-09 | closed | parseKey 白名单拦截 + draftText 迁移 + handleInput 拆分 + 提示行 | 254 tests passed
