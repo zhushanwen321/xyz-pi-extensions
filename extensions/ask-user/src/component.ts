@@ -258,6 +258,7 @@ export class AskUserComponent implements Component {
 
 		// Other row → Enter opens freeform editor
 		if (onOther && matchesKey(data, "enter")) {
+			state.savedOptionsCursorIndex = state.cursorIndex;
 			state.mode = "freeform";
 			state.draftText = state.freeTextValue ?? state.freeDraft ?? "";
 			state.cursorIndex = state.draftText.length;
@@ -341,6 +342,7 @@ export class AskUserComponent implements Component {
 					// comment Esc: skip comment, advance (keep existing commentValue)
 					state.mode = "options";
 					state.draftText = "";
+					state.cursorIndex = state.savedOptionsCursorIndex;
 					this.advance();
 					return;
 				}
@@ -349,6 +351,7 @@ export class AskUserComponent implements Component {
 				state.freeDraft = state.draftText || null;
 				state.mode = "options";
 				state.draftText = "";
+				state.cursorIndex = state.savedOptionsCursorIndex;
 				this.invalidate();
 				this.tui.requestRender();
 				return;
@@ -356,6 +359,7 @@ export class AskUserComponent implements Component {
 			if (matchesKey(data, "enter")) {
 				const text = state.draftText.trim();
 				if (state.mode === "freeform") {
+					state.cursorIndex = state.savedOptionsCursorIndex;
 					if (text) {
 						state.freeTextValue = text;
 						state.selectedIndex = null;
@@ -377,6 +381,7 @@ export class AskUserComponent implements Component {
 				state.commentValue = text || null;
 				state.mode = "options";
 				state.draftText = "";
+				state.cursorIndex = state.savedOptionsCursorIndex;
 				this.advance();
 				return;
 			}
@@ -503,6 +508,7 @@ export class AskUserComponent implements Component {
 	private afterConfirm(state: QuestionState, q: Question): void {
 		state.confirmed = true;
 		if (q.allowComment && state.mode !== "comment") {
+			state.savedOptionsCursorIndex = state.cursorIndex;
 			state.mode = "comment";
 			state.draftText = state.commentValue ?? "";
 			state.cursorIndex = state.draftText.length;

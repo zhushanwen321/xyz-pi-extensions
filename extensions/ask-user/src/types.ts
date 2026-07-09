@@ -117,6 +117,8 @@ export interface QuestionState {
 	mode: QuestionMode;
 	/** 编辑器草稿文本（每问题独立持有，迁移到 QuestionState 后替代组件级 editorText） */
 	draftText: string;
+	/** 进入编辑器前保存的 options 光标位置（退出编辑器时恢复） */
+	savedOptionsCursorIndex: number;
 }
 
 /** 创建初始 QuestionState */
@@ -131,5 +133,6 @@ export function createQuestionState(): QuestionState {
 		commentValue: null,
 		mode: "options",
 		draftText: "",
+		savedOptionsCursorIndex: 0,
 	};
 }
