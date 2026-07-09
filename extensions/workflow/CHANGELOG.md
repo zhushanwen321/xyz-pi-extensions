@@ -1,5 +1,11 @@
 # @zhushanwen/pi-workflow
 
+## 1.1.6
+
+### Patch Changes
+
+- dde92ef: Remove user confirmation gate for workflow execution; fix 3 workflow discovery bugs (EISDIR on directory manifest entries, symlink filtering, bare+worktree root resolution); refactor config injection behind the registry port.
+
 ## 1.1.5
 
 ### Patch Changes
