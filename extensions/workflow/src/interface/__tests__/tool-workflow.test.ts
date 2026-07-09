@@ -144,23 +144,22 @@ describe("workflow run action", () => {
     vi.mocked(api.registerTool).mockImplementation((tool: { execute: (...args: unknown[]) => Promise<unknown> }) => {
       registered.push(tool);
     });
-    registerWorkflowTool(api, deps as never, new Set(), { isProcessing: false });
+    registerWorkflowTool(api, deps as never, { isProcessing: false });
     const result = await runAction(registered, { action: "run", name: "missing" });
     expect(result.isError).toBe(true);
     expect(result.content[0].text).toContain("not found");
   });
 
-  it("找到 saved + approved → 直接启动（不需确认）", async () => {
+  it("找到 saved → 直接启动", async () => {
     const api = makeApi();
     const script = makeScript("test-wf");
     const deps = makeDeps();
     deps.registry.get = vi.fn().mockResolvedValue(script);
-    const approved = new Set(["test-wf"]);
     const registered: Array<{ execute: (...args: unknown[]) => Promise<unknown> }> = [];
     vi.mocked(api.registerTool).mockImplementation((tool: { execute: (...args: unknown[]) => Promise<unknown> }) => {
       registered.push(tool);
     });
-    registerWorkflowTool(api, deps as never, approved, { isProcessing: false });
+    registerWorkflowTool(api, deps as never, { isProcessing: false });
     const result = await runAction(registered, { action: "run", name: "test-wf" });
     expect(result.isError).toBeUndefined();
     expect(result.details).toMatchObject({ action: "run", status: "running", name: "test-wf" });
@@ -174,7 +173,7 @@ describe("workflow run action", () => {
     vi.mocked(api.registerTool).mockImplementation((tool: { execute: (...args: unknown[]) => Promise<unknown> }) => {
       registered.push(tool);
     });
-    registerWorkflowTool(api, deps as never, new Set(), { isProcessing: false });
+    registerWorkflowTool(api, deps as never, { isProcessing: false });
     const result = await runAction(registered, { action: "run" });
     expect(result.isError).toBe(true);
     expect(result.content[0].text).toContain("name");
@@ -191,7 +190,7 @@ describe("workflow status action", () => {
     vi.mocked(api.registerTool).mockImplementation((tool: { execute: (...args: unknown[]) => Promise<unknown> }) => {
       registered.push(tool);
     });
-    registerWorkflowTool(api, deps as never, new Set(), { isProcessing: false });
+    registerWorkflowTool(api, deps as never, { isProcessing: false });
     const result = await runAction(registered, { action: "status" });
     expect(result.content[0].text).toContain("No workflows");
   });
@@ -204,7 +203,7 @@ describe("workflow status action", () => {
     vi.mocked(api.registerTool).mockImplementation((tool: { execute: (...args: unknown[]) => Promise<unknown> }) => {
       registered.push(tool);
     });
-    registerWorkflowTool(api, deps as never, new Set(), { isProcessing: false });
+    registerWorkflowTool(api, deps as never, { isProcessing: false });
     const result = await runAction(registered, { action: "status" });
     expect(result.content[0].text).toContain("test-wf");
     expect(result.content[0].text).toContain("running");
@@ -222,7 +221,7 @@ describe("workflow pause/resume/abort", () => {
     vi.mocked(api.registerTool).mockImplementation((tool: { execute: (...args: unknown[]) => Promise<unknown> }) => {
       registered.push(tool);
     });
-    registerWorkflowTool(api, deps as never, new Set(), { isProcessing: false });
+    registerWorkflowTool(api, deps as never, { isProcessing: false });
     const result = await runAction(registered, { action: "pause", runId: run.runId });
     expect(result.isError).toBeUndefined();
     expect(run.state.status).toBe("paused");
@@ -237,7 +236,7 @@ describe("workflow pause/resume/abort", () => {
     vi.mocked(api.registerTool).mockImplementation((tool: { execute: (...args: unknown[]) => Promise<unknown> }) => {
       registered.push(tool);
     });
-    registerWorkflowTool(api, deps as never, new Set(), { isProcessing: false });
+    registerWorkflowTool(api, deps as never, { isProcessing: false });
     await runAction(registered, { action: "pause", runId: run.runId });
     const result = await runAction(registered, { action: "resume", runId: run.runId });
     expect(run.state.status).toBe("running");
@@ -252,7 +251,7 @@ describe("workflow pause/resume/abort", () => {
     vi.mocked(api.registerTool).mockImplementation((tool: { execute: (...args: unknown[]) => Promise<unknown> }) => {
       registered.push(tool);
     });
-    registerWorkflowTool(api, deps as never, new Set(), { isProcessing: false });
+    registerWorkflowTool(api, deps as never, { isProcessing: false });
     await runAction(registered, {
       action: "abort",
       runId: run.runId,
@@ -270,7 +269,7 @@ describe("workflow pause/resume/abort", () => {
     vi.mocked(api.registerTool).mockImplementation((tool: { execute: (...args: unknown[]) => Promise<unknown> }) => {
       registered.push(tool);
     });
-    registerWorkflowTool(api, deps as never, new Set(), { isProcessing: false });
+    registerWorkflowTool(api, deps as never, { isProcessing: false });
     const result = await runAction(registered, { action: "pause" });
     expect(result.isError).toBe(true);
   });
@@ -282,7 +281,7 @@ describe("workflow pause/resume/abort", () => {
     vi.mocked(api.registerTool).mockImplementation((tool: { execute: (...args: unknown[]) => Promise<unknown> }) => {
       registered.push(tool);
     });
-    registerWorkflowTool(api, deps as never, new Set(), { isProcessing: false });
+    registerWorkflowTool(api, deps as never, { isProcessing: false });
     const result = await runAction(registered, { action: "abort", runId: "wf-missing" });
     expect(result.isError).toBe(true);
   });
@@ -299,7 +298,7 @@ describe("workflow retry-node / skip-node", () => {
     vi.mocked(api.registerTool).mockImplementation((tool: { execute: (...args: unknown[]) => Promise<unknown> }) => {
       registered.push(tool);
     });
-    registerWorkflowTool(api, deps as never, new Set(), { isProcessing: false });
+    registerWorkflowTool(api, deps as never, { isProcessing: false });
     const result = await runAction(registered, { action: "retry-node", runId: run.runId });
     expect(result.isError).toBe(true);
     expect(result.content[0].text).toContain("callId");
@@ -312,7 +311,7 @@ describe("workflow retry-node / skip-node", () => {
     vi.mocked(api.registerTool).mockImplementation((tool: { execute: (...args: unknown[]) => Promise<unknown> }) => {
       registered.push(tool);
     });
-    registerWorkflowTool(api, deps as never, new Set(), { isProcessing: false });
+    registerWorkflowTool(api, deps as never, { isProcessing: false });
     const result = await runAction(registered, { action: "skip-node", callId: 0 });
     expect(result.isError).toBe(true);
   });
@@ -328,7 +327,7 @@ describe("workflow reentry guard", () => {
     vi.mocked(api.registerTool).mockImplementation((tool: { execute: (...args: unknown[]) => Promise<unknown> }) => {
       registered.push(tool);
     });
-    registerWorkflowTool(api, deps as never, new Set(), { isProcessing: true }); // 已占用
+    registerWorkflowTool(api, deps as never, { isProcessing: true }); // 已占用
     const result = await runAction(registered, { action: "status" });
     expect(result.isError).toBe(true);
     expect(result.content[0].text).toContain("in progress");
@@ -345,7 +344,7 @@ describe("workflow signal abort", () => {
     vi.mocked(api.registerTool).mockImplementation((tool: { execute: (...args: unknown[]) => Promise<unknown> }) => {
       registered.push(tool);
     });
-    registerWorkflowTool(api, deps as never, new Set(), { isProcessing: false });
+    registerWorkflowTool(api, deps as never, { isProcessing: false });
     const controller = new AbortController();
     controller.abort();
     const result = await runAction(registered, { action: "status" }, undefined, controller.signal);
@@ -359,7 +358,7 @@ describe("workflow signal abort", () => {
 describe("registerWorkflowTool 注册", () => {
   it("注册名为 'workflow' 的 tool", () => {
     const api = makeApi();
-    registerWorkflowTool(api, makeDeps() as never, new Set(), { isProcessing: false });
+    registerWorkflowTool(api, makeDeps() as never, { isProcessing: false });
     expect(api.registerTool).toHaveBeenCalledTimes(1);
   });
 });

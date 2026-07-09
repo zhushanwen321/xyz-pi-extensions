@@ -11,17 +11,23 @@ import { WorkflowScript } from "../../engine/models/workflow-script.js";
 import type { WorkflowScriptRegistry } from "../../engine/models/workflow-script-registry.js";
 // 直接测底层 invalidateCache（registry.invalidate 只是它的薄包装；这里要验证
 // 缓存失效后真正触发文件系统重扫，故绕过包装直达底层）。
-import { invalidateCache } from "../config-loader.js";
+import { invalidateCache,type WorkflowScanConfig } from "../config-loader.js";
 import { WorkflowScriptRegistryImpl } from "../workflow-script-registry-impl.js";
 
 // ── Helpers ─────────────────────────────────────────────────
 
 let tmpRoot: string;
+let isolatedUserDir: string;
 let originalCwd: string;
 
 beforeEach(() => {
   originalCwd = process.cwd();
   tmpRoot = mkdtempSync(join(tmpdir(), "wf-registry-test-"));
+  // 隔离 user 级目录——用 config 注入替代真实 ~/.pi/agent/workflows，
+  // 消除对全局环境的依赖（根因：原测试 new WorkflowScriptRegistryImpl()
+  // 无参构造，扫描焊死全局目录，被真实脚本污染）。
+  isolatedUserDir = join(tmpRoot, "user-workflows");
+  mkdirSync(isolatedUserDir, { recursive: true });
   process.chdir(tmpRoot);
   invalidateCache();
 });
@@ -31,6 +37,25 @@ afterEach(() => {
   rmSync(tmpRoot, { recursive: true, force: true });
   invalidateCache();
 });
+
+/**
+ * 构造隔离 config：project/tmp 指向 tmpRoot/.pi/workflows，
+ * user 指向 tmpRoot/user-workflows，npmDirs 为空。
+ * 这样 registry 只扫 tmp 目录，完全不碰全局 ~/.pi/agent/*。
+ */
+function isolatedConfig(): WorkflowScanConfig {
+  return {
+    projectDir: join(tmpRoot, ".pi", "workflows"),
+    tmpDir: join(tmpRoot, ".pi", "workflows", ".tmp"),
+    userDir: isolatedUserDir,
+    npmDirs: [],
+  };
+}
+
+/** 构造带隔离 config 的 registry（测试标准入口）。 */
+function newRegistry(): WorkflowScriptRegistryImpl {
+  return new WorkflowScriptRegistryImpl(isolatedConfig());
+}
 
 function makeWorkflowDir(): string {
   const dir = join(tmpRoot, ".pi", "workflows");
@@ -68,7 +93,7 @@ describe("WorkflowScriptRegistryImpl", () => {
 
   describe("loadAll", () => {
     it("returns empty array when no workflow directories exist", async () => {
-      const registry = new WorkflowScriptRegistryImpl();
+      const registry = newRegistry();
       const scripts = await registry.loadAll();
       expect(scripts).toEqual([]);
     });
@@ -77,7 +102,7 @@ describe("WorkflowScriptRegistryImpl", () => {
       const dir = makeWorkflowDir();
       writeScript(dir, "hello", VALID_SCRIPT("hello", "Hello workflow"));
 
-      const registry = new WorkflowScriptRegistryImpl();
+      const registry = newRegistry();
       const scripts = await registry.loadAll();
 
       expect(scripts.length).toBe(1);
@@ -88,7 +113,7 @@ describe("WorkflowScriptRegistryImpl", () => {
       const dir = makeWorkflowDir();
       writeScript(dir, "test-wf", VALID_SCRIPT("test-wf", "a desc"));
 
-      const registry = new WorkflowScriptRegistryImpl();
+      const registry = newRegistry();
       const [script] = await registry.loadAll();
 
       expect(script!.name).toBe("test-wf");
@@ -105,7 +130,7 @@ describe("WorkflowScriptRegistryImpl", () => {
       const dir = makeWorkflowDir();
       writeScript(dir, "broken", 'console.log("no meta");');
 
-      const registry = new WorkflowScriptRegistryImpl();
+      const registry = newRegistry();
       const [script] = await registry.loadAll();
 
       expect(script!.available).toBe(false);
@@ -121,7 +146,7 @@ describe("WorkflowScriptRegistryImpl", () => {
       const tmpDir = makeTmpDir();
       writeScript(tmpDir, "shared", VALID_SCRIPT("shared", "tmp version"));
 
-      const registry = new WorkflowScriptRegistryImpl();
+      const registry = newRegistry();
       const scripts = await registry.loadAll();
 
  // Only one "shared" entry — tmp wins
@@ -130,12 +155,14 @@ describe("WorkflowScriptRegistryImpl", () => {
       expect(scripts[0]!.source).toBe("tmp");
     });
 
-    it("get() uses 60s TTL cache after loadAll populates it", async () => {
+    it("get() uses 60s TTL cache after loadAll populates it (production path)", async () => {
+ // 此测试验证生产路径（无 config 注入）的 getWorkflow 60s TTL 单条缓存。
  // loadAll always re-scans, but it writes to the cache that get reads.
- // Verify: after loadAll, get serves from cache even if file is removed.
+ // 注入 config 的路径每次全扫，无此优化——故这里必须用无参构造走生产路径。
       const dir = makeWorkflowDir();
       writeScript(dir, "cached", VALID_SCRIPT("cached"));
 
+      // 无参 registry 走生产 getWorkflow（有 TTL 缓存）
       const registry = new WorkflowScriptRegistryImpl();
       await registry.loadAll(); // populates cache
 
@@ -154,7 +181,7 @@ describe("WorkflowScriptRegistryImpl", () => {
       const dir = makeWorkflowDir();
       writeScript(dir, "findme", VALID_SCRIPT("findme", "target"));
 
-      const registry = new WorkflowScriptRegistryImpl();
+      const registry = newRegistry();
       const script = await registry.get("findme");
 
       expect(script).toBeDefined();
@@ -164,7 +191,7 @@ describe("WorkflowScriptRegistryImpl", () => {
     });
 
     it("returns undefined when name not found", async () => {
-      const registry = new WorkflowScriptRegistryImpl();
+      const registry = newRegistry();
       const script = await registry.get("nonexistent");
       expect(script).toBeUndefined();
     });
@@ -173,7 +200,7 @@ describe("WorkflowScriptRegistryImpl", () => {
       const dir = makeWorkflowDir();
       writeScript(dir, "code-review", VALID_SCRIPT("code-review"));
 
-      const registry = new WorkflowScriptRegistryImpl();
+      const registry = newRegistry();
  // "code" is a prefix but not exact match — registry returns undefined
  // (fuzzy matching is the Interface layer's job)
       const script = await registry.get("code");
@@ -184,7 +211,7 @@ describe("WorkflowScriptRegistryImpl", () => {
       const dir = makeWorkflowDir();
       writeScript(dir, "cached-get", VALID_SCRIPT("cached-get"));
 
-      const registry = new WorkflowScriptRegistryImpl();
+      const registry = newRegistry();
       const first = await registry.get("cached-get");
       const second = await registry.get("cached-get");
 
@@ -201,7 +228,7 @@ describe("WorkflowScriptRegistryImpl", () => {
       const dir = makeWorkflowDir();
       writeScript(dir, "first", VALID_SCRIPT("first"));
 
-      const registry = new WorkflowScriptRegistryImpl();
+      const registry = newRegistry();
       const firstLoad = await registry.loadAll();
       expect(firstLoad.length).toBe(1);
 
@@ -218,7 +245,7 @@ describe("WorkflowScriptRegistryImpl", () => {
       const dir = makeWorkflowDir();
       writeScript(dir, "x", VALID_SCRIPT("x"));
 
-      const registry = new WorkflowScriptRegistryImpl();
+      const registry = newRegistry();
       await registry.get("x"); // populate cache
       registry.invalidate();
       writeScript(dir, "y", VALID_SCRIPT("y"));
@@ -228,7 +255,7 @@ describe("WorkflowScriptRegistryImpl", () => {
     });
 
     it("invalidate is idempotent (no throw on empty cache)", () => {
-      const registry = new WorkflowScriptRegistryImpl();
+      const registry = newRegistry();
       expect(() => registry.invalidate()).not.toThrow();
       expect(() => registry.invalidate()).not.toThrow();
     });
@@ -242,7 +269,7 @@ describe("WorkflowScriptRegistryImpl", () => {
       const expected = VALID_SCRIPT("src-test");
       writeScript(dir, "src-test", expected);
 
-      const registry = new WorkflowScriptRegistryImpl();
+      const registry = newRegistry();
       const [script] = await registry.loadAll();
 
  // FR-2: registry is the single filesystem reader (扫描+缓存+去重).

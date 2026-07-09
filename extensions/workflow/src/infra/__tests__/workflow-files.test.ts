@@ -7,7 +7,6 @@ import { join } from "node:path";
 
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
-import { invalidateCache } from "../config-loader.js";
 import { deleteWorkflow, saveWorkflow } from "../workflow-files.js";
 
 // ── Helpers ──────────────────────────────────────────────────
@@ -19,7 +18,6 @@ beforeEach(() => {
   originalCwd = process.cwd();
   tmpRoot = mkdtempSync(join(tmpdir(), "pi-workflow-files-test-"));
   process.chdir(tmpRoot);
-  invalidateCache();
 });
 
 afterEach(() => {
