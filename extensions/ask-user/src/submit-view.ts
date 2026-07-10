@@ -10,6 +10,22 @@ import {
 	type ThemeLike,
 } from "./types";
 
+/** 渲染 [ Submit ]   [ Cancel ] 按钮栏，返回带样式的单行字符串。
+ *  focus: null=纯展示（问题 tab footer），"submit"/"cancel"=高亮对应按钮（Submit tab）。
+ *  统一了 component.ts footer 版与 submit-view 内嵌版的样式逻辑。 */
+export function renderButtonBar(theme: ThemeLike, allDone: boolean, focus: "submit" | "cancel" | null): string {
+	const t = theme;
+	const isSubmit = focus === "submit";
+	const isCancel = focus === "cancel";
+	const submit = isSubmit
+		? (allDone ? t.fg("success", t.bold(" Submit ")) : t.fg("accent", t.bold(" Submit ")))
+		: (allDone ? t.fg("success", " Submit ") : t.fg("dim", " Submit "));
+	const cancel = isCancel
+		? t.fg("accent", t.bold(" Cancel "))
+		: t.fg("muted", " Cancel ");
+	return `${t.fg("dim", "[")}${submit}${t.fg("dim", "]")}   ${t.fg("dim", "[")}${cancel}${t.fg("dim", "]")}`;
+}
+
 /**
  * 获取单问题的答案文本（供 Submit tab 显示）。
  * 返回 null 表示未答。
@@ -84,13 +100,7 @@ export function renderSubmitView(
 
 	// 内嵌按钮栏：[ Submit ]   [ Cancel ]，根据 focus 高亮
 	add("");
-	const isSubmit = focus === "submit";
-	const isCancel = focus === "cancel";
-	const submitBtn = isSubmit
-		? (allDone ? t.fg("success", t.bold(" Submit ")) : t.fg("accent", t.bold(" Submit ")))
-		: (allDone ? t.fg("success", " Submit ") : t.fg("dim", " Submit "));
-	const cancelBtn = isCancel ? t.fg("accent", t.bold(" Cancel ")) : t.fg("muted", " Cancel ");
-	add(`${t.fg("dim", "[")}${submitBtn}${t.fg("dim", "]")}   ${t.fg("dim", "[")}${cancelBtn}${t.fg("dim", "]")}`);
+	add(renderButtonBar(t, allDone, focus));
 
 	// Submit tab 帮助行
 	add("");

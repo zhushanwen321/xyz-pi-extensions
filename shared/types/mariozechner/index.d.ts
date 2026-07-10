@@ -86,10 +86,12 @@ declare module "@mariozechner/pi-coding-agent" {
 	export type ThemeColor = string;
 	export type ExtensionCommandContext = any;
 	export type AgentToolResult<T = any> = { content: Array<{ type: "text"; text: string } | { type: "image"; data: string; mimeType: string }>; details: T; isError?: boolean };
-	export type AgentToolUpdateCallback<T = unknown> = (update: T) => void;
+	// 真实签名: (partialResult: AgentToolResult<T>) => void（收完整 result 对象，非裸 T）。默认泛型 any。
+	export type AgentToolUpdateCallback<T = unknown> = (partialResult: AgentToolResult<T>) => void;
 	/** Options passed to renderResult. `expanded` requests a detailed view (all options + ●/○ marks). */
 	export interface ToolRenderResultOptions {
 		expanded: boolean;
+		isPartial: boolean;
 	}
 	export type TurnEndEvent = any;
 	export type SessionBeforeCompactEvent = any;

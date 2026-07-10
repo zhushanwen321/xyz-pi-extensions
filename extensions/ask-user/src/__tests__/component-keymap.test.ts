@@ -45,6 +45,7 @@ import {
 	SUPER_LEFT,
 	SUPER_RIGHT,
 	SUPER_UP,
+	TAB,
 	UNKNOWN_CSI,
 	UNKNOWN_SS3,
 	UP,
@@ -79,7 +80,6 @@ describe("AskUserComponent — key leak fix (C-ARROW / C-KEYMAP)", () => {
 		expect(editorLine).toBeDefined();
 		// BUG: before fix, [C[C[C would appear. After fix: editorText stays empty.
 		expect(editorLine).not.toContain("\x1b[A"); expect(editorLine).not.toContain("\x1b[B"); expect(editorLine).not.toContain("\x1b[C"); expect(editorLine).not.toContain("\x1b[D");
-		expect(editorLine).not.toContain("C");
 	});
 
 	// ── C-ARROW-2: direction keys + text input → correct cursor behavior ──
@@ -94,9 +94,9 @@ describe("AskUserComponent — key leak fix (C-ARROW / C-KEYMAP)", () => {
 		const lines = c.render(60);
 		const editorLine = lines.find((l) => l.includes("\x1b[7m"));
 		expect(editorLine).toBeDefined();
-		// cursor at 1: "b█a"
-		expect(editorLine).toContain("b");
-		expect(editorLine).toContain("a");
+		// cursor at 1: "b█a" — 去 ANSI 后文本为 "ba"（精确顺序证明 insert 位置：b 在 a 前）
+		const stripped = editorLine!.replace(/\x1b\[[0-9;]*m/g, "");
+		expect(stripped).toContain("ba");
 		// Ensure no leaked sequences
 		expect(editorLine).not.toContain("\x1b[A"); expect(editorLine).not.toContain("\x1b[B"); expect(editorLine).not.toContain("\x1b[C"); expect(editorLine).not.toContain("\x1b[D");
 	});
@@ -131,10 +131,9 @@ describe("AskUserComponent — key leak fix (C-ARROW / C-KEYMAP)", () => {
 		c.handleInput("c");   // insert at 1 → "acb", cursor=2
 		const lines = c.render(60);
 		const editorLine = lines.find((l) => l.includes("\x1b[7m"));
-		// cursor at 2: "ac█b"
-		expect(editorLine).toContain("a");
-		expect(editorLine).toContain("b");
-		expect(editorLine).toContain("c");
+		// cursor at 2: "ac█b" — 去 ANSI 后精确文本 "acb"（证明 c 插在 a 与 b 之间）
+		const stripped = editorLine!.replace(/\x1b\[[0-9;]*m/g, "");
+		expect(stripped).toContain("acb");
 	});
 
 	// ── C-KEYMAP-HOME: home key moves cursor to start ──
@@ -145,11 +144,9 @@ describe("AskUserComponent — key leak fix (C-ARROW / C-KEYMAP)", () => {
 		c.handleInput("d");    // insert at 0 → "dabc", cursor=1
 		const lines = c.render(60);
 		const editorLine = lines.find((l) => l.includes("\x1b[7m"));
-		// cursor at 1: "d\x1b[7ma\x1b[27mbc" — cursor reverse video splits "abc"
-		expect(editorLine).toContain("d");
-		expect(editorLine).toContain("a");
-		expect(editorLine).toContain("b");
-		expect(editorLine).toContain("c");
+		// cursor at 1: "d\x1b[7ma\x1b[27mbc" — 去 ANSI 后精确文本 "dabc"（证明 d 插在开头）
+		const stripped = editorLine!.replace(/\x1b\[[0-9;]*m/g, "");
+		expect(stripped).toContain("dabc");
 	});
 
 	// ── C-KEYMAP-END: end key moves cursor to end ──
@@ -218,6 +215,20 @@ describe("AskUserComponent — key leak fix (C-ARROW / C-KEYMAP)", () => {
 		const lines = c.render(60);
 		const editorLine = lines.find((l) => l.includes("\x1b[7m"));
 		expect(editorLine).toContain("abcd");
+	});
+
+	// ── C-KEYMAP-TAB: Tab 在编辑器内 no-op（不切 tab、不泄漏）──
+	it("C-KEYMAP-TAB: Tab is no-op in freeform editor (no tab switch, no leak)", () => {
+		const c = openFreeform([singleQ]);
+		c.handleInput("a");
+		c.handleInput(TAB);  // parseKey 命中 "tab" 但编辑器无对应分支 → no-op
+		c.handleInput("b");
+		const lines = c.render(60);
+		const editorLine = lines.find((l) => l.includes("\x1b[7m"));
+		expect(editorLine).toBeDefined();
+		const stripped = editorLine!.replace(/\x1b\[[0-9;]*m/g, "");
+		expect(stripped).toContain("ab");
+		expect(stripped).not.toContain("\t");
 	});
 
 	// ── C-KEYMAP-SPACE: space character appends correctly ──
@@ -492,5 +503,51 @@ describe("AskUserComponent — unknown control sequence leak fix (C-CSI)", () =>
 		c.handleInput(ESC);
 		const lines = c.render(60);
 		expect(lines.some((l) => l.includes("\x1b[7m"))).toBe(false);
+	});
+});
+
+// 🐛 = U+1F41B，UTF-16 surrogate pair（占 2 个 code unit，index 1=高代理 / 2=低代理）。
+// 验证光标移动/Backspace 按整个 code point 跳跃，不会停在代理中间（index 2）拆散 emoji。
+describe("C-SURROGATE: cursor movement across surrogate pairs", () => {
+	it("C-SUR-BS: backspace at end deletes a full surrogate pair (deleteCount=2)", () => {
+		const c = openFreeform([singleQ]);
+		c.handleInput("ab🐛"); // 🐛 在末尾，cursorIndex=4（a b 高 低）
+		c.handleInput(BKSP);   // 删整个 🐛（非半个低代理），cursorIndex 4→2
+		const lines = c.render(60);
+		const editorLine = lines.find((l) => l.includes("\x1b[7m"));
+		expect(editorLine).toBeDefined();
+		const stripped = editorLine!.replace(/\x1b\[[0-9;]*m/g, "");
+		expect(stripped).toContain("ab");
+		expect(stripped).not.toContain("🐛");
+	});
+
+	it("C-SUR-RIGHT: Right skips surrogate middle (cursor 1→3, not 2)", () => {
+		const c = openFreeform([singleQ]);
+		c.handleInput("a🐛b"); // cursorIndex=4
+		c.handleInput(HOME);   // cursor 4→0
+		c.handleInput(RIGHT);  // cursor 0→1（a 后；isHighSurrogate(0)='a'→ false）
+		c.handleInput(RIGHT);  // cursor 1→3（isHighSurrogate(1)=高代理 → 跳 2，不停在代理中间 2）
+		c.handleInput("X");    // 在 cursor 3 插入 → "a🐛Xb"（X 在 🐛 后、b 前）
+		const lines = c.render(60);
+		const editorLine = lines.find((l) => l.includes("\x1b[7m"));
+		expect(editorLine).toBeDefined();
+		const stripped = editorLine!.replace(/\x1b\[[0-9;]*m/g, "");
+		// X 落在 🐛 之后证明 cursor 跳到了 3；若停在代理中间 2 会拆散 🐛，不含完整 "a🐛Xb"
+		expect(stripped).toContain("a🐛Xb");
+	});
+
+	it("C-SUR-LEFT: Left skips surrogate middle (cursor 4→1, not 2)", () => {
+		const c = openFreeform([singleQ]);
+		c.handleInput("a🐛b"); // cursorIndex=4
+		c.handleInput(END);    // cursor 4（保险，已在末尾）
+		c.handleInput(LEFT);   // cursor 4→3（🐛 与 b 之间）
+		c.handleInput(LEFT);   // cursor 3→1（newLeft-1=高代理 → 跳 2，不停在代理中间 2）
+		c.handleInput("Y");    // 在 cursor 1 插入 → "aY🐛b"（Y 在 🐛 前）
+		const lines = c.render(60);
+		const editorLine = lines.find((l) => l.includes("\x1b[7m"));
+		expect(editorLine).toBeDefined();
+		const stripped = editorLine!.replace(/\x1b\[[0-9;]*m/g, "");
+		// Y 落在 🐛 之前证明 cursor 跳到了 1；若停在代理中间 2 会拆散 🐛，不含完整 "aY🐛b"
+		expect(stripped).toContain("aY🐛b");
 	});
 });

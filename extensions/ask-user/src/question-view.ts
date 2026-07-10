@@ -2,6 +2,7 @@
 import { truncateToWidth, visibleWidth, wrapTextWithAnsi } from "@mariozechner/pi-tui";
 
 import {
+	isHighSurrogate,
 	OTHER_LABEL,
 	type Question,
 	type QuestionState,
@@ -9,6 +10,7 @@ import {
 	SPLIT_PANE_MIN_WIDTH,
 	SPLIT_PANE_RIGHT_MIN,
 	SPLIT_PANE_SEPARATOR,
+	SURROGATE_PAIR_LEN,
 	type ThemeLike,
 } from "./types";
 
@@ -28,6 +30,21 @@ export interface DisplayOption {
 const MAX_EDITOR_LINES = 5;
 
 /**
+ * 渲染编辑器文本，光标位置用反色高亮（ANSI SGR 7/27），不占额外列。
+ * surrogate pair 安全：光标在高代理前时反色高亮整个 code point（2 个 code unit），
+ * 与光标移动/Backspace 的跳过逻辑对称，避免拆散 emoji 导致终端显示替换字符。
+ * 光标在文本末尾（超出范围）时反色高亮一个空格占位。
+ */
+function renderCursorText(text: string, cursorPos: number): string {
+	const before = text.slice(0, cursorPos);
+	// 光标在高代理前 → 反色高亮整个 surrogate pair
+	const charLen = isHighSurrogate(text, cursorPos) ? SURROGATE_PAIR_LEN : 1;
+	const charAtCursor = text.slice(cursorPos, cursorPos + charLen) || " ";
+	const after = text.slice(cursorPos + charLen);
+	return `${before}\x1b[7m${charAtCursor}\x1b[27m${after}`;
+}
+
+/**
  * 把一段带样式的文本按 availWidth 软换行输出为多行，最多 maxLines 行。
  * - 首行前缀 lead（如 "> [ ] "），后续行用等宽空格缩进到 input 起始列对齐。
  * - 超过 maxLines：截断到 maxLines 行，并在最后一行末尾用 ellipsis 提示。
@@ -35,7 +52,7 @@ const MAX_EDITOR_LINES = 5;
  *
  * @param push      输出回调（通常为带 truncateToWidth 的 add，提供安全兜底）
  * @param lead      首行前缀（含选中标记 / 勾选框）
- * @param content   待换行展示的已样式化文本（可含 ANSI + 末尾光标 █），为空则只输出 lead
+ * @param content   待换行展示的已样式化文本（可含 ANSI + 末尾反色光标），为空则只输出 lead
  * @param availWidth 单行可用宽度
  * @param maxLines  最多行数
  */
@@ -87,8 +104,12 @@ export function getSplitPaneWidths(width: number): { left: number; right: number
 	return { left, right };
 }
 
+/** 编辑器底部操作提示：随实现能力更新（实现偏差 D-005 已支持光标移动）。
+ *  反色光标占位已暗示可输入，故突出新增的方向键/移动能力。 */
+const EDITOR_HINT = " ←/→ Home/End move · Backspace deletes · Enter submit · Esc back";
+
 /** 构建选项列表行（不含分屏预览）。hideDescriptions 用于分屏模式左列。
- *  freeform 模式下，Other 行**原地**变 [ ] <input>█（多选）/ <input>█（单选），
+ *  freeform 模式下，Other 行**原地**变 [ ] <input> 反色光标（多选）/ <input> 反色光标（单选），
  *  不再依赖 buildEditorBlock 的下方独立编辑块。 */
 function buildOptionLines(
 	q: Question,
@@ -96,7 +117,7 @@ function buildOptionLines(
 	theme: ThemeLike,
 	width: number,
 	hideDescriptions: boolean,
-	editorText: string = "",
+	draftText: string = "",
 ): string[] {
 	const t = theme;
 	const opts = allOptions(q);
@@ -123,12 +144,9 @@ function buildOptionLines(
 				const num = i + 1;
 				const lead = `${prefix} ${marker} `;
 				const avail = Math.max(1, width - visibleWidth(lead));
-				// 编号 + 文本，光标用反色高亮当前字符（不占额外位置）
-				const cursorPos = state.cursorIndex;
-				const before = editorText.slice(0, cursorPos);
-				const charAtCursor = editorText[cursorPos] ?? " ";
-				const after = editorText.slice(cursorPos + 1);
-				const styled = `${t.fg("muted", `${num}. `)}${t.fg("text", before)}\x1b[7m${charAtCursor}\x1b[27m${t.fg("text", after)}`;
+				// 编号 + 文本，光标用反色高亮当前字符（surrogate pair 安全，不占额外位置）
+				const cursorText = renderCursorText(draftText, state.cursorIndex);
+				const styled = `${t.fg("muted", `${num}. `)}${t.fg("text", cursorText)}`;
 				addWrappedInput(add, lead, styled, avail, MAX_EDITOR_LINES);
 			} else {
 				const hasFreeText = state.freeTextValue !== null;
@@ -203,12 +221,7 @@ function buildPreviewLines(
 }
 
 /**
- * 渲染单个问题视图（spec FR-4）。
- * isSingle: 单问题模式（无 Tab 提示）。
- * editorText: freeform/comment 模式下当前编辑器文本（纯 string，由 component 持有）。
- */
-/**
- * freeform 模式：editor 已在 buildOptionLines 中原地渲染（[ ] <input>█ 行），
+ * freeform 模式：editor 已在 buildOptionLines 中原地渲染（[ ] <input> 反色光标 行），
  * buildEditorBlock 在此模式下不重复输出，**仅留出与正常 help 行同位置的视觉空隙**。
  * comment 模式：保留独立编辑块（与 normal help 行解耦：comment 行有更长的 prompt）。
  */
@@ -216,7 +229,7 @@ function buildEditorBlock(
 	theme: ThemeLike,
 	width: number,
 	mode: "freeform" | "comment",
-	editorText: string,
+	draftText: string,
 	cursorIndex?: number,
 ): string[] {
 	if (mode === "freeform") {
@@ -230,14 +243,12 @@ function buildEditorBlock(
 	add("");
 	const prompt = t.fg("muted", " Your comment (optional):");
 	add(prompt);
-	// 渲染当前编辑器文本，光标用反色高亮当前字符
-	const pos = cursorIndex ?? editorText.length;
-	const before = editorText.slice(0, pos);
-	const charAtCursor = editorText[pos] ?? " ";
-	const after = editorText.slice(pos + 1);
-	add(` ${t.fg("text", before)}\x1b[7m${charAtCursor}\x1b[27m${t.fg("text", after)}`);
+	// 渲染当前编辑器文本，光标用反色高亮当前字符（surrogate pair 安全）
+	const pos = cursorIndex ?? draftText.length;
+	const cursorText = renderCursorText(draftText, pos);
+	add(` ${t.fg("text", cursorText)}`);
 	add("");
-	add(t.fg("dim", " Type to add · Backspace deletes · Enter submit · Esc back"));
+	add(t.fg("dim", EDITOR_HINT));
 	return lines;
 }
 
@@ -248,14 +259,14 @@ function buildSplitPane(
 	theme: ThemeLike,
 	split: { left: number; right: number },
 	width: number,
-	editorText: string = "",
+	draftText: string = "",
 ): string[] {
 	const t = theme;
 	const lines: string[] = [];
 	const add = (s: string): void => {
 		lines.push(truncateToWidth(s, width));
 	};
-	const leftLines = buildOptionLines(q, state, theme, split.left, true, editorText);
+	const leftLines = buildOptionLines(q, state, theme, split.left, true, draftText);
 	const rightLines = buildPreviewLines(q, state, theme, split.right, Math.max(leftLines.length, 8));
 	const rowCount = Math.max(leftLines.length, rightLines.length);
 	const sep = t.fg("dim", SPLIT_PANE_SEPARATOR);
@@ -267,13 +278,18 @@ function buildSplitPane(
 	return lines;
 }
 
+/**
+ * 渲染单个问题视图（spec FR-4）。
+ * isSingle: 单问题模式（无 Tab 提示）。
+ * draftText: freeform/comment 模式下当前编辑器草稿（来自 QuestionState.draftText）。
+ */
 export function renderQuestionView(
 	q: Question,
 	state: QuestionState,
 	theme: ThemeLike,
 	width: number,
 	isSingle: boolean,
-	editorText: string,
+	draftText: string,
 ): string[] {
 	const t = theme;
 	const lines: string[] = [];
@@ -307,24 +323,24 @@ export function renderQuestionView(
 	// 且右侧详情预览在输入自定义内容时无意义。隐藏 descriptions 以避免行数爆炸。
 	if (state.mode === "freeform" || state.mode === "comment") {
 		add("");
-		const optionLines = buildOptionLines(q, state, theme, width, false, editorText);
+		const optionLines = buildOptionLines(q, state, theme, width, false, draftText);
 		for (const line of optionLines) add(line);
-		const editorBlock = buildEditorBlock(theme, width, state.mode, editorText, state.cursorIndex);
+		const editorBlock = buildEditorBlock(theme, width, state.mode, draftText, state.cursorIndex);
 		lines.push(...editorBlock);
 		if (state.mode === "freeform") {
 			// freeform 模式 help 行：光标锁在 Other 上，正在输入
-			add(t.fg("dim", " Type to add · Backspace deletes · Enter submit · Esc back"));
+			add(t.fg("dim", EDITOR_HINT));
 		}
 		return lines;
 	}
 
 	if (!split) {
 		// 单列模式
-		const optionLines = buildOptionLines(q, state, theme, width, false, editorText);
+		const optionLines = buildOptionLines(q, state, theme, width, false, draftText);
 		for (const line of optionLines) add(line);
 	} else {
 		// 分屏模式
-		lines.push(...buildSplitPane(q, state, theme, split, width, editorText));
+		lines.push(...buildSplitPane(q, state, theme, split, width, draftText));
 	}
 
 	add("");

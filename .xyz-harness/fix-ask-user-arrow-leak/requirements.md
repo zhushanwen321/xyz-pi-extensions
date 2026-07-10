@@ -69,8 +69,8 @@ graph LR
 - **关联目标**: G1、G2
 - **验收标准 (AC)**:
   - AC-2.1 [正常]: 连按 3 次右箭头，editorText 不含 `[`/`C`（C-ARROW-1）
-  - AC-2.2 [正常]: 连按 4 个方向键（↑↓←→各一次），中间夹输入 a/b，editorText === "ab"（C-ARROW-1 扩展）
-  - AC-2.3 [边界]: special key 分两类——**no-op 集合**（home/end/insert/pageUp/pageDown/f1-f12，编辑器内静默不响应）与**有专门语义键**（escape=退出/enter=提交/backspace=删尾，各有对应 AC）。no-op 集合遍历断言 editorText 不变。不含 enter/escape/backspace/tab（它们非 no-op）
+  - AC-2.2 [正常]: 连按 4 个方向键（↑↓←→各一次），中间夹输入 a/b。注意 D-009 偏差：←/→ 现为光标移动非 no-op，故文本顺序随光标位置变化（如 LEFT 后 insert 到开头），不再恒等于 "ab"（C-ARROW-2 已更新为按光标位置精确断言）
+  - AC-2.3 [边界]: special key 分三类（D-009 修订）——**no-op 集合**（insert/pageUp/pageDown/f1-f12，编辑器内静默不响应）与**光标移动键**（←/→/Home/End，D-009 新增）与**有专门语义键**（escape=退出/enter=提交/backspace=删光标前字符/tab=no-op）。no-op 集合遍历断言 draftText 不变
   - AC-2.4 [边界]: modifier 组合（alt+x / ctrl+shift+arrow）在编辑器内不泄漏可见字符（C-KEYMAP-MOD）。采样矩阵：4 modifier（ctrl/alt/shift/super）各单独 × {up/down/left/right} + 2-modifier 组合（ctrl+shift/ctrl+alt/shift+alt）× {up/down}，约 18 个用例。修复后 parseKey(data) 对 alt+x 返回 "alt+x" keyId → 命中 special 分支 no-op，不进 printable 追加
 
 ### UC-3: 跨问题切换并保持/丢弃草稿
@@ -88,7 +88,7 @@ graph LR
 ### UC-4: 阅读编辑器操作提示
 - **Actor**: 终端用户
 - **前置条件**: 已打开 freeform/comment 编辑器
-- **主流程**: 1. 编辑器渲染时底部显示 dim 提示行 2. 用户读到 "Type to add · Backspace deletes · Enter submit · Esc back" 3. 用户理解编辑器是 append-only，不会困惑方向键无效
+- **主流程**: 1. 编辑器渲染时底部显示 dim 提示行 2. 用户读到 "←/→ Home/End move · Backspace deletes · Enter submit · Esc back"（D-009 更新：新增移动能力提示） 3. 用户知道可用光标移动 + 编辑操作
 - **替代流程**: 无
 - **异常流程**: 无
 - **后置状态**: 用户知道可用操作
@@ -134,11 +134,13 @@ graph LR
 ### 交互流程
 
 编辑器内交互（freeform/comment）：
-- 输入文本 → 末尾追加
-- Backspace → 删末尾一个字符
+- 输入文本 → 在光标位置（cursorIndex）插入（D-009：原为末尾追加）
+- ←/→/Home/End → 移动光标（D-009 新增，surrogate pair 安全跳过代理中间位）
+- Backspace → 删除光标前一个字符（D-009：原为删末尾，surrogate pair 时删整个 code point）
 - Enter → 提交（freeform 保存 freeTextValue / comment 保存 commentValue）
-- Esc → 退出（freeform 丢弃 / comment 跳过评论）
-- 方向键/Home/End/Delete/Insert/PageUp/PageDown/F1-F12 → **no-op**（append-only 不支持光标移动）
+- Esc → 退出（freeform 存 freeDraft 草稿 / comment 跳过评论保留已有值）
+- ↑↓/Delete/Insert/PageUp/PageDown/F1-F12 → **no-op**（不支持的功能键）
+- Tab → no-op（D-009：编辑器内不切 tab）
 - 底部 dim 提示行告诉用户上述操作
 
 ## 6. 系统间功能关联（Cross-System）
@@ -160,7 +162,7 @@ graph LR
 
 ## 8. 不做（Out of Scope）
 
-- **不做**光标自由移动编辑（Home/End/←/→ 移动光标到文本中间）——编辑器保持 append-only，方向键仅 no-op。若未来要支持，是独立 feature，不在本次范围
+- ~~**不做**光标自由移动编辑（Home/End/←/→ 移动光标到文本中间）~~ **[D-009 已推翻]**：实现阶段加入了光标移动（commit d04a1a7c6），编辑器升级为支持中间位置 insert/delete，体验更接近原生输入框。surrogate pair 的移动/删除/渲染均已做 code point 安全。详见 decisions.md D-009
 - **不做**多行编辑器——当前是 single-line append-only
 - **不做** bracketed paste 跨 chunk 拆分的完美处理（边角情况，留待后续迭代）
 - **不做** 选项 label 含逗号导致多选结果歧义的修复（边角情况，留待后续迭代）

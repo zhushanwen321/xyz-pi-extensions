@@ -111,9 +111,6 @@ export const APC = "\x1b_Gi=31\x1b\\"; // APC Kitty graphics 响应
 export const UNKNOWN_CSI = "\x1b[99~"; // 未知 CSI
 export const UNKNOWN_SS3 = "\x1bOZ"; // 未知 SS3
 
-// ── Helper: stubTui alias (tests reference it as stubTui) ──
-export const stubTui = mockTui;
-
 // ── Component helpers ──
 
 /** 创建默认单问题组件，返回 { c, result } */
@@ -122,15 +119,4 @@ export function make(questions?: Question[]): { c: AskUserComponent; result: { v
 	const result = { val: undefined as Result | null | undefined };
 	const c = new AskUserComponent(qs, mockTui, stubTheme, (r: Result | null) => { result.val = r; });
 	return { c, result };
-}
-
-/** 在组件上打开 freeform 编辑器（通过 ENTER 键） */
-export function openFreeform(c: AskUserComponent): void {
-	c.handleInput(ENTER);
-}
-
-/** 在组件上打开 comment 编辑器（需要先选中选项 + allowComment=true） */
-export function openComment(c: AskUserComponent): void {
-	c.handleInput(ENTER); // 选中第一个选项
-	c.handleInput(ENTER); // 确认 → 进入 comment
 }

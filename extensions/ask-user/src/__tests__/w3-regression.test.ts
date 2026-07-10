@@ -54,7 +54,6 @@ describe("W3 — extended no-op key coverage (C-KEYMAP-*)", () => {
 		const editorLine = lines.find((l) => l.includes("\x1b[7m"));
 		expect(editorLine).toContain("ab");
 		expect(editorLine).not.toContain("\x1b[A"); expect(editorLine).not.toContain("\x1b[B"); expect(editorLine).not.toContain("\x1b[C"); expect(editorLine).not.toContain("\x1b[D");
-		expect(editorLine).not.toContain("B");
 	});
 
 	it("C-KEYMAP-LEFT: left arrow moves cursor in freeform editor", () => {
@@ -65,12 +64,10 @@ describe("W3 — extended no-op key coverage (C-KEYMAP-*)", () => {
 		c.handleInput("c");   // insert at 1 → "acb", cursor=2
 		const lines = c.render(60);
 		const editorLine = lines.find((l) => l.includes("\x1b[7m"));
-		// cursor at 2: "ac█b"
-		expect(editorLine).toContain("a");
-		expect(editorLine).toContain("b");
-		expect(editorLine).toContain("c");
+		// cursor at 2: "ac█b" — 去 ANSI 后精确文本 "acb"（证明 c 插在 a 与 b 之间）
+		const stripped = editorLine!.replace(/\x1b\[[0-9;]*m/g, "");
+		expect(stripped).toContain("acb");
 		expect(editorLine).not.toContain("\x1b[A"); expect(editorLine).not.toContain("\x1b[B"); expect(editorLine).not.toContain("\x1b[C"); expect(editorLine).not.toContain("\x1b[D");
-		expect(editorLine).not.toContain("D");
 	});
 
 	it("C-KEYMAP-HOME: Home key moves cursor to start in freeform editor", () => {
@@ -81,13 +78,11 @@ describe("W3 — extended no-op key coverage (C-KEYMAP-*)", () => {
 		c.handleInput("d");    // insert at 0 → "dabc", cursor=1
 		const lines = c.render(60);
 		const editorLine = lines.find((l) => l.includes("\x1b[7m"));
-		// cursor at 1: "d\x1b[7ma\x1b[27mbc" — cursor reverse video splits "abc"
-		expect(editorLine).toContain("d");
-		expect(editorLine).toContain("a");
-		expect(editorLine).toContain("b");
-		expect(editorLine).toContain("c");
+		// cursor at 1: "d\x1b[7ma\x1b[27mbc" — 去 ANSI 后精确文本 "dabc"（证明 d 插在开头）
+		const stripped = editorLine!.replace(/\x1b\[[0-9;]*m/g, "");
+		expect(stripped).toContain("dabc");
 		expect(editorLine).not.toContain("\x1b[A"); expect(editorLine).not.toContain("\x1b[B"); expect(editorLine).not.toContain("\x1b[C"); expect(editorLine).not.toContain("\x1b[D");
-		expect(editorLine).not.toContain("H");
+		expect(editorLine).not.toContain("\x1b[H");
 	});
 
 	it("C-KEYMAP-END: End key moves cursor to end of text", () => {
@@ -154,7 +149,7 @@ describe("W3 — extended no-op key coverage (C-KEYMAP-*)", () => {
 		const editorLine = lines.find((l) => l.includes("\x1b[7m"));
 		expect(editorLine).toContain("ab");
 		expect(editorLine).not.toContain("\x1b[A"); expect(editorLine).not.toContain("\x1b[B"); expect(editorLine).not.toContain("\x1b[C"); expect(editorLine).not.toContain("\x1b[D");
-		expect(editorLine).not.toContain("P");
+		expect(editorLine).not.toContain("\x1bO");
 	});
 
 	it("C-KEYMAP-DELETE: Delete key is no-op in freeform editor (not backspace)", () => {

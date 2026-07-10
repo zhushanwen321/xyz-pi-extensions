@@ -114,7 +114,7 @@ export interface QuestionState {
 	commentValue: string | null;
 	/** 当前交互模式 */
 	mode: QuestionMode;
-	/** 编辑器草稿文本（每问题独立持有，迁移到 QuestionState 后替代组件级 editorText） */
+	/** 编辑器草稿文本（每问题独立持有，进编辑器时预填、退出时清空） */
 	draftText: string;
 	/** 进入编辑器前保存的 options 光标位置（退出编辑器时恢复） */
 	savedOptionsCursorIndex: number;
@@ -134,4 +134,17 @@ export function createQuestionState(): QuestionState {
 		draftText: "",
 		savedOptionsCursorIndex: 0,
 	};
+}
+
+// ── UTF-16 surrogate pair 工具（编辑器光标移动/删除/渲染共用） ──
+/** 高代理位掩码：charCode & 0xFC00 === 0xD800 判定 surrogate pair 前半 */
+export const SURROGATE_HIGH_MASK = 0xFC00;
+/** 高代理起始码点（surrogate pair 前半的判定值） */
+export const SURROGATE_HIGH_START = 0xD800;
+/** 一个 surrogate pair 占用的 UTF-16 code unit 数 */
+export const SURROGATE_PAIR_LEN = 2;
+
+/** 检查 s[i] 是否是 UTF-16 高代理（surrogate pair 的前半部分） */
+export function isHighSurrogate(s: string, i: number): boolean {
+	return (s.charCodeAt(i) & SURROGATE_HIGH_MASK) === SURROGATE_HIGH_START;
 }

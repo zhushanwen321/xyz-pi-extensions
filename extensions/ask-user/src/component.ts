@@ -2,13 +2,15 @@
 import { type Component, matchesKey, parseKey, truncateToWidth } from "@mariozechner/pi-tui";
 
 import { allOptions, renderQuestionView } from "./question-view";
-import { buildResult, renderSubmitView } from "./submit-view";
+import { buildResult, renderButtonBar, renderSubmitView } from "./submit-view";
 import {
 	createQuestionState,
 	HEADER_MAX_CHARS,
+	isHighSurrogate,
 	type Question,
 	type QuestionState,
 	type Result,
+	SURROGATE_PAIR_LEN,
 	type ThemeLike,
 } from "./types";
 
@@ -114,7 +116,7 @@ export class AskUserComponent implements Component {
 		// 多问题：底部按钮栏（Submit / Cancel）。Submit tab 上不重复渲染（renderSubmitView 内嵌 focus 高亮）
 		if (!this.isSingle && this.activeTab < this.questions.length) {
 			inner.push("");
-			this.renderButtonBar(innerWidth, add, null);
+			add(renderButtonBar(this.theme, this.allConfirmed(), null));
 		}
 
 		// 用 box 边框包裹：每行 pad 到 innerWidth 后加 │ 左右边框
@@ -159,28 +161,6 @@ export class AskUserComponent implements Component {
 			parts.push(t.fg("dim", submitLabel));
 		}
 		add(truncateToWidth(parts.join(""), innerWidth));
-	}
-
-	/**
-	 * 底部按钮栏：[ Submit ]   [ Cancel ]。
-	 * focus: null=纯展示（问题 tab），"submit"/"cancel"=高亮对应按钮（Submit tab）。
-	 */
-	private renderButtonBar(
-		innerWidth: number,
-		add: (s: string) => void,
-		focus: "submit" | "cancel" | null,
-	): void {
-		const t = this.theme;
-		const allDone = this.allConfirmed();
-		const isSubmit = focus === "submit";
-		const isCancel = focus === "cancel";
-		const submit = isSubmit
-			? (allDone ? t.fg("success", t.bold(" Submit ")) : t.fg("accent", t.bold(" Submit ")))
-			: (allDone ? t.fg("success", " Submit ") : t.fg("dim", " Submit "));
-		const cancel = isCancel
-			? t.fg("accent", t.bold(" Cancel "))
-			: t.fg("muted", " Cancel ");
-		add(`${t.fg("dim", "[")}${submit}${t.fg("dim", "]")}   ${t.fg("dim", "[")}${cancel}${t.fg("dim", "]")}`);
 	}
 
 	// ── 输入路由 ──
@@ -332,133 +312,144 @@ export class AskUserComponent implements Component {
 	}
 
 	private handleEditorInput(data: string, state: QuestionState, q: Question): void {
-		// 检查 charAt 是否是 UTF-16 高代理（surrogate pair 的前半部分）
-		const isHighSurrogate = (s: string, i: number): boolean =>
-			(s.charCodeAt(i) & 0xFC00) === 0xD800;
-
 		// parseKey 白名单拦截 — 替代旧的 matchesKey 散调 + 兜底 printable 遍历
 		const keyId = parseKey(data);
-
 		if (keyId !== undefined) {
-			// parseKey 命中（special key / modifier 组合 / 单字符 printable）
-			if (matchesKey(data, "escape")) {
-				if (state.mode === "comment") {
-					// comment Esc: skip comment, advance (keep existing commentValue)
-					state.mode = "options";
-					state.draftText = "";
-					state.cursorIndex = state.savedOptionsCursorIndex;
-					this.advance();
-					return;
-				}
-				// freeform Esc: save draft to freeDraft (separate from submitted freeTextValue)
-				// so discarded drafts don't pollute the answer or trigger auto-confirm.
-				state.freeDraft = state.draftText || null;
-				state.mode = "options";
-				state.draftText = "";
-				state.cursorIndex = state.savedOptionsCursorIndex;
-				this.invalidate();
-				this.tui.requestRender();
-				return;
-			}
-			if (matchesKey(data, "enter")) {
-				const text = state.draftText.trim();
-				if (state.mode === "freeform") {
-					state.cursorIndex = state.savedOptionsCursorIndex;
-					if (text) {
-						state.freeTextValue = text;
-						state.selectedIndex = null;
-						state.mode = "options";
-						state.draftText = "";
-						this.afterConfirm(state, q);
-					} else {
-						state.freeTextValue = null;
-						state.mode = "options";
-						state.draftText = "";
-						if ((q.multiSelect ? state.selectedIndices.size === 0 : state.selectedIndex === null) && state.freeTextValue === null) {
-							state.confirmed = false;
-						}
-						this.invalidate();
-						this.tui.requestRender();
-					}
-					return;
-				}
-				state.commentValue = text || null;
-				state.mode = "options";
-				state.draftText = "";
-				state.cursorIndex = state.savedOptionsCursorIndex;
-				this.advance();
-				return;
-			}
-			if (matchesKey(data, "backspace")) {
-				if (state.cursorIndex > 0) {
-					// 删除整个 code point（surrogate pair 时删 2 个 code unit）
-					const deleteCount = state.cursorIndex >= 2 && isHighSurrogate(state.draftText, state.cursorIndex - 2) ? 2 : 1;
-					state.draftText = state.draftText.slice(0, state.cursorIndex - deleteCount) + state.draftText.slice(state.cursorIndex);
-					state.cursorIndex -= deleteCount;
-				}
-				this.invalidate();
-				this.tui.requestRender();
-				return;
-			}
-			// 光标移动
-			if (matchesKey(data, "left")) {
-				// 跳过 surrogate pair 中间位置
-				const newLeft = state.cursorIndex - 1;
-				state.cursorIndex = newLeft > 0 && isHighSurrogate(state.draftText, newLeft - 1)
-					? newLeft - 1
-					: Math.max(0, newLeft);
-				this.invalidate();
-				this.tui.requestRender();
-				return;
-			}
-			if (matchesKey(data, "right")) {
-				// 跳过 surrogate pair 中间位置
-				state.cursorIndex = isHighSurrogate(state.draftText, state.cursorIndex)
-					? Math.min(state.draftText.length, state.cursorIndex + 2)
-					: Math.min(state.draftText.length, state.cursorIndex + 1);
-				this.invalidate();
-				this.tui.requestRender();
-				return;
-			}
-			if (matchesKey(data, "home")) {
-				state.cursorIndex = 0;
-				this.invalidate();
-				this.tui.requestRender();
-				return;
-			}
-			if (matchesKey(data, "end")) {
-				state.cursorIndex = state.draftText.length;
-				this.invalidate();
-				this.tui.requestRender();
-				return;
-			}
-			// 空格特判：parseKey(" ") 返回 "space"（非单字符），需显式追加
-			if (matchesKey(data, "space")) {
-				state.draftText = state.draftText.slice(0, state.cursorIndex) + " " + state.draftText.slice(state.cursorIndex);
-				state.cursorIndex++;
-				this.invalidate();
-				this.tui.requestRender();
-				return;
-			}
-			// 单字符 printable：parseKey("a") 返回 "a"（code 32-126），在光标处插入
-			if (keyId.length === 1 && keyId >= " " && keyId <= "~") {
-				state.draftText = state.draftText.slice(0, state.cursorIndex) + keyId + state.draftText.slice(state.cursorIndex);
-				state.cursorIndex++;
-				this.invalidate();
-				this.tui.requestRender();
-				return;
-			}
-			// 其他 special key（功能键/modifier 组合）→ no-op（不泄漏）
+			this.handleEditorKey(data, keyId, state, q);
 			return;
 		}
+		this.handleEditorPaste(data, state);
+	}
 
-		// keyId === undefined → 多字符粘贴 chunk → printable 提取（BC-1/BC-2/BC-3 保持）
-		// 未识别控制序列（OSC/DA/DCS/APC/unknown CSI）整体丢弃，不提取可见残渣。
-		// 排除 bracketed paste 标记防 C-PASTE 退化。依赖 StdinBuffer 序列拆分保证 data 整体性。
+	/** parseKey 命中的键：escape/enter/backspace/光标移动/space/printable 各有语义，
+	 *  其他 special key（功能键/modifier 组合）no-op。 */
+	private handleEditorKey(data: string, keyId: string, state: QuestionState, q: Question): void {
+		if (matchesKey(data, "escape")) {
+			this.handleEditorEsc(state);
+			return;
+		}
+		if (matchesKey(data, "enter")) {
+			this.handleEditorEnter(state, q);
+			return;
+		}
+		if (matchesKey(data, "backspace")) {
+			this.deleteCharBeforeCursor(state);
+			return;
+		}
+		if (this.moveCursor(data, state)) return;
+		// 空格特判：parseKey(" ") 返回 "space"（非单字符），需显式插入
+		if (matchesKey(data, "space")) {
+			this.insertAtCursor(state, " ");
+			return;
+		}
+		// 单字符 printable：parseKey("a") 返回 "a"（code 32-126），在光标处插入
+		if (keyId.length === 1 && keyId >= " " && keyId <= "~") {
+			this.insertAtCursor(state, keyId);
+			return;
+		}
+		// 其他 special key（功能键/modifier 组合）→ no-op（不泄漏）
+	}
+
+	/** Esc：comment 跳过评论并 advance；freeform 存 freeDraft 草稿后回 options。 */
+	private handleEditorEsc(state: QuestionState): void {
+		if (state.mode === "comment") {
+			// comment Esc: skip comment, advance (keep existing commentValue)
+			state.mode = "options";
+			state.draftText = "";
+			state.cursorIndex = state.savedOptionsCursorIndex;
+			this.advance();
+			return;
+		}
+		// freeform Esc: save draft to freeDraft (separate from submitted freeTextValue)
+		// so discarded drafts don't pollute the answer or trigger auto-confirm.
+		state.freeDraft = state.draftText || null;
+		state.mode = "options";
+		state.draftText = "";
+		state.cursorIndex = state.savedOptionsCursorIndex;
+		this.invalidate();
+		this.tui.requestRender();
+	}
+
+	/** Enter：freeform 有文本→提交，空文本→回退；comment→保存评论并 advance。 */
+	private handleEditorEnter(state: QuestionState, q: Question): void {
+		const text = state.draftText.trim();
+		if (state.mode === "freeform") {
+			state.cursorIndex = state.savedOptionsCursorIndex;
+			if (text) {
+				state.freeTextValue = text;
+				state.selectedIndex = null;
+				state.mode = "options";
+				state.draftText = "";
+				this.afterConfirm(state, q);
+			} else {
+				state.freeTextValue = null;
+				state.mode = "options";
+				state.draftText = "";
+				// freeTextValue 刚清空；confirmed 仅在无其他选择时置 false（允许重新作答）
+				if (q.multiSelect ? state.selectedIndices.size === 0 : state.selectedIndex === null) {
+					state.confirmed = false;
+				}
+				this.invalidate();
+				this.tui.requestRender();
+			}
+			return;
+		}
+		state.commentValue = text || null;
+		state.mode = "options";
+		state.draftText = "";
+		state.cursorIndex = state.savedOptionsCursorIndex;
+		this.advance();
+	}
+
+	/** 在光标处插入文本，光标前移 text.length。 */
+	private insertAtCursor(state: QuestionState, text: string): void {
+		state.draftText = state.draftText.slice(0, state.cursorIndex) + text + state.draftText.slice(state.cursorIndex);
+		state.cursorIndex += text.length;
+		this.invalidate();
+		this.tui.requestRender();
+	}
+
+	/** 删除光标前一个 code point（surrogate pair 时删整个 code point）。 */
+	private deleteCharBeforeCursor(state: QuestionState): void {
+		if (state.cursorIndex <= 0) return;
+		const deleteCount = state.cursorIndex >= SURROGATE_PAIR_LEN && isHighSurrogate(state.draftText, state.cursorIndex - SURROGATE_PAIR_LEN) ? SURROGATE_PAIR_LEN : 1;
+		state.draftText = state.draftText.slice(0, state.cursorIndex - deleteCount) + state.draftText.slice(state.cursorIndex);
+		state.cursorIndex -= deleteCount;
+		this.invalidate();
+		this.tui.requestRender();
+	}
+
+	/** 光标移动（left/right/home/end），surrogate pair 安全跳过代理中间位。
+	 *  返回 true 表示命中了移动键；false 表示非移动键，交由上层处理。 */
+	private moveCursor(data: string, state: QuestionState): boolean {
+		if (matchesKey(data, "left")) {
+			const newLeft = state.cursorIndex - 1;
+			state.cursorIndex = newLeft > 0 && isHighSurrogate(state.draftText, newLeft - 1)
+				? newLeft - 1
+				: Math.max(0, newLeft);
+		} else if (matchesKey(data, "right")) {
+			state.cursorIndex = isHighSurrogate(state.draftText, state.cursorIndex)
+				? Math.min(state.draftText.length, state.cursorIndex + SURROGATE_PAIR_LEN)
+				: Math.min(state.draftText.length, state.cursorIndex + 1);
+		} else if (matchesKey(data, "home")) {
+			state.cursorIndex = 0;
+		} else if (matchesKey(data, "end")) {
+			state.cursorIndex = state.draftText.length;
+		} else {
+			return false;
+		}
+		this.invalidate();
+		this.tui.requestRender();
+		return true;
+	}
+
+	/** 多字符粘贴 chunk → printable 提取（BC-1/BC-2/BC-3 保持）。
+	 *  未识别控制序列（OSC/DA/DCS/APC/unknown CSI）整体丢弃，不提取可见残渣。
+	 *  排除 bracketed paste 标记防 C-PASTE 退化。依赖 StdinBuffer 序列拆分保证 data 整体性。 */
+	private handleEditorPaste(data: string, state: QuestionState): void {
 		if (data.startsWith("\x1b") && !data.includes("\x1b[200~") && !data.includes("\x1b[201~")) {
 			return;
 		}
-
 		const cleaned = data.replace(/\x1b\[200~|\x1b\[201~/g, "");
 		let changed = false;
 		// 用 Array.from 正确拆分 emoji/surrogate pairs
@@ -472,7 +463,6 @@ export class AskUserComponent implements Component {
 		if (changed) {
 			this.invalidate();
 			this.tui.requestRender();
-			return;
 		}
 	}
 
