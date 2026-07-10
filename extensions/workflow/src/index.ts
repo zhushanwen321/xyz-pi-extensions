@@ -80,6 +80,28 @@ export default function workflowExtension(pi: ExtensionAPI): void {
     }
   >();
 
+ // ── Helper: 日志端口（写入 session entry，便于 debug） ───
+
+  function log(
+    level: "debug" | "info" | "warn" | "error",
+    component: string,
+    message: string,
+    data?: unknown,
+  ): void {
+    try {
+      pi.appendEntry("workflow:log", {
+        timestamp: Date.now(),
+        level,
+        component,
+        message,
+        data,
+      });
+    } catch (err) {
+      // 日志写入失败不应阻断主流程；debug 记录但不干扰
+      console.debug("[workflow:log] appendEntry failed", err);
+    }
+  }
+
  // ── Helper: 解析 sessionDir ───
 
   function resolveSessionDir(): string {
@@ -118,6 +140,7 @@ export default function workflowExtension(pi: ExtensionAPI): void {
       eventBus: pi.events,
       scheduleTimeBudget: (runId: string, budgetTimeMs: number) =>
         scheduleTimeBudget(runId, deps, budgetTimeMs),
+      log,
     };
     return deps;
   }
@@ -276,8 +299,14 @@ export default function workflowExtension(pi: ExtensionAPI): void {
     get activeTempFiles() {
       return getDeps().activeTempFiles;
     },
+    get eventBus() {
+      return getDeps().eventBus;
+    },
     get scheduleTimeBudget() {
       return getDeps().scheduleTimeBudget;
+    },
+    get log() {
+      return getDeps().log;
     },
   };
 

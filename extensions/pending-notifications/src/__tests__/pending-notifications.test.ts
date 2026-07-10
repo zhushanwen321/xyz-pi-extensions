@@ -233,7 +233,10 @@ describe("pendingNotificationsExtension factory", () => {
 		it("U1: 1 register no unregister → 1 active, no flush", async () => {
 			fireSessionStart(setup, createMockCtx([makeRegisterEntry("w-1")]));
 			expect(await getCount(setup)).toBe(1);
-			expect(setup.appendEntryMock).not.toHaveBeenCalled();
+			const stateChangeCalls = setup.appendEntryMock.mock.calls.filter(
+				(c) => c[0] === "pending:register" || c[0] === "pending:unregister",
+			);
+			expect(stateChangeCalls).toHaveLength(0);
 		});
 
 		it("U2: register + unregister → 0 active", async () => {
@@ -306,7 +309,10 @@ describe("pendingNotificationsExtension factory", () => {
 			setup.appendEntryMock.mockClear();
 
 			expect(() => setup.handlers.pendingUnregister!({ id: "nope", reason: "completed" })).not.toThrow();
-			expect(setup.appendEntryMock).not.toHaveBeenCalled();
+			const stateChangeCalls = setup.appendEntryMock.mock.calls.filter(
+				(c) => c[0] === "pending:register" || c[0] === "pending:unregister",
+			);
+			expect(stateChangeCalls).toHaveLength(0);
 		});
 	});
 

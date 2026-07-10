@@ -40,6 +40,14 @@ export async function handleBeforeAgentStart(
 ): Promise<BeforeAgentStartResult | undefined> {
 	if (!session.state) return;
 
+	pi.appendEntry("goal:log", {
+		timestamp: Date.now(),
+		level: "debug",
+		component: "goal:before-agent-start",
+		message: "handleBeforeAgentStart invoked",
+		data: { status: session.state.status },
+	});
+
 	// 终态处理
 	if (isTerminalStatus(session.state.status)) {
 		handleTerminalStateBeforeAgent(pi, session, ctx);
@@ -63,6 +71,20 @@ export async function handleBeforeAgentStart(
 	const pendingHint = activePending.length > 0
 		? `\nNote: There are ${activePending.length} pending async operation(s) running. Consider waiting for them to complete before starting new work.`
 		: "";
+
+	pi.appendEntry("goal:log", {
+		timestamp: Date.now(),
+		level: "debug",
+		component: "goal:before-agent-start",
+		message: "pending entries computed",
+		data: {
+			pendingRegisters: pendingRegisters.length,
+			pendingUnregisters: pendingUnregisters.size,
+			activePending: activePending.length,
+			injectHint: activePending.length > 0,
+			pendingIds: activePending.map((e) => (e.data as Record<string, unknown>)?.id),
+		},
+	});
 
 	return {
 		message: {

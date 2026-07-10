@@ -78,6 +78,7 @@ function makeDeps(opts?: {
   const completeReason = opts?.completeReason ?? "completed";
   const completeAfterMs = opts?.completeAfterMs ?? 0;
 
+  const deps: LauncherDeps = {} as LauncherDeps;
   const workerHost: WorkerHost = opts?.workerHost ?? {
     start: vi.fn().mockImplementation(() => {
       const handle = new WorkerHandle(asWorker(createFakeWorker()));
@@ -89,6 +90,10 @@ function makeDeps(opts?: {
               run.state.scriptResult = { value: "done" };
             }
             run.transition("done", completeReason);
+ // 模拟真实完成路径（handleReturn/abortRun）的 done 后副作用：
+ // unregister emit + onRunDone 回调（生产代码在 error-recovery/lifecycle）
+            deps.eventBus?.emit("pending:unregister", { id: run.runId, reason: run.state.reason ?? "completed" });
+            deps.onRunDone?.(run);
           }
         }
       }, completeAfterMs);
@@ -96,14 +101,12 @@ function makeDeps(opts?: {
     }),
   };
 
-  return {
-    store:
-      opts?.store ?? { save: vi.fn().mockResolvedValue(undefined), loadAll: vi.fn().mockResolvedValue([]) },
-    workerHost,
-    runner: opts?.runner ?? { run: vi.fn().mockResolvedValue({ content: "ok" }) },
-    runs,
-    registry: makeRegistry(script),
-  };
+  deps.store = opts?.store ?? { save: vi.fn().mockResolvedValue(undefined), loadAll: vi.fn().mockResolvedValue([]) };
+  deps.workerHost = workerHost;
+  deps.runner = opts?.runner ?? { run: vi.fn().mockResolvedValue({ content: "ok" }) };
+  deps.runs = runs;
+  deps.registry = makeRegistry(script);
+  return deps;
 }
 
 // ── 正常完成 ─────────────────────────────────────────────────

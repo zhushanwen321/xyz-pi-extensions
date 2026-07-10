@@ -57,10 +57,47 @@ export default function pendingNotificationsExtension(pi: ExtensionAPI): void {
 	let registry: PendingRegistry = createRegistry();
 	let currentSessionId: string = "";
 
+	// 安全写入 session entry：忽略 stale context 等不可恢复错误（如 subagent 子进程
+	// session replacement 后 listener 仍触发）。返回是否成功。
+	function safeAppendEntry(customType: string, data: unknown): boolean {
+		try {
+			pi.appendEntry(customType, data);
+			return true;
+		} catch {
+			// stale context 或 session 已关闭时，静默丢弃。entry 不是关键业务数据，
+			// 丢失不会破坏主流程。
+			return false;
+		}
+	}
+
 	// ── EventBus 监听：pending:register ─────────────────────
 	pi.events.on("pending:register", (data: unknown) => {
+		safeAppendEntry("pending:log", {
+			timestamp: Date.now(),
+			level: "debug",
+			component: "pending-notifications",
+			message: "listener: pending:register received",
+			data,
+		});
 		const parsed = parseRegisterEvent(data);
-		if (!parsed) return;
+		if (!parsed) {
+			safeAppendEntry("pending:log", {
+				timestamp: Date.now(),
+				level: "warn",
+				component: "pending-notifications",
+				message: "listener: pending:register parse failed",
+				data,
+			});
+			return;
+		}
+
+		safeAppendEntry("pending:log", {
+			timestamp: Date.now(),
+			level: "debug",
+			component: "pending-notifications",
+			message: "listener: pending:register parsed",
+			data: parsed,
+		});
 
 		const now = Date.now();
 		const entry: PendingEntry = {
@@ -75,9 +112,18 @@ export default function pendingNotificationsExtension(pi: ExtensionAPI): void {
 
 		// 重复注册忽略（U6）
 		const added = register(registry, entry);
-		if (!added) return;
+		if (!added) {
+			safeAppendEntry("pending:log", {
+				timestamp: Date.now(),
+				level: "debug",
+				component: "pending-notifications",
+				message: "listener: pending:register ignored (duplicate)",
+				data: { id: parsed.id },
+			});
+			return;
+		}
 
-		pi.appendEntry("pending:register", {
+		safeAppendEntry("pending:register", {
 			id: entry.id,
 			type: entry.type,
 			name: entry.name,
@@ -86,35 +132,69 @@ export default function pendingNotificationsExtension(pi: ExtensionAPI): void {
 			sessionId: entry.sessionId,
 		});
 
-		// [DEBUG] 注册成功时往 TUI 输出可见提示，便于验证 EventBus → entry 链路
-		// display:true 让 TUI 渲染，不传 triggerTurn 故不唤醒 agent turn
-		pi.sendMessage({
-			customType: "pending-debug",
-			content: `[pending-notifications] registered [${entry.type}] ${entry.name} (id=${entry.id})`,
-			display: true,
+		safeAppendEntry("pending:log", {
+			timestamp: Date.now(),
+			level: "debug",
+			component: "pending-notifications",
+			message: "listener: pending:register appended",
+			data: { id: parsed.id },
 		});
 	});
 
 	// ── EventBus 监听：pending:unregister ───────────────────
 	pi.events.on("pending:unregister", (data: unknown) => {
+		safeAppendEntry("pending:log", {
+			timestamp: Date.now(),
+			level: "debug",
+			component: "pending-notifications",
+			message: "listener: pending:unregister received",
+			data,
+		});
 		const parsed = parseUnregisterEvent(data);
-		if (!parsed) return;
+		if (!parsed) {
+			safeAppendEntry("pending:log", {
+				timestamp: Date.now(),
+				level: "warn",
+				component: "pending-notifications",
+				message: "listener: pending:unregister parse failed",
+				data,
+			});
+			return;
+		}
+
+		safeAppendEntry("pending:log", {
+			timestamp: Date.now(),
+			level: "debug",
+			component: "pending-notifications",
+			message: "listener: pending:unregister parsed",
+			data: parsed,
+		});
 
 		const status = mapReasonToStatus(parsed.reason);
 		const changed = unregister(registry, parsed.id, status);
-		if (!changed) return;
+		if (!changed) {
+			safeAppendEntry("pending:log", {
+				timestamp: Date.now(),
+				level: "debug",
+				component: "pending-notifications",
+				message: "listener: pending:unregister ignored (unknown id)",
+				data: { id: parsed.id },
+			});
+			return;
+		}
 
-		pi.appendEntry("pending:unregister", {
+		safeAppendEntry("pending:unregister", {
 			id: parsed.id,
 			reason: parsed.reason,
 			status,
 		});
 
-		// [DEBUG] 注销时往 TUI 输出可见提示
-		pi.sendMessage({
-			customType: "pending-debug",
-			content: `[pending-notifications] unregistered ${parsed.id} (reason=${parsed.reason})`,
-			display: true,
+		safeAppendEntry("pending:log", {
+			timestamp: Date.now(),
+			level: "debug",
+			component: "pending-notifications",
+			message: "listener: pending:unregister appended",
+			data: { id: parsed.id },
 		});
 	});
 
@@ -127,9 +207,22 @@ export default function pendingNotificationsExtension(pi: ExtensionAPI): void {
 		const now = Date.now();
 		const { expiredToFlush } = rebuildFromEntries(registry, entries, currentSessionId, now);
 
+		safeAppendEntry("pending:log", {
+			timestamp: now,
+			level: "debug",
+			component: "pending-notifications",
+			message: "session_start: registry rebuilt",
+			data: {
+				sessionId: currentSessionId,
+				totalEntries: entries.length,
+				activeAfterRebuild: getActive(registry).length,
+				expiredToFlush: expiredToFlush.length,
+			},
+		});
+
 		// 补 expired/跨 session 残留的 unregister entry（U3/U4）
 		for (const item of expiredToFlush) {
-			pi.appendEntry("pending:unregister", {
+			safeAppendEntry("pending:unregister", {
 				id: item.id,
 				status: item.status,
 			});
@@ -142,7 +235,7 @@ export default function pendingNotificationsExtension(pi: ExtensionAPI): void {
 		for (const op of active) {
 			const changed = unregister(registry, op.id, "cancelled");
 			if (changed) {
-				pi.appendEntry("pending:unregister", {
+				safeAppendEntry("pending:unregister", {
 					id: op.id,
 					status: "cancelled",
 				});
@@ -159,6 +252,14 @@ export default function pendingNotificationsExtension(pi: ExtensionAPI): void {
 		execute: async (params: unknown) => {
 			const p = params as ToolParams;
 			const active = getActive(registry);
+
+			safeAppendEntry("pending:log", {
+				timestamp: Date.now(),
+				level: "debug",
+				component: "pending-notifications",
+				message: `tool ${p.action} requested`,
+				data: { action: p.action, activeCount: active.length },
+			});
 
 			if (p.action === "count") {
 				return {
