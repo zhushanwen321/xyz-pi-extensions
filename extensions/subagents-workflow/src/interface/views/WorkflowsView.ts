@@ -32,7 +32,7 @@ import { Key, matchesKey } from "@mariozechner/pi-tui";
 import {
   getAllToolCalls,
   projectLiveProgress,
-} from "../../orchestration/live/execution-record.ts";
+} from "../../execution/execution-record.ts";
 import type { ExecutionTraceNode } from "../../orchestration/models/types.ts";
 import type { WorkflowRun } from "../../orchestration/models/workflow-run.ts";
 import { saveWorkflow } from "../../orchestration/workflow-files.ts";

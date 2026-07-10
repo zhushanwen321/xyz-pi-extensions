@@ -7,7 +7,7 @@
 
 import { truncateToWidth, visibleWidth } from "@mariozechner/pi-tui";
 
-import type { AgentEventLogEntry } from "../../orchestration/live/types.ts";
+import type { AgentEventLogEntry } from "../../execution/types.ts";
 import type { ExecutionTraceNode, ToolCallEntry } from "../../orchestration/models/types.ts";
 import type { DoneReason, RunStatus } from "../../orchestration/models/types.ts";
 

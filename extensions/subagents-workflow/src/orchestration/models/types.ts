@@ -13,7 +13,7 @@
  * 层归属：Engine（数据结构 + 不变式守卫）。
  */
 
-import type { ExecutionRecord } from "../live/types.ts";
+import type { ExecutionRecord } from "../../execution/types.ts";
 
 // ── 状态机 ────────────────────────────────────────────────────
 
