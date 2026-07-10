@@ -210,6 +210,7 @@ describe("ReviewGate hard-requires workflow extension", () => {
       skillResolver: {} as never,
     } as GateContext;
 
+    await expect(gate.run(ctx)).rejects.toThrow(/Install @zhushanwen\/pi-subagents-workflow/);
     await expect(gate.run(ctx)).rejects.toThrow(/requires workflow extension/);
   });
 
@@ -225,6 +226,7 @@ describe("ReviewGate hard-requires workflow extension", () => {
       skillResolver: {} as never,
     } as GateContext;
 
+    await expect(gate.run(ctx)).rejects.toThrow(/Install @zhushanwen\/pi-subagents-workflow/);
     await expect(gate.run(ctx)).rejects.toThrow(/requires workflow extension/);
   });
 });
