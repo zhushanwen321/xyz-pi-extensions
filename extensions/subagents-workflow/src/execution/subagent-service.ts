@@ -752,9 +752,20 @@ export class SubagentService {
     // ── Step 3: finalized + cleanup + aliveMarker（三件各自独立 try/catch）──
     if (record.sessionFile) {
       try {
-        writeFinalized(record.sessionFile);
+        // MF-1 fix: cancelled 状态写 tombstone 而非 finalized，防重建丢失 cancelled
+        if (status === "cancelled") {
+          writeCancelledTombstone(record.sessionFile, {
+            id: record.id,
+            status: "cancelled",
+            agent: record.agent,
+            startedAt: record.startedAt,
+            endedAt: record.endedAt ?? Date.now(),
+          });
+        } else {
+          writeFinalized(record.sessionFile);
+        }
       } catch (err) {
-        bestEffort(err, "writeFinalized (finalizeRecord Step3)");
+        bestEffort(err, "writeFinalized/tombstone (finalizeRecord Step3)");
       }
     }
     if (record.worktreeHandle && patchOk) {

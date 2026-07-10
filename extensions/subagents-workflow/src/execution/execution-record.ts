@@ -745,16 +745,24 @@ export function jsonlToAgentEvent(raw: JsonlEvent): AgentEvent[] {
 function accumulateMessageEndForRecord(raw: JsonlEvent): AgentEvent[] {
   const events: AgentEvent[] = [];
   const msg = raw.message as Record<string, unknown> | undefined;
-  const usageRaw = msg?.usage as Record<string, unknown> | undefined;
+  const usageRaw = (typeof msg?.usage === "object" && msg.usage !== null) 
+    ? msg.usage as Record<string, unknown> 
+    : undefined;
 
   if (usageRaw) {
-    const costObj = usageRaw.cost as Record<string, unknown> | undefined;
-    const { cost: _costField, ...usageBase } = usageRaw;
-    void _costField;
+    const costObj = (typeof usageRaw.cost === "object" && usageRaw.cost !== null)
+      ? usageRaw.cost as Record<string, unknown>
+      : undefined;
+    // MF-3 fix: 显式提取字段 + Number.isFinite 守卫，不使用 spread + as 断言
+    const numOrZero = (v: unknown): number =>
+      typeof v === "number" && Number.isFinite(v) ? v : 0;
     const usage: AgentUsage = {
-      ...usageBase,
+      input: numOrZero(usageRaw.input),
+      output: numOrZero(usageRaw.output),
+      cacheRead: numOrZero(usageRaw.cacheRead),
+      cacheWrite: numOrZero(usageRaw.cacheWrite),
       cost: typeof costObj?.total === "number" ? costObj.total : undefined,
-    } as AgentUsage;
+    };
     events.push({ type: "message_end", usage });
   }
 

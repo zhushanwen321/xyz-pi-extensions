@@ -644,7 +644,7 @@ export async function runSpawn(
           rootSessionId: record.rootSessionId,
           parentRecordId: record.parentRecordId,
           depth: record.depth,
-          forkDepth: (opts.parentForkDepth ?? 0) + 1,
+          forkDepth: opts.fork ? (opts.parentForkDepth ?? 0) + 1 : undefined,
         };
         try {
           fs.appendFileSync(

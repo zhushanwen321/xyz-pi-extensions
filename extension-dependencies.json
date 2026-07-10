@@ -9,11 +9,6 @@
           "package": "@zhushanwen/pi-structured-output",
           "type": "optional",
           "reason": "schema 结构化输出，缺失时降级为纯文本"
-        },
-        {
-          "package": "@zhushanwen/pi-budget-accounting",
-          "type": "package",
-          "reason": "Budget.consume 直接 import shared 的 weightTokens 加权计算函数"
         }
       ]
     },
@@ -25,11 +20,6 @@
           "package": "@zhushanwen/pi-structured-output",
           "type": "runtime",
           "reason": "subagent 执行 + workflow 编排两端均需 structured-output 扩展加载以提供 schema 结构化输出 tool（代码层不 import，仅运行时 tool 名引用）"
-        },
-        {
-          "package": "@zhushanwen/pi-budget-accounting",
-          "type": "package",
-          "reason": "Budget.consume 直接 import shared 的 weightTokens 加权计算函数"
         }
       ]
     },

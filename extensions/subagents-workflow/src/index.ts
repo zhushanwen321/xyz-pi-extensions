@@ -22,6 +22,7 @@ import { getAgentDir } from "@mariozechner/pi-coding-agent";
 
 // ═══ execution/ 层（subagents 核心 + 运行时） ═══
 import { DiscoveryConfigLoader } from "./execution/discovery-config.ts";
+import { bestEffort } from "./execution/best-effort.ts";
 import {
   getModelConfigService,
   ModelConfigService,
@@ -256,7 +257,8 @@ export default function subagentsWorkflowExtension(pi: ExtensionAPI): void {
         runs.set(run.runId, run);
       }
     } catch (err) {
-      void err;
+      // QMF-4 fix: store.loadAll 失败是关键路径错误，workflow 域将未初始化
+      console.error("[subagents-workflow] store.loadAll failed, workflow domain uninitialized:", err);
     }
 
     // D-008: per-session SAR（需要 ctxModel 填底 + subagentService 委托目标）。
@@ -301,7 +303,7 @@ export default function subagentsWorkflowExtension(pi: ExtensionAPI): void {
           try {
             await pauseRun(run.runId, makeDeps(state));
           } catch (err) {
-            void err;
+            bestEffort(err, "pauseRun (session_tree handler)");
           }
         }
       }
