@@ -590,6 +590,7 @@ export class SubagentService {
             appendSystemPrompt: opts.appendSystemPrompt,
             skillPath: opts.skillPath,
             schema: opts.schema,
+            schemaEnv: opts.schemaEnv, // D-A6 bridge: workflow 编排层透传 schema 到 childEnv
             maxTurns: opts.maxTurns,
             graceTurns: opts.graceTurns,
             signal,

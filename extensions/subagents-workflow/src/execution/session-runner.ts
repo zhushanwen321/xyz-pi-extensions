@@ -163,6 +163,31 @@ export interface RunOptions {
   worktree?: WorktreeHandle;
   /** 父级 fork depth（用于深度限制 + identity entry）。 */
   parentForkDepth?: number;
+  /** D-A6: schema JSON 字符串，存在时注入 childEnv.PI_WORKFLOW_SCHEMA。
+   *  workflow 编排层通过 ExecuteOptions.schemaEnv 透传此处，
+   *  runSpawn 将其注入子进程环境变量，激活 structured-output 扩展注册 tool。
+   *  tool 层 execute 不传此字段 → childEnv 不注入 → BC-6 行为不变。 */
+  schemaEnv?: string;
+}
+
+// ============================================================
+// D-A6 schemaEnv bridge
+// ============================================================
+
+/**
+ * 将 schemaEnv 注入 childEnv（D-A6 bridge）。
+ *
+ * [模块内直调] —— 纯 env 赋值。从 runSpawn 的 childEnv 构造块调用。
+ * 存在时设 childEnv.PI_WORKFLOW_SCHEMA → 子进程 structured-output 扩展读取并注册 tool。
+ * 不存在时 childEnv 不变（BC-6：tool 层不传 schemaEnv → 行为与合并前一致）。
+ */
+export function applySchemaEnvToChildEnv(
+  childEnv: Record<string, string | undefined>,
+  schemaEnv?: string,
+): void {
+  if (schemaEnv) {
+    childEnv.PI_WORKFLOW_SCHEMA = schemaEnv;
+  }
 }
 
 // ============================================================
@@ -463,6 +488,8 @@ export async function runSpawn(
   if (opts.fork && opts.parentForkDepth !== undefined) {
     childEnv.PI_SUBAGENT_FORK_DEPTH = String(opts.parentForkDepth + 1);
   }
+  // D-A6 bridge: schema 激活 structured-output 扩展注册 tool（workflow 编排层需要）
+  applySchemaEnvToChildEnv(childEnv, opts.schemaEnv);
 
   // i. 组装 args + spawn
   // [M3 恢复] skillPaths: 主 session 的 skillDirs + 调用方传入的 skillPath（与旧 in-process run 一致）。
