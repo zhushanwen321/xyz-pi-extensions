@@ -590,6 +590,7 @@ export class SubagentService {
             appendSystemPrompt: opts.appendSystemPrompt,
             skillPath: opts.skillPath,
             schema: opts.schema,
+            schemaEnv: opts.schemaEnv,
             maxTurns: opts.maxTurns,
             graceTurns: opts.graceTurns,
             signal,

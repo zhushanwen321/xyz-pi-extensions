@@ -10,6 +10,7 @@
  *
  * 层归属：Engine。零 infra 依赖（AC-1）。
  */
+import type { AgentEvent } from "../../shared/agent-event.ts";
 import type { AgentRegistry } from "../agent-discovery.ts";
 import type { WorkerHandle } from "../worker-handle.ts";
 import type { RunSpec } from "./run-spec.ts";
@@ -21,15 +22,17 @@ import type { WorkflowRun } from "./workflow-run.ts";
 /**
  * Agent 子进程执行 port。Infra 实现：SubprocessAgentRunner。
  *
- * run 在子进程中执行单次 agent 调用，返回结构化结果（含 usage/toolCalls）。
- * signal 用于 abort 传播（kill subprocess）。
+ * run 执行单次 agent 调用（委托 SubagentService.executeAndAwait），返回结构化结果。
+ * signal 用于 abort 传播。
  *
- * onEvent（可选）：子进程 stdout 每解析出一条 JSONL 事件（即 SDK session.subscribe 事件，
- * 见 pi print-mode.ts）就回调一次，供调用方实时更新 live record 供 TUI 展示进度。
+ * onEvent（可选）：强类型 AgentEvent 回调，供调用方实时更新 live record 供 TUI 展示进度。
  * 不传则不回调（向后兼容；现有调用点不传不受影响）。
+ *
+ * D-005: onEvent 签名从 raw Record<string,unknown> 升级为 AgentEvent——委托后不再有
+ * raw JSONL 中间层（executeAndAwait 直接出 AgentEvent，session-runner handleSdkEvent 出口）。
  */
 export interface AgentRunner {
-  run(opts: AgentCallOpts, signal: AbortSignal, onEvent?: (raw: Record<string, unknown>) => void): Promise<AgentResult>;
+  run(opts: AgentCallOpts, signal: AbortSignal, onEvent?: (event: AgentEvent) => void): Promise<AgentResult>;
 }
 
 // ── Port 2: RunStore ──────────────────────────────────────────
