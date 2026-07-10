@@ -209,6 +209,25 @@ describe("state pure functions", () => {
 			expect(comp.expiredToFlush).toEqual([{ id: "w-1", status: "expired" }]);
 		});
 	});
+
+	describe("normalizeRegisterEntry defaults (via rebuild)", () => {
+		it("entry with only {id} → type=workflow, name=id, sessionId=current, expiresAt=registeredAt+TTL", () => {
+			const r = createRegistry();
+			const result = rebuildFromEntries(
+				r,
+				[{ customType: "pending:register", data: { id: "w-min" } }],
+				"sess-current",
+				Date.now(),
+			);
+			expect(result.activeIds).toEqual(["w-min"]);
+			const entry = r.operations.get("w-min")!;
+			expect(entry.type).toBe("workflow");
+			expect(entry.name).toBe("w-min");
+			expect(entry.sessionId).toBe("sess-current");
+			expect(entry.status).toBe("active");
+			expect(entry.expiresAt).toBe(entry.registeredAt + 3_600_000);
+		});
+	});
 });
 
 // ────────────────────────────────────────────────────
@@ -353,6 +372,44 @@ describe("pendingNotificationsExtension factory", () => {
 			for (const c of unregisterCalls) {
 				expect((c[1] as { status: string }).status).toBe("cancelled");
 			}
+		});
+	});
+
+	describe("safeAppendEntry error handling", () => {
+		it("appendEntry throwing (stale context) does not break register listener, registry still updated", async () => {
+			// listener 先 register(registry) 更新内存，再 safeAppendEntry；appendEntry 抛错被 catch，registry 仍已更新
+			fireSessionStart(setup, createMockCtx([]));
+			setup.appendEntryMock.mockImplementationOnce(() => {
+				throw new Error("stale context");
+			});
+
+			expect(() => setup.handlers.pendingRegister!({ id: "w-1", type: "workflow", name: "test" })).not.toThrow();
+
+			expect(await getCount(setup)).toBe(1);
+		});
+	});
+
+	describe("parse null/malformed events", () => {
+		it("parseRegisterEvent: null and missing-id data → no throw, no register entry", () => {
+			fireSessionStart(setup, createMockCtx([]));
+			setup.appendEntryMock.mockClear();
+
+			expect(() => setup.handlers.pendingRegister!(null)).not.toThrow();
+			expect(() => setup.handlers.pendingRegister!({ type: "workflow" })).not.toThrow();
+
+			const registerCalls = setup.appendEntryMock.mock.calls.filter((c) => c[0] === "pending:register");
+			expect(registerCalls).toHaveLength(0);
+		});
+
+		it("parseUnregisterEvent: null and missing-id data → no throw, no unregister entry", () => {
+			fireSessionStart(setup, createMockCtx([]));
+			setup.appendEntryMock.mockClear();
+
+			expect(() => setup.handlers.pendingUnregister!(null)).not.toThrow();
+			expect(() => setup.handlers.pendingUnregister!({ reason: "completed" })).not.toThrow();
+
+			const unregisterCalls = setup.appendEntryMock.mock.calls.filter((c) => c[0] === "pending:unregister");
+			expect(unregisterCalls).toHaveLength(0);
 		});
 	});
 });

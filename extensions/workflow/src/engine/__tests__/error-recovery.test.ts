@@ -101,6 +101,7 @@ function makeDeps(overrides?: {
   workerHost?: WorkerHost;
   budget?: Budget;
   onRunDone?: (run: WorkflowRun) => void;
+  eventBus?: { emit: (channel: string, data: unknown) => void };
   agentRegistry?: AgentRegistry;
   sessionDir?: string;
   activeTempFiles?: Set<string>;
@@ -110,6 +111,7 @@ function makeDeps(overrides?: {
   runner: AgentRunner;
   runs: Map<string, WorkflowRun>;
   onRunDone: (run: WorkflowRun) => void;
+  eventBus: { emit: (channel: string, data: unknown) => void };
   agentRegistry?: AgentRegistry;
   sessionDir?: string;
   activeTempFiles?: Set<string>;
@@ -125,6 +127,9 @@ function makeDeps(overrides?: {
     runs,
  // T-2：onRunDone 默认注入 spy，让所有 done-transition 站点可被断言。
     onRunDone: overrides?.onRunDone ?? vi.fn(),
+ // M5: eventBus 默认注入 spy，让 4 个 done-transition 站点的真实 pending:unregister
+ //    emit 可被断言（区别于 launcher.test.ts 在 workerHost.start mock 内自行 bake emit）。
+    eventBus: overrides?.eventBus ?? { emit: vi.fn() },
  // BL-1: 解析依赖（可选——不传则 dispatchAgentCall 跳过 resolveAgentOpts）。
     ...(overrides?.agentRegistry ? { agentRegistry: overrides.agentRegistry } : {}),
     ...(overrides?.sessionDir ? { sessionDir: overrides.sessionDir } : {}),
@@ -162,6 +167,11 @@ describe("handleWorkerMessage 路由", () => {
     expect(run.state.reason).toBe("completed");
     expect(run.state.scriptResult).toEqual({ value: 42 });
     expect(deps.store.save).toHaveBeenCalled();
+ // M5: handleReturn 真实 emit pending:unregister（reason="completed"，error-recovery.ts:377）
+    expect(deps.eventBus.emit).toHaveBeenCalledWith(
+      "pending:unregister",
+      expect.objectContaining({ id: run.runId, reason: "completed" }),
+    );
   });
 
   it("return 消息捕获 workerLogs（P2-2）", async () => {
@@ -455,6 +465,11 @@ describe("handleWorkerError 重试矩阵", () => {
     expect(run.state.error).toBe("boom");
  // T-2: done,failed 站点也触发 onRunDone
     expect(deps.onRunDone).toHaveBeenCalledWith(run);
+ // M5: handleWorkerError 超限真实 emit pending:unregister（reason="failed"，error-recovery.ts:419）
+    expect(deps.eventBus.emit).toHaveBeenCalledWith(
+      "pending:unregister",
+      expect.objectContaining({ id: run.runId, reason: "failed" }),
+    );
   });
 
   it("每次重试递增 workerErrorCount（C.5 跨 runtime 存活）", async () => {
@@ -516,6 +531,11 @@ describe("handleScriptError 重试矩阵", () => {
     expect(run.state.error).toContain("fatal");
  // T-2: script-error done,failed 站点也触发 onRunDone
     expect(deps.onRunDone).toHaveBeenCalledWith(run);
+ // M5: handleScriptError 超限真实 emit pending:unregister（reason="failed"，error-recovery.ts:499）
+    expect(deps.eventBus.emit).toHaveBeenCalledWith(
+      "pending:unregister",
+      expect.objectContaining({ id: run.runId, reason: "failed" }),
+    );
   });
 
   it("workerLogs 捕获到 errorLogs（P2-2）", async () => {
@@ -707,6 +727,11 @@ describe("T-1: C-2 budget_limited 终止", () => {
     expect(run.state.error).toBe("Budget exceeded");
     expect(run.state.budget.isExceeded()).toBe(true);
     expect(deps.store.save).toHaveBeenCalled();
+ // M5: budget 超限路径真实 emit pending:unregister（reason="budget_limited"，error-recovery.ts:310）
+    expect(deps.eventBus.emit).toHaveBeenCalledWith(
+      "pending:unregister",
+      expect.objectContaining({ id: run.runId, reason: "budget_limited" }),
+    );
   });
 
   it("budget 未超限时不触发 budget_limited", async () => {

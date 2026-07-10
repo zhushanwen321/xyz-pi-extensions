@@ -63,7 +63,7 @@ interface PiLike {
 
 /** pending-notifications 注册/注销 helper（避免重复代码）。 */
 function emitPendingRegister(pi: PiLike | null, id: string, name?: string): void {
-  pi?.events?.emit("pending:register", {
+  pi?.events.emit("pending:register", {
     id,
     type: "subagent",
     name: name ?? id,
@@ -71,7 +71,7 @@ function emitPendingRegister(pi: PiLike | null, id: string, name?: string): void
 }
 
 function emitPendingUnregister(pi: PiLike | null, id: string, reason: string): void {
-  pi?.events?.emit("pending:unregister", {
+  pi?.events.emit("pending:unregister", {
     id,
     reason,
   });
@@ -322,8 +322,7 @@ export class SubagentService {
         worktreeHandle = this.worktreeManager.create(this.cwd, record.id);
         record.worktreeHandle = worktreeHandle;
       } catch (err) {
-        // create 失败→不进入 run，合成 failed result
-        emitPendingUnregister(this.pi, record.id, "failed");
+        // create 失败→不进入 run，finalizeFailed 统一收尾（含 emitPendingUnregister failed）
         const _result = await this.finalizeFailed(record, err);
         return this.buildEarlyFailedHandle(record, mode);
       }

@@ -139,7 +139,19 @@ declare module "@mariozechner/pi-coding-agent" {
 		on(event: "session_start", handler: ExtensionHandler<SessionStartEvent>): void;
 		on(event: "resources_discover", handler: ExtensionHandler<ResourcesDiscoverEvent, ResourcesDiscoverResult>): void;
 		on(event: string, handler: (...args: any[]) => unknown): void;
-		registerTool(tool: unknown): void;
+		/**
+	 * Tool 注册。保留最小形状校验（name/label/description/parameters/execute），
+	 * 对齐真实 SDK 的 ToolDefinition 必填字段，避免 stub 过宽掩盖契约违反（如缺 label）。
+	 * execute 用 (...args: never[]) => unknown：never[] 在参数逆变位置接受任意签名，
+	 * 既不破坏现有 execute 的类型推导，又能在 stub-only 环境查出缺 label。 */
+	registerTool(tool: {
+		name: string;
+		label: string;
+		description: string;
+		parameters: unknown;
+		execute: (...args: never[]) => unknown;
+		[key: string]: unknown;
+	}): void;
 		registerCommand(name: string, command: unknown): void;
 		registerShortcut(shortcut: unknown, options: unknown): void;
 		registerFlag(name: string, options: unknown): void;
@@ -158,7 +170,7 @@ declare module "@mariozechner/pi-coding-agent" {
 		getCommands(): Array<{ name: string }>;
 		getThinkingLevel(): string;
 		setThinkingLevel(level: string): void;
-		events: { emit(channel: string, data: unknown): void; on(channel: string, handler: (...args: any[]) => void): () => void };
+		events: { emit(channel: string, data: unknown): void; on(channel: string, handler: (data: unknown) => void): () => void };
 		// 扩展间私有协议（goal/workflow 用 __ 前缀注入字段）
 		[key: `__${string}`]: unknown;
 	}
@@ -166,7 +178,14 @@ declare module "@mariozechner/pi-coding-agent" {
 	export function setActiveTools(tools: string[]): void;
 	export function sendUserMessage(message: string, options?: Record<string, unknown>): void;
 	export function appendEntry(customType: string, data?: unknown): void;
-	export function registerTool(tool: unknown): void;
+	export function registerTool(tool: {
+	name: string;
+	label: string;
+	description: string;
+	parameters: unknown;
+	execute: (...args: never[]) => unknown;
+	[key: string]: unknown;
+}): void;
 	export function registerCommand(name: string, command: unknown): void;
 	export function on(event: string, handler: (...args: any[]) => Promise<unknown>): void;
 

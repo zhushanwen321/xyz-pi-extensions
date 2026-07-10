@@ -51,8 +51,32 @@ interface ToolParams {
 	action: "count" | "list";
 }
 
+/**
+ * 模块级 EventBus 监听器 unsubscribe 函数列表。
+ *
+ * EventBus 是进程级单例（真实 SDK resource-loader 构造一次，跨 /reload、会话切换复用）。
+ * 工厂函数 pendingNotificationsExtension 每次 reload 都重新执行，若不先移除旧监听器，
+ * N 次 reload 后 EventBus 上会累积 N 组监听器（>11 后抛 Possible EventEmitter memory leak）。
+ *
+ * 用模块级变量跨 reload 持久：工厂入口先调用上一轮的 unsubscribe 清理旧监听器，
+ * 再注册新的。这同时修复了多 session 串数据问题——reload 后只有当前闭包的监听器存活，
+ * currentSessionId 始终是最新 session（旧闭包的过期 currentSessionId 不会再给事件打戳）。
+ */
+let unsubscribers: Array<() => void> = [];
+
 /** 扩展入口 */
 export default function pendingNotificationsExtension(pi: ExtensionAPI): void {
+	// ── 清理上一轮 reload 的 EventBus 监听器（H2 防泄漏） ─────
+	for (const unsub of unsubscribers) {
+		try {
+			unsub();
+		} catch (err) {
+			// unsubscribe 失败不阻断初始化（监听器可能已被 EventBus 内部清理）
+			console.debug("[pending-notifications] unsubscribe failed during cleanup", err);
+		}
+	}
+	unsubscribers = [];
+
 	// ── 闭包内状态（session 隔离，每个 session_start 重建） ─────
 	let registry: PendingRegistry = createRegistry();
 	let currentSessionId: string = "";
@@ -70,34 +94,26 @@ export default function pendingNotificationsExtension(pi: ExtensionAPI): void {
 		}
 	}
 
+	// debug 日志：环境变量 PENDING_DEBUG=1 时输出到 console.debug。
+	// 不再写入 session entry（pending:log）——session entries 是 append-only 无法 GC，
+	// 12 处 debug 日志会让长 session 的 entries 线性膨胀，而 goal before-agent-start
+	// 每 turn 全量扫描 getEntries()。状态数据（pending:register/unregister）仍写 entry。
+	const debugEnabled = process.env.PENDING_DEBUG === "1";
+	function debugLog(level: string, message: string, data?: unknown): void {
+		if (!debugEnabled) return;
+		console.debug(`[pending-notifications:${level}] ${message}`, data ?? "");
+	}
+
 	// ── EventBus 监听：pending:register ─────────────────────
-	pi.events.on("pending:register", (data: unknown) => {
-		safeAppendEntry("pending:log", {
-			timestamp: Date.now(),
-			level: "debug",
-			component: "pending-notifications",
-			message: "listener: pending:register received",
-			data,
-		});
+	unsubscribers.push(pi.events.on("pending:register", (data: unknown) => {
+		debugLog("debug", "listener: pending:register received", data);
 		const parsed = parseRegisterEvent(data);
 		if (!parsed) {
-			safeAppendEntry("pending:log", {
-				timestamp: Date.now(),
-				level: "warn",
-				component: "pending-notifications",
-				message: "listener: pending:register parse failed",
-				data,
-			});
+			debugLog("warn", "listener: pending:register parse failed", data);
 			return;
 		}
 
-		safeAppendEntry("pending:log", {
-			timestamp: Date.now(),
-			level: "debug",
-			component: "pending-notifications",
-			message: "listener: pending:register parsed",
-			data: parsed,
-		});
+		debugLog("debug", "listener: pending:register parsed", parsed);
 
 		const now = Date.now();
 		const entry: PendingEntry = {
@@ -113,13 +129,7 @@ export default function pendingNotificationsExtension(pi: ExtensionAPI): void {
 		// 重复注册忽略（U6）
 		const added = register(registry, entry);
 		if (!added) {
-			safeAppendEntry("pending:log", {
-				timestamp: Date.now(),
-				level: "debug",
-				component: "pending-notifications",
-				message: "listener: pending:register ignored (duplicate)",
-				data: { id: parsed.id },
-			});
+			debugLog("debug", "listener: pending:register ignored (duplicate)", { id: parsed.id });
 			return;
 		}
 
@@ -132,54 +142,24 @@ export default function pendingNotificationsExtension(pi: ExtensionAPI): void {
 			sessionId: entry.sessionId,
 		});
 
-		safeAppendEntry("pending:log", {
-			timestamp: Date.now(),
-			level: "debug",
-			component: "pending-notifications",
-			message: "listener: pending:register appended",
-			data: { id: parsed.id },
-		});
-	});
+		debugLog("debug", "listener: pending:register appended", { id: parsed.id });
+	}));
 
 	// ── EventBus 监听：pending:unregister ───────────────────
-	pi.events.on("pending:unregister", (data: unknown) => {
-		safeAppendEntry("pending:log", {
-			timestamp: Date.now(),
-			level: "debug",
-			component: "pending-notifications",
-			message: "listener: pending:unregister received",
-			data,
-		});
+	unsubscribers.push(pi.events.on("pending:unregister", (data: unknown) => {
+		debugLog("debug", "listener: pending:unregister received", data);
 		const parsed = parseUnregisterEvent(data);
 		if (!parsed) {
-			safeAppendEntry("pending:log", {
-				timestamp: Date.now(),
-				level: "warn",
-				component: "pending-notifications",
-				message: "listener: pending:unregister parse failed",
-				data,
-			});
+			debugLog("warn", "listener: pending:unregister parse failed", data);
 			return;
 		}
 
-		safeAppendEntry("pending:log", {
-			timestamp: Date.now(),
-			level: "debug",
-			component: "pending-notifications",
-			message: "listener: pending:unregister parsed",
-			data: parsed,
-		});
+		debugLog("debug", "listener: pending:unregister parsed", parsed);
 
 		const status = mapReasonToStatus(parsed.reason);
 		const changed = unregister(registry, parsed.id, status);
 		if (!changed) {
-			safeAppendEntry("pending:log", {
-				timestamp: Date.now(),
-				level: "debug",
-				component: "pending-notifications",
-				message: "listener: pending:unregister ignored (unknown id)",
-				data: { id: parsed.id },
-			});
+			debugLog("debug", "listener: pending:unregister ignored (unknown id)", { id: parsed.id });
 			return;
 		}
 
@@ -189,14 +169,8 @@ export default function pendingNotificationsExtension(pi: ExtensionAPI): void {
 			status,
 		});
 
-		safeAppendEntry("pending:log", {
-			timestamp: Date.now(),
-			level: "debug",
-			component: "pending-notifications",
-			message: "listener: pending:unregister appended",
-			data: { id: parsed.id },
-		});
-	});
+		debugLog("debug", "listener: pending:unregister appended", { id: parsed.id });
+	}));
 
 	// ── session_start：从持久化 entries 重建 registry ────────
 	pi.on("session_start", (_event, ctx: ExtensionContext) => {
@@ -207,17 +181,11 @@ export default function pendingNotificationsExtension(pi: ExtensionAPI): void {
 		const now = Date.now();
 		const { expiredToFlush } = rebuildFromEntries(registry, entries, currentSessionId, now);
 
-		safeAppendEntry("pending:log", {
-			timestamp: now,
-			level: "debug",
-			component: "pending-notifications",
-			message: "session_start: registry rebuilt",
-			data: {
-				sessionId: currentSessionId,
-				totalEntries: entries.length,
-				activeAfterRebuild: getActive(registry).length,
-				expiredToFlush: expiredToFlush.length,
-			},
+		debugLog("debug", "session_start: registry rebuilt", {
+			sessionId: currentSessionId,
+			totalEntries: entries.length,
+			activeAfterRebuild: getActive(registry).length,
+			expiredToFlush: expiredToFlush.length,
 		});
 
 		// 补 expired/跨 session 残留的 unregister entry（U3/U4）
@@ -246,6 +214,7 @@ export default function pendingNotificationsExtension(pi: ExtensionAPI): void {
 	// ── 查询 tool ─────────────────────────────────────────
 	pi.registerTool({
 		name: "pending_notifications",
+		label: "Pending Notifications",
 		description:
 			"查询当前活跃的异步操作（workflow/subagent）。action=count 返回数量；action=list 返回列表。状态由 EventBus + session entries 维护，无需手动注册。",
 		parameters: PendingNotificationsParams,
@@ -253,13 +222,7 @@ export default function pendingNotificationsExtension(pi: ExtensionAPI): void {
 			const p = params as ToolParams;
 			const active = getActive(registry);
 
-			safeAppendEntry("pending:log", {
-				timestamp: Date.now(),
-				level: "debug",
-				component: "pending-notifications",
-				message: `tool ${p.action} requested`,
-				data: { action: p.action, activeCount: active.length },
-			});
+			debugLog("debug", `tool ${p.action} requested`, { action: p.action, activeCount: active.length });
 
 			if (p.action === "count") {
 				return {
@@ -321,6 +284,7 @@ function mapReasonToStatus(reason: string): PendingStatus {
 		case "cancelled": return "cancelled";
 		case "expired": return "expired";
 		case "time_limited": return "time_limited";
+		case "budget_limited": return "failed";
 		case "aborted": return "aborted";
 		default: return "completed";
 	}

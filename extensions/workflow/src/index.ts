@@ -97,8 +97,8 @@ export default function workflowExtension(pi: ExtensionAPI): void {
         data,
       });
     } catch (err) {
-      // 日志写入失败不应阻断主流程；debug 记录但不干扰
-      console.debug("[workflow:log] appendEntry failed", err);
+      // 日志写入失败不应阻断主流程（stale context / session replacement 时 listener 仍可触发）
+      void err;
     }
   }
 
@@ -184,6 +184,11 @@ export default function workflowExtension(pi: ExtensionAPI): void {
         if (run.state.status === "running") {
           run.state.error = "Process killed (kill-9 or crash recovery)";
           run.transition("done", "failed");
+          // 崩溃恢复的 run 无匹配 pending:unregister，补发以避免 goal 持续误报 active
+          pi.events.emit("pending:unregister", {
+            id: run.runId,
+            reason: "failed",
+          });
         }
         runs.set(run.runId, run);
       }

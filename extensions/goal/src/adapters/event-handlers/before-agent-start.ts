@@ -62,12 +62,23 @@ export async function handleBeforeAgentStart(
 	// 正常 context injection。
 	// 全解耦：planAvailable 恒 true（contextInjectionPrompt 恒定建议 plan mode，AI 自行决定）。
 	// pending-notifications：若有活跃的异步操作，注入等待提示。
+	// 读取 pending:register/unregister entry 算差集，并校验 expiresAt（TTL 过期的视为非活跃）。
+	// pending-notifications 的 rebuildFromEntries 在其 session_start 已 flush 跨 session/过期残留，
+	// 但同一 session 内超时未 unregister 的 entry（如崩溃恢复遗漏）需此处完补以防误报 active。
+	const now = Date.now();
 	const entries = ctx.sessionManager.getEntries();
-	const pendingRegisters = entries.filter((e) => e.customType === "pending:register");
 	const pendingUnregisters = new Set(
 		entries.filter((e) => e.customType === "pending:unregister").map((e) => (e.data as Record<string, unknown>)?.id),
 	);
-	const activePending = pendingRegisters.filter((e) => !pendingUnregisters.has((e.data as Record<string, unknown>)?.id));
+	const activePending = entries.filter((e) => {
+		if (e.customType !== "pending:register") return false;
+		const id = (e.data as Record<string, unknown>)?.id;
+		if (pendingUnregisters.has(id)) return false;
+		// TTL 过期视为非活跃（expiresAt 缺失或类型错误时宽容处理为活跃）
+		const expiresAt = (e.data as Record<string, unknown>)?.expiresAt;
+		if (typeof expiresAt === "number" && expiresAt <= now) return false;
+		return true;
+	});
 	const pendingHint = activePending.length > 0
 		? `\nNote: There are ${activePending.length} pending async operation(s) running. Consider waiting for them to complete before starting new work.`
 		: "";
@@ -78,8 +89,6 @@ export async function handleBeforeAgentStart(
 		component: "goal:before-agent-start",
 		message: "pending entries computed",
 		data: {
-			pendingRegisters: pendingRegisters.length,
-			pendingUnregisters: pendingUnregisters.size,
 			activePending: activePending.length,
 			injectHint: activePending.length > 0,
 			pendingIds: activePending.map((e) => (e.data as Record<string, unknown>)?.id),

@@ -19,8 +19,7 @@
   "license": "MIT",
   "files": [
     "src/",
-    "index.ts",
-    "mocks/"
+    "index.ts"
   ],
   "devDependencies": {
     "vitest": "^4.1.8"

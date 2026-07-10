@@ -122,6 +122,11 @@
       "name": "@zhushanwen/pi-ask-user",
       "directory": "extensions/ask-user",
       "dependsOn": []
+    },
+    {
+      "name": "@zhushanwen/pi-pending-notifications",
+      "directory": "extensions/pending-notifications",
+      "dependsOn": []
     }
   ]
 }
