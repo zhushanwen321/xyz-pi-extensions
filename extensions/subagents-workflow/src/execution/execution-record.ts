@@ -28,6 +28,7 @@ import type {
   RecordSnapshot,
   SubagentToolDetails,
   ToolCall,
+  ToolCallResult,
   Turn,
 } from "./types.ts";
 
@@ -621,6 +622,30 @@ export function project(record: ExecutionRecord): SubagentToolDetails {
 }
 
 /**
+ * 投影到 live 进度快照。elapsedSeconds/currentActivity/eventLog 均现算派生。
+ * 供 WorkflowsView 在 agent 运行期间读取实时进度。
+ */
+export function projectLiveProgress(record: ExecutionRecord): {
+  status: ExecutionRecord["status"];
+  turns: number;
+  totalTokens: number;
+  elapsedSeconds: number;
+  eventLog: AgentEventLogEntry[];
+  currentActivity: ReturnType<typeof getCurrentActivity>;
+  lastError: string | undefined;
+} {
+  return {
+    status: record.status,
+    turns: record.turnCount,
+    totalTokens: record.totalTokens,
+    elapsedSeconds: computeElapsedSeconds(record),
+    eventLog: getEventLog(record),
+    currentActivity: getCurrentActivity(record),
+    lastError: record.lastError,
+  };
+}
+
+/**
  * 投影到只读快照（TUI list / poll 消费）。
  * 浅拷贝 turns[]，字段标 readonly 阻止 TUI 回写。
  */
@@ -641,4 +666,105 @@ export function snapshot(record: ExecutionRecord): RecordSnapshot {
     error: record.error,
     sessionFile: record.sessionFile,
   };
+}
+
+// ============================================================
+// JSONL → AgentEvent 翻译（从 live/jsonl-to-agent-event 迁入）
+// ============================================================
+
+/** subprocess JSONL 事件（JSON.parse 结果）。duck-typed，对应 SDK SdkEvent。 */
+type JsonlEvent = Record<string, unknown>;
+
+/**
+ * 把一条 JSONL 事件翻译成 AgentEvent。
+ *
+ * 返回 undefined 表示该事件不映射到任何 AgentEvent（如 session header、message_start、
+ * tool_execution_update），调用方应跳过。
+ *
+ * 一个 JSONL 事件可能产出**多条** AgentEvent（message_end 的 usage + error 各一条），
+ * 故返回数组。绝大多数情况长度为 0 或 1；message_end 最多 2 条。
+ */
+export function jsonlToAgentEvent(raw: JsonlEvent): AgentEvent[] {
+  const type = raw.type;
+
+  switch (type) {
+    case "session":
+    case "message_start":
+    case "turn_start":
+    case "tool_execution_update":
+      return [];
+
+    case "tool_execution_start": {
+      const toolName = typeof raw.toolName === "string" ? raw.toolName : "";
+      return [{ type: "tool_start", toolName, args: raw.args }];
+    }
+
+    case "tool_execution_end": {
+      const toolName = typeof raw.toolName === "string" ? raw.toolName : "";
+      const isError = raw.isError === true;
+      return [{
+        type: "tool_end",
+        toolName,
+        args: raw.args,
+        result: raw.result as ToolCallResult | undefined,
+        isError,
+      }];
+    }
+
+    case "message_update": {
+      const ame = raw.assistantMessageEvent as Record<string, unknown> | undefined;
+      if (ame?.type === "thinking_delta") {
+        const delta = typeof ame.delta === "string" ? ame.delta : "";
+        return [{ type: "thinking_delta", delta }];
+      }
+      if (ame !== undefined && ame.delta !== undefined) {
+        const delta = typeof ame.delta === "string" ? ame.delta : String(ame.delta);
+        return [{ type: "text_delta", delta }];
+      }
+      return [];
+    }
+
+    case "turn_end": {
+      return [{ type: "turn_end" }];
+    }
+
+    case "message_end": {
+      return accumulateMessageEndForRecord(raw);
+    }
+
+    case "compaction_start": {
+      return [{ type: "compaction" }];
+    }
+
+    default:
+      return [];
+  }
+}
+
+/** message_end 翻译：usage 拍平 + stopReason=error/aborted 额外产 error 事件。 */
+function accumulateMessageEndForRecord(raw: JsonlEvent): AgentEvent[] {
+  const events: AgentEvent[] = [];
+  const msg = raw.message as Record<string, unknown> | undefined;
+  const usageRaw = msg?.usage as Record<string, unknown> | undefined;
+
+  if (usageRaw) {
+    const costObj = usageRaw.cost as Record<string, unknown> | undefined;
+    const { cost: _costField, ...usageBase } = usageRaw;
+    void _costField;
+    const usage: AgentUsage = {
+      ...usageBase,
+      cost: typeof costObj?.total === "number" ? costObj.total : undefined,
+    } as AgentUsage;
+    events.push({ type: "message_end", usage });
+  }
+
+  const stopReason = msg?.stopReason;
+  if (stopReason === "error" || stopReason === "aborted") {
+    const errorMessage = typeof msg?.errorMessage === "string"
+      ? msg.errorMessage
+      : (typeof raw.reason === "string" ? raw.reason : String(stopReason));
+    events.push({ type: "error", message: errorMessage });
+  }
+
+  return events;
 }

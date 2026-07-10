@@ -12,8 +12,8 @@
 
 import { Key, matchesKey } from "@mariozechner/pi-tui";
 
-import { getAllToolCalls, projectLiveProgress } from "../../orchestration/live/execution-record.ts";
-import type { AgentEventLogEntry } from "../../orchestration/live/types.ts";
+import { getAllToolCalls, projectLiveProgress } from "../../execution/execution-record.ts";
+import type { AgentEventLogEntry } from "../../execution/types.ts";
 import type { ExecutionTraceNode } from "../../orchestration/models/types.ts";
 import type { WorkflowRun } from "../../orchestration/models/workflow-run.ts";
 import {

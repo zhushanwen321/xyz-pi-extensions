@@ -13,6 +13,7 @@ import {
   getTotalUsage,
   markReconstructedStatus,
   project,
+  projectLiveProgress,
   snapshot,
   tryTransition,
   updateFromEvent,
@@ -915,5 +916,44 @@ describe("computeElapsedSeconds", () => {
 
   it("handles identical startedAt/endedAt (0 seconds)", () => {
     expect(computeElapsedSeconds({ startedAt: 5000, endedAt: 5000 })).toBe(0);
+  });
+});
+
+// ============================================================
+// T3.21: projectLiveProgress 迁移保留（wave-3）
+// ============================================================
+describe("projectLiveProgress (T3.21)", () => {
+  it("projects live progress snapshot from running record", () => {
+    const record = makeRecord({
+      mode: "sync",
+      task: "test task",
+      startedAt: 1000,
+      status: "running",
+      turnCount: 2,
+      totalTokens: 500,
+      lastError: undefined,
+      turns: [
+        { ...emptyTurn(), closed: true, text: "turn 1", closedTs: 2000 },
+        { ...emptyTurn(), closed: false, text: "turn 2 in progress" },
+      ],
+    });
+
+    const result = projectLiveProgress(record);
+    expect(result.status).toBe("running");
+    expect(result.turns).toBe(2);
+    expect(result.totalTokens).toBe(500);
+    expect(result.elapsedSeconds).toBeGreaterThanOrEqual(0);
+    expect(result.eventLog).toBeInstanceOf(Array);
+    expect(result.currentActivity).toBeDefined();
+    expect(result.lastError).toBeUndefined();
+  });
+
+  it("projectLiveProgress returns lastError when set", () => {
+    const record = makeRecord({
+      mode: "sync", task: "failing", startedAt: 0, status: "running",
+      lastError: "something went wrong",
+    });
+    const result = projectLiveProgress(record);
+    expect(result.lastError).toBe("something went wrong");
   });
 });
