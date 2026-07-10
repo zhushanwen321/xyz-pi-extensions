@@ -157,17 +157,17 @@ export interface RunOptions {
   signal: AbortSignal | undefined;
   /** event 回流——SessionRunner 内部 updateFromEvent 后，再回调调用方（widget/notify）。 */
   onEvent: ((event: AgentEvent) => void) | undefined;
+  /** D-A6 bridge: workflow schema JSON 字符串，存在时注入 childEnv.PI_WORKFLOW_SCHEMA。
+   *  workflow 编排层通过 ExecuteOptions.schemaEnv 透传此处，
+   *  runSpawn 将其注入子进程环境变量，激活 structured-output 扩展注册 tool。
+   *  tool 层 execute 不传此字段 → childEnv 不注入 → BC-6 行为不变。 */
+  schemaEnv?: string;
   /** 是否继承父会话上下文（fork 模式，只继承上下文）。 */
   fork?: boolean;
   /** 预创建的 worktree handle（undefined=不隔离，在 parent cwd 跑）。 */
   worktree?: WorktreeHandle;
   /** 父级 fork depth（用于深度限制 + identity entry）。 */
   parentForkDepth?: number;
-  /** D-A6: schema JSON 字符串，存在时注入 childEnv.PI_WORKFLOW_SCHEMA。
-   *  workflow 编排层通过 ExecuteOptions.schemaEnv 透传此处，
-   *  runSpawn 将其注入子进程环境变量，激活 structured-output 扩展注册 tool。
-   *  tool 层 execute 不传此字段 → childEnv 不注入 → BC-6 行为不变。 */
-  schemaEnv?: string;
 }
 
 // ============================================================
@@ -484,7 +484,7 @@ export async function runSpawn(
   }
 
   // h. fork depth 经环境变量传给子进程（子进程 subagents 扩展 W3 读取）
-  const childEnv = { ...process.env };
+  const childEnv: Record<string, string | undefined> = { ...process.env };
   if (opts.fork && opts.parentForkDepth !== undefined) {
     childEnv.PI_SUBAGENT_FORK_DEPTH = String(opts.parentForkDepth + 1);
   }

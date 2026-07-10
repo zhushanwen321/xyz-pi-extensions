@@ -25,11 +25,12 @@
  * 参考：domain-models.md §失败处理矩阵。
  */
 
+import type { AgentEvent } from "../shared/agent-event.ts";
 import { resolveAgentOpts } from "./agent-opts-resolver.ts";
 import { ConcurrencyGate, DEFAULT_CONCURRENCY } from "./concurrency-gate.ts";
 import type { WorkerHandle } from "./worker-handle.ts";
 import { executeAgentCall } from "./execute-agent-call.ts";
-import { createRecord, updateFromEvent, jsonlToAgentEvent } from "../execution/execution-record.ts";
+import { createRecord, updateFromEvent } from "../execution/execution-record.ts";
 import { AgentCall } from "./models/agent-call.ts";
 import type { LifecycleDeps, WorkerHandlers } from "./models/ports.ts";
 import { RunRuntime } from "./models/run-runtime.ts";
@@ -272,12 +273,12 @@ function dispatchAgentCall(
  // 后者已守 paused/terminal 早期 return）。fallback new AbortController 已移除。
   const runtime = run.runtime!;
   const signal = runtime.controller.signal;
-  // onEvent：子进程每吐一条 JSONL 事件就翻译成 AgentEvent 喂给 live record。
+  // D-005: onEvent 签名升级——executeAndAwait 直接出 AgentEvent（强类型，
+  // session-runner handleSdkEvent 出口），不再有 raw JSONL 中间层。
+  // 删 jsonlToAgentEvent 翻译——直接 updateFromEvent。
   // TUI 靠 tick 轮询 trace.toArray() 读 node.live，无需显式通知。
-  const onEvent = (raw: Record<string, unknown>): void => {
-    for (const agentEvent of jsonlToAgentEvent(raw)) {
-      updateFromEvent(liveRecord, agentEvent);
-    }
+  const onEvent = (event: AgentEvent): void => {
+    updateFromEvent(liveRecord, event);
   };
   void runtime.gate
     .withSlot(() => executeAgentCall(call, deps.runner, run.state.budget, signal, run.state.trace, onEvent), signal)

@@ -23,6 +23,7 @@
  * 参考：domain-models.md §5 + §失败处理矩阵。
  */
 
+import type { AgentEvent } from "../shared/agent-event.ts";
 import type { AgentCall } from "./models/agent-call.ts";
 import type { Budget } from "./models/budget.ts";
 import type { AgentRunner } from "./models/ports.ts";
@@ -122,7 +123,7 @@ export async function executeAgentCall(
   budget: Budget,
   signal: AbortSignal,
   trace: Trace,
-  onEvent?: (raw: Record<string, unknown>) => void,
+  onEvent?: (event: AgentEvent) => void,
 ): Promise<void> {
   call.markRunning();
 

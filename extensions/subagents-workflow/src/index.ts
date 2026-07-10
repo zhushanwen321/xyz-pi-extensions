@@ -43,7 +43,7 @@ import type { WorkflowRun } from "./orchestration/models/workflow-run.ts";
 import { AgentRegistry } from "./orchestration/agent-discovery.ts";
 import { cleanupAllTempFiles as cleanupAllFiles } from "./orchestration/agent-opts-resolver.ts";
 import { JsonlRunStore } from "./orchestration/jsonl-run-store.ts";
-import { SubprocessAgentRunner } from "./orchestration/subprocess-agent-runner.ts";
+import { SubprocessAgentRunner } from "./execution/subprocess-agent-runner.ts";
 import { WorkerHostImpl } from "./orchestration/worker-host.ts";
 import { WorkflowScriptRegistryImpl } from "./orchestration/workflow-script-registry-impl.ts";
 
@@ -101,9 +101,12 @@ export default function subagentsWorkflowExtension(pi: ExtensionAPI): void {
   const guard = { isProcessing: false };
 
   // Infra 实例（per-factory 单例，跨 session 复用）
-  const runner = new SubprocessAgentRunner();
   const workerHost = new WorkerHostImpl();
   const registry = new WorkflowScriptRegistryImpl();
+
+  // SAR 改为 per-session 构造（需要 ctxModel 填底 D-008 + subagentService 委托目标）
+  // old: const runner = new SubprocessAgentRunner();
+  // new: per-session session_start 时创建，见下方 makeDeps 前的 runner 创建
 
   // per-session 状态（session_start 时重建）
   const sessionState = new Map<
@@ -114,6 +117,8 @@ export default function subagentsWorkflowExtension(pi: ExtensionAPI): void {
       activeTempFiles: Set<string>;
       agentRegistry: AgentRegistry;
       sessionDir: string;
+      /** D-008 per-session SAR（需要 ctxModel + subagentService） */
+      runner: SubprocessAgentRunner;
     }
   >();
 
@@ -149,11 +154,12 @@ export default function subagentsWorkflowExtension(pi: ExtensionAPI): void {
     activeTempFiles: Set<string>;
     agentRegistry: AgentRegistry;
     sessionDir: string;
+    runner: SubprocessAgentRunner;
   }) {
     const deps: LauncherDeps = {
       store: state.store,
       workerHost,
-      runner,
+      runner: state.runner,
       runs: state.runs,
       registry,
       onRunDone: (run: WorkflowRun) => notifyDone(pi, run.runId, run, notifiedRunIds),
@@ -253,12 +259,21 @@ export default function subagentsWorkflowExtension(pi: ExtensionAPI): void {
       void err;
     }
 
+    // D-008: per-session SAR（需要 ctxModel 填底 + subagentService 委托目标）。
+    // old: const runner = new SubprocessAgentRunner()（module-level singleton，无 deps）
+    // new: per-session session_start 时创建，通过 sessionState 传给 makeDeps。
+    const runner = new SubprocessAgentRunner({
+      subagentService: service,
+      ctxModel: ctx.model ?? undefined,
+    });
+
     sessionState.set(sessionId, {
       store,
       runs,
       activeTempFiles: new Set(),
       agentRegistry,
       sessionDir,
+      runner,
     });
   });
 
@@ -354,7 +369,9 @@ export default function subagentsWorkflowExtension(pi: ExtensionAPI): void {
       return getDeps().store;
     },
     workerHost,
-    runner,
+    get runner() {
+      return getDeps().runner;
+    },
     get runs() {
       return getDeps().runs;
     },

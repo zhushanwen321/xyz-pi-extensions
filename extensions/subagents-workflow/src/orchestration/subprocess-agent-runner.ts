@@ -40,7 +40,7 @@ export class SubprocessAgentRunner implements AgentRunner {
  * per-call timeoutMs：opts.timeoutMs > 0 时合并进同一 AbortController——到期 abort
  * 子进程（agent({timeoutMs:5000}) 生效）。与 ConcurrencyGate.run 路径对称。
  */
-  async run(opts: AgentCallOpts, signal: AbortSignal, onEvent?: (raw: Record<string, unknown>) => void): Promise<AgentResult> {
+  async run(opts: AgentCallOpts, signal: AbortSignal, onEvent?: (event: import("../shared/agent-event.ts").AgentEvent) => void): Promise<AgentResult> {
     const startedAt = Date.now();
 
  // 合并 per-call AbortController：墙钟 timeoutMs（per-call）+ 外部
@@ -78,7 +78,7 @@ export class SubprocessAgentRunner implements AgentRunner {
       let exitCode: number;
 
       try {
-        const result = await runPiProcess({ command, cmdArgs, pipeline, signal: controller.signal, env, onEvent, cwd: opts.cwd });
+        const result = await runPiProcess({ command, cmdArgs, pipeline, signal: controller.signal, env, onEvent: onEvent as unknown as ((raw: Record<string, unknown>) => void) | undefined, cwd: opts.cwd });
         exitCode = result.exitCode;
         stderr = result.stderr;
       } catch (err) {
