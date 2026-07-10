@@ -192,7 +192,7 @@ export abstract class Gate {
     if (typeof fn !== "function") {
       throw new Error(
         `${this.constructor.name} requires workflow extension ` +
-          `(pi.__workflowRun not found). Install @zhushanwen/pi-workflow.`,
+          `(pi.__workflowRun not found). Install @zhushanwen/pi-subagents-workflow.`,
       );
     }
     return fn as WorkflowRunFn;
