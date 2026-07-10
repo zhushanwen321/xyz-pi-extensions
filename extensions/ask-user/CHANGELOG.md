@@ -1,5 +1,11 @@
 # @zhushanwen/pi-ask-user
 
+## 0.1.0
+
+### Minor Changes
+
+- 986ec30: Fix arrow key leak in ask-user editor (chars like `[C` leaking into input text). Refactor key parsing to whitelist architecture using SDK parseKey, migrate editorText to QuestionState.draftText, split handleInput router, add UX hint line.
+
 ## 0.0.4
 
 ### Patch Changes
