@@ -1,0 +1,285 @@
+---
+name: workflow-script-format
+description: >-
+  Reference for writing workflow JS scripts. Auto-loaded when using workflow-generate
+  or writing/editing workflow scripts for Pi. Covers runtime environment, injected
+  globals, constraints, and script patterns. Not for general coding or subagent usage.
+---
+
+# Workflow Script Format Reference
+
+## Runtime Environment
+
+- Script runs inside an **async IIFE in a Worker thread**. Top-level await IS supported.
+- **DO NOT use `import`/`export` (ESM) syntax**. Use `require()` for Node.js built-ins.
+- The script's **`return` value IS captured** and sent back to the main thread.
+
+### [MANDATORY] Do NOT wrap your script in another async IIFE
+
+The worker already wraps your script in an async IIFE. If you add your own `(async function main() { ... })();` wrapper **without `await`**, the worker's outer IIFE resolves immediately (fire-and-forget), posts `return` to the main thread, and the main thread tears down the runtime — **killing any in-flight `agent()` subprocess via SIGKILL within ~2ms**.
+
+```javascript
+// ❌ WRONG: bare IIFE — outer worker IIFE doesn't await this, posts return immediately
+(async function main() {
+  const result = await agent({ prompt: 'analyze' });  // subprocess killed ~2ms after spawn
+})();
+
+// ✅ CORRECT: top-level await directly (the worker wraps this in its own async IIFE)
+const result = await agent({ prompt: 'analyze' });
+
+// ✅ ALSO OK: awaited IIFE (rarely needed — prefer top-level await)
+await (async function main() {
+  const result = await agent({ prompt: 'analyze' });
+})();
+```
+
+This is enforced by `lintScript`:
+- **error** (workflow refuses to run): bare IIFE as a standalone statement + contains agent/parallel/pipeline.
+- **warning** (workflow runs, but flagged): IIFE assigned to a variable or returned from a function + contains agent/parallel/pipeline. Review whether the surrounding code actually awaits the Promise; if not, the same kill-on-spawn bug applies.
+
+## Required: Meta Declaration
+
+Every script MUST declare `meta` at the top level:
+
+```javascript
+const meta = { name: 'workflow-name', description: '...', phases: ['phase1', 'phase2'] };
+```
+
+`name` must match the filename stem. `phases` is for display only.
+
+## Injected Globals (pre-defined, do NOT redeclare)
+
+### `agent(...)` — Call an AI agent
+
+支持三种签名：
+- `agent(promptString)` — 最简，prompt 字符串，返回 content 字符串
+- `agent(promptString, { label?, schema?, ... })` — 字符串 + opts（`label` 是 `description` 的别名）
+- `agent({ prompt, schema?, description?, agent?, skill?, timeoutMs?, model?, scene? })` — 完整 opts 对象
+
+Returns `parsedOutput` (structured data when schema provided) or `content` (string).
+
+**[MANDATORY] Structured output rule:** When you need JSON/structured data from an agent, you MUST pass `schema`. The `schema` parameter triggers a tool-call mechanism where the LLM calls a `structured-output` tool to return validated JSON — this is reliable. NEVER ask the agent to "output JSON in a code block" or use regex to extract JSON from text.
+
+```javascript
+// ✅ CORRECT: use schema parameter — returns parsed JS object directly
+const result = await agent({
+  prompt: 'Analyze this code and rate it',
+  schema: {
+    type: 'object',
+    properties: {
+      score: { type: 'number' },
+      issues: { type: 'array', items: { type: 'string' } },
+    },
+    required: ['score'],
+  },
+  description: 'code-analysis',
+});
+// result is already a parsed object: { score: 8, issues: [...] }
+```
+
+```javascript
+// ❌ WRONG: prompt-based JSON extraction — fragile, LLM often wraps in markdown
+const result = await agent({ prompt: 'Analyze code. Output JSON: { "score": N }' });
+// result is a string, you'd need regex to extract — DON'T do this
+```
+
+### `parallel(calls)` — Run multiple agent calls concurrently
+
+```javascript
+const [r1, r2, r3] = await parallel([
+  agent({ prompt: 'Review file A', description: 'review-a' }),
+  agent({ prompt: 'Review file B', description: 'review-b' }),
+  agent({ prompt: 'Review file C', description: 'review-c' }),
+]);
+```
+
+并发默认上限 4（agent-pool 限流），超出自动排队。元素也可以是返回 Promise 的函数，会被直接调用：
+
+### `pipeline(...)` — Execute stages sequentially
+
+**模式一：顺序模式** — 传入 stage 数组，每个 stage 收到上一个 stage 的结果：
+
+```javascript
+const final = await pipeline([
+  () => agent({ prompt: 'Analyze code', description: 'analyze' }),
+  (prev) => agent({ prompt: `Write tests for: ${prev}`, description: 'test-gen' }),
+]);
+```
+
+**模式二：笛卡尔积模式** — 传入 items 数组 + 多个 stage，对每个 item 依次跑完所有 stage（批处理杀手锏）：
+
+```javascript
+// 对每个 file 依次跑 review → fix
+await pipeline(
+  files,                                      // items
+  (file) => agent({ prompt: `Review ${file}`, description: `review-${file}`, schema: {...} }),
+  (review, file) => agent({ prompt: `Fix ${file}: ${JSON.stringify(review)}`, description: `fix-${file}` }),
+);
+// stage 函数签名：(prevResult, currentItem) => result；第一个 stage 只收 currentItem
+
+### Other globals
+
+- `$ARGS` — Object with workflow arguments (from `--args key=val`)
+- `$WORKSPACE` — Absolute path to the project workspace root
+- `$BUDGET` — Budget info（getter + 方法，**不是**扁平字段）：
+  - `$BUDGET.total` — token 预算上限（未设预算时为 0）
+  - `$BUDGET.spent()` — 已用 token
+  - `$BUDGET.remaining()` — 剩余 token（最小为 0）
+  - 例：`if ($BUDGET.remaining() < 5000) { phase('wrap-up'); }`
+- `phase(name)` — 设置当前阶段名，影响 TUI 分组显示。`meta.phases` 只是声明，TUI 实际分组靠运行时 `phase()` 调用或 agent opts 的 `phase` 字段
+- `log(msg)` — 输出诊断信息（收集到 workerLogs，失败时附在错误消息里，不泄漏到主进程 stderr）
+- `module.exports = { meta, execute }` — 脚本可导出 `execute({ agent, parallel, pipeline, phase, log, $ARGS, $WORKSPACE, $BUDGET })`，运行时会自动调用（兼容 Claude Code 写法）
+
+### `description` naming convention [MANDATORY]
+
+`description` 用作 TUI 显示的 agent 标识，必须简短可读。规则：kebab-case，单词间用 `-` 分隔，不含 round/iteration 后缀。
+
+```javascript
+// ✅ CORRECT: kebab-case，单词间用 - 分隔
+agent({ prompt: '...', description: 'review-business-logic' });
+agent({ prompt: '...', description: 'fix-imports' });
+agent({ prompt: '...', description: 'parse-must-fix' });
+
+// ❌ WRONG: 无分隔符拼接（不可读）
+agent({ prompt: '...', description: 'reviewbusinesslogic' });
+agent({ prompt: '...', description: 'fiximports' });
+
+// ❌ WRONG: 冗长描述（不是 label 用途）
+agent({ prompt: '...', description: 'Review business logic against spec requirements' });
+
+// ❌ WRONG: 不必要的 round/iteration 后缀（TUI 自带序号）
+agent({ prompt: '...', description: 'review-business-logic-round-1' });
+// ✅ CORRECT: 去掉 round 后缀
+agent({ prompt: '...', description: 'review-business-logic' });
+```
+
+## Constraints
+
+- `agent()` calls **must be deterministic in order** for pause/resume to work correctly. 根因：调用结果按单调递增的 callId（从 0 起、按调用顺序）缓存，pause 时杀 Worker 但保留 callCache，resume 时按 callId 重放。`parallel()` 内的调用顺序不能随机，否则重放会错位命中旧结果。注意：无 script hash 校验，**改脚本后 resume 会用旧结果**，开发期改脚本应重新 run。
+- `parallel()` 并发默认上限 4（超出自动排队）。
+- Throwing an error aborts the workflow (after retries).
+- Use `require()` for Node.js built-ins: `const fs = require('node:fs');`
+
+## Complete Example
+
+```javascript
+const meta = { name: 'review-fix-loop', description: 'Loop: review → fix → commit until clean', phases: ['review-fix'] };
+
+const MAX_ROUNDS = 10;
+let round = 0;
+
+while (round < MAX_ROUNDS) {
+  round++;
+  const result = await agent({
+    prompt: `Round ${round}: Review git diff main...HEAD. Fix all issues. Commit with: fix: review round ${round}.`,
+    schema: {
+      type: 'object',
+      properties: {
+        mustFix: { type: 'number', description: 'Number of MUST-fix issues found' },
+        suggestions: { type: 'number', description: 'Number of suggestions' },
+        summary: { type: 'string' },
+      },
+      required: ['mustFix'],
+    },
+    description: `review-${round}`,
+  });
+
+  // result is already a parsed object thanks to schema
+  if (result.mustFix === 0) break;
+}
+
+return { rounds: round, clean: true };
+```
+
+## Script Size Guideline
+
+Keep scripts under **100 lines**. Scripts are orchestration glue, not business logic.
+If a script exceeds 100 lines, split into multiple smaller workflow scripts.
+
+## Verification Patterns
+
+Workflow nodes should be **verifiable** — every critical execution path needs a check that the AI's output is correct. Two patterns are supported:
+
+### Pattern A: Node-Internal Verification
+
+Embed self-check instructions directly in the prompt and require a structured output that includes validation. Best for: trivial classification, single-step lookups, format checks.
+
+```javascript
+// Example: classify severity of a code review finding
+const result = await agent({
+  prompt: `Classify the severity of this finding: "${findingText}".
+The selfCheck field MUST reflect whether severity and reason are both present and consistent.`,
+  schema: {
+    type: 'object',
+    properties: {
+      severity: { type: 'string', enum: ['high', 'medium', 'low'] },
+      reason: { type: 'string' },
+      selfCheck: { type: 'object', properties: { valid: { type: 'boolean' }, reason: { type: 'string' } } },
+    },
+    required: ['severity', 'reason', 'selfCheck'],
+  },
+  description: 'classify-severity',
+});
+
+if (!result.selfCheck.valid) {
+  throw new Error(`self-check failed: ${result.selfCheck.reason}`);
+}
+```
+
+**Pros:** Single call, low overhead. **Cons:** Self-check is part of the same call — AI can lie about validation.
+
+### Pattern B: Follow-up Verify Node
+
+A second `agent()` call that explicitly verifies the previous result. Best for: critical mutations, data transforms, anything where errors propagate downstream.
+
+```javascript
+// Example: review a file, then verify the review is complete
+const review = await agent({
+  prompt: `Review ${file} for issues. Report each finding with severity and reason.`,
+  schema: {
+    type: 'object',
+    properties: {
+      findings: { type: 'array', items: { type: 'object', properties: { severity: { type: 'string' }, reason: { type: 'string' } } } } },
+    },
+    required: ['findings'],
+  },
+  description: `review-${file}`,
+});
+
+const verify = await agent({
+  prompt: `You are verifying a code review. The previous output was:
+${JSON.stringify(review)}
+Did the review cover: (1) all functions in the file, (2) at least 3 potential issues, (3) severity rating for each?`,
+  schema: {
+    type: 'object',
+    properties: {
+      valid: { type: 'boolean' },
+      missingItems: { type: 'array', items: { type: 'string' } },
+    },
+    required: ['valid'],
+  },
+  description: `verify-review-${file}`,
+});
+
+if (!verify.valid) {
+  throw new Error(`verification failed for ${file}: ${verify.missingItems.join(', ')}`);
+}
+```
+
+**Pros:** Independent check, harder to game. **Cons:** Doubles agent calls.
+
+### Decision Tree
+
+```
+Is the step a critical data transform or mutation?
+├─ YES → Use Pattern B (follow-up verify)
+└─ NO
+   ├─ Trivial classification / format check?
+   │  └─ YES → Use Pattern A (node-internal)
+   └─ Read-only / informational?
+      └─ No verification needed
+```
+
+### Anti-pattern
+
+- **Never skip verification entirely on critical execution paths** — even with strong prompts, AI outputs are probabilistic. A verify step catches hallucinations before they propagate.

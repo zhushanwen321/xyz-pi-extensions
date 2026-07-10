@@ -1,0 +1,71 @@
+{
+  "name": "@zhushanwen/pi-subagents-workflow",
+  "version": "1.0.0",
+  "type": "module",
+  "main": "index.ts",
+  "description": "Unified subagent execution and multi-agent workflow orchestration for Pi — spawned-process agent runtime with sync/background modes, stateful workflow management with persistence, state machine, and execution tracing.",
+  "keywords": [
+    "pi-package",
+    "extension",
+    "subagent",
+    "agent-runtime",
+    "workflow",
+    "orchestration",
+    "multi-agent"
+  ],
+  "license": "MIT",
+  "engines": {
+    "node": ">=18"
+  },
+  "files": [
+    "index.ts",
+    "agents/",
+    "skills/",
+    "src/index.ts",
+    "src/execution/",
+    "src/orchestration/",
+    "src/interface/",
+    "src/shared/"
+  ],
+  "pi": {
+    "extensions": [
+      "./index.ts"
+    ],
+    "skills": [
+      "./skills"
+    ]
+  },
+  "scripts": {
+    "typecheck": "npx tsc --noEmit",
+    "test": "vitest run"
+  },
+  "dependencies": {},
+  "peerDependencies": {
+    "@mariozechner/pi-coding-agent": "*",
+    "@mariozechner/pi-ai": "*",
+    "@mariozechner/pi-tui": "*",
+    "@sinclair/typebox": "*",
+    "@zhushanwen/pi-structured-output": "*"
+  },
+  "peerDependenciesMeta": {
+    "@mariozechner/pi-coding-agent": {
+      "optional": true
+    },
+    "@mariozechner/pi-ai": {
+      "optional": true
+    },
+    "@mariozechner/pi-tui": {
+      "optional": true
+    },
+    "@sinclair/typebox": {
+      "optional": true
+    },
+    "@zhushanwen/pi-structured-output": {
+      "optional": true
+    }
+  },
+  "devDependencies": {
+    "@types/node": "^24.0.0",
+    "vitest": "^4.1.8"
+  }
+}
