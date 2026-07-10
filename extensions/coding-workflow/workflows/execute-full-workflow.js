@@ -48,9 +48,9 @@ const MAX_WORKTREES = $ARGS.maxWorktrees || DEFAULT_MAX_WORKTREES;
 // lite: 2M tokens, mid: 20M tokens
 // 传入 workflow 时可通过 $ARGS.tokens 覆盖
 const BUDGET_BY_TIER = {
-  lite: 2_000_000,   // 200K × 10
-  mid: 20_000_000,   // 2M × 10
-  full: 50_000_000,  // 5M × 10（预留）
+  lite: 20_000_000,  // 20M tokens，cache read 占比高，需更多预算
+  mid: 0,            // 不限制，mid 功能复杂度高，避免中途停止
+  full: 0,           // 不限制
 };
 const DEFAULT_BUDGET_TOKENS = BUDGET_BY_TIER[TIER] || BUDGET_BY_TIER.lite;
 const BUDGET_TOKENS = $ARGS.tokens || DEFAULT_BUDGET_TOKENS;

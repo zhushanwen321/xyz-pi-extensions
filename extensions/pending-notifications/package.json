@@ -1,0 +1,35 @@
+{
+  "name": "@zhushanwen/pi-pending-notifications",
+  "version": "0.1.0",
+  "description": "Cross-extension async operation registration/query mechanism for Pi — prevents message injection during long-running operations.",
+  "type": "module",
+  "main": "src/index.ts",
+  "pi": {
+    "extensions": [
+      "./index.ts"
+    ]
+  },
+  "keywords": [
+    "pi-package",
+    "extension",
+    "notifications",
+    "async",
+    "pending"
+  ],
+  "license": "MIT",
+  "files": [
+    "src/",
+    "index.ts"
+  ],
+  "devDependencies": {
+    "vitest": "^4.1.8"
+  },
+  "peerDependencies": {
+    "@mariozechner/pi-coding-agent": "*",
+    "@sinclair/typebox": "*"
+  },
+  "scripts": {
+    "typecheck": "npx tsc --noEmit",
+    "test": "vitest run"
+  }
+}

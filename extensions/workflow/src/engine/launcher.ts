@@ -165,6 +165,8 @@ export async function runAndWait(
   const deadline = Date.now() + timeoutMs;
 
  // 5. 轮询至 done
+ // pending-notification 的 register/unregister 由 runWorkflow（启动注册）+
+ // transition("done") 路径（完成注销）统一处理，runAndWait 不再重复 emit
   while (Date.now() < deadline) {
  // signal abort 检查
     if (signal?.aborted) {

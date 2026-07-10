@@ -61,6 +61,22 @@ interface PiLike {
   ): void;
 }
 
+/** pending-notifications 注册/注销 helper（避免重复代码）。 */
+function emitPendingRegister(pi: PiLike | null, id: string, name?: string): void {
+  pi?.events.emit("pending:register", {
+    id,
+    type: "subagent",
+    name: name ?? id,
+  });
+}
+
+function emitPendingUnregister(pi: PiLike | null, id: string, reason: string): void {
+  pi?.events.emit("pending:unregister", {
+    id,
+    reason,
+  });
+}
+
 /** Service 构造参数（进程级）。 */
 export interface SubagentServiceInit {
   cwd: string;
@@ -290,6 +306,7 @@ export class SubagentService {
 
     // ── 2. RECORD 创建 + 注册 ──
     const record = this.createRecordForMode(identity, opts, mode);
+    emitPendingRegister(this.pi, record.id, record.agent);
 
     // ── 2.5 worktree 创建（仅 worktree===true 或已传入 handle 时）──
     // record 先创建，worktree 失败时可 finalizeFailed（record 已在 store 中）。
@@ -305,7 +322,7 @@ export class SubagentService {
         worktreeHandle = this.worktreeManager.create(this.cwd, record.id);
         record.worktreeHandle = worktreeHandle;
       } catch (err) {
-        // create 失败→不进入 run，合成 failed result
+        // create 失败→不进入 run，finalizeFailed 统一收尾（含 emitPendingUnregister failed）
         const _result = await this.finalizeFailed(record, err);
         return this.buildEarlyFailedHandle(record, mode);
       }
@@ -614,6 +631,8 @@ export class SubagentService {
         bestEffort(err, "removeAliveMarker (cancelBackground)");
       }
     }
+    // pending-notifications：cancel 注销
+    emitPendingUnregister(this.pi, record.id, "cancelled");
     this.notifyComplete(record);
     return true;
   }
@@ -687,6 +706,9 @@ export class SubagentService {
         bestEffort(err, "removeAliveMarker (finalizeRecord Step3)");
       }
     }
+
+    // pending-notifications：终态注销
+    emitPendingUnregister(this.pi, record.id, status);
   }
 
   /**

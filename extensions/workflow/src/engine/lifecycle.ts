@@ -144,12 +144,14 @@ export async function runWorkflow(
   deps: LifecycleDeps,
   signal?: AbortSignal,
 ): Promise<string> {
+  const runId = generateRunId();
+  deps.log?.("debug", "workflow:lifecycle", "runWorkflow start", { runId, scriptName: spec.scriptName });
+
  // P1-2: pre-aborted signal → fail fast
   if (signal?.aborted) {
     throw new Error("Workflow run aborted before start");
   }
 
-  const runId = generateRunId();
   const run = new WorkflowRun(
     runId,
     spec,
@@ -199,6 +201,18 @@ export async function runWorkflow(
   run.assignRuntime(runtime);
 
   await deps.store.save(run);
+  deps.log?.("debug", "workflow:lifecycle", "run saved", { runId, status: run.state.status });
+
+ // pending-notifications: run 启动 → 注册（所有 workflow 启动路径的单一汇聚点：
+ // runAndWait / actionRun / 未来入口全覆盖）
+  deps.log?.("debug", "workflow:lifecycle", "emit pending:register", { runId });
+  deps.eventBus?.emit("pending:register", {
+    id: runId,
+    type: "workflow",
+    name: spec.scriptName || runId,
+  });
+  deps.log?.("debug", "workflow:lifecycle", "emit pending:register done", { runId });
+
   return runId;
 }
 
@@ -329,8 +343,13 @@ export async function abortRun(
     throw new Error(`Workflow '${runId}' not found`);
   }
 
+  deps.log?.("debug", "workflow:lifecycle", "abortRun", { runId, status: run.state.status, reason, doneReason });
+
  // done 状态 no-op
-  if (run.state.status === "done") return;
+  if (run.state.status === "done") {
+    deps.log?.("debug", "workflow:lifecycle", "abortRun no-op: already done", { runId });
+    return;
+  }
 
  // 只允许 running/paused abort（防御）
   if (run.state.status !== "running" && run.state.status !== "paused") {
@@ -346,6 +365,10 @@ export async function abortRun(
  // A4: transition 内部 releaseRuntime（cleanup before mutate）
   run.transition("done", doneReason);
   await deps.store.save(run);
- // C-4: run 到达 done 终态 → 通知 Interface 层（notifyDone 唤醒 parent agent）
+  deps.log?.("debug", "workflow:lifecycle", "abortRun transition done", { runId, reason: run.state.reason });
+ // C-4: run 到达 done 终态 → 注销 pending-notification + 通知 Interface 层
+  deps.log?.("debug", "workflow:lifecycle", "emit pending:unregister", { runId, reason: run.state.reason });
+  deps.eventBus?.emit("pending:unregister", { id: run.runId, reason: run.state.reason ?? "completed" });
+  deps.log?.("debug", "workflow:lifecycle", "emit pending:unregister done", { runId });
   deps.onRunDone?.(run);
 }

@@ -80,6 +80,28 @@ export default function workflowExtension(pi: ExtensionAPI): void {
     }
   >();
 
+ // ── Helper: 日志端口（写入 session entry，便于 debug） ───
+
+  function log(
+    level: "debug" | "info" | "warn" | "error",
+    component: string,
+    message: string,
+    data?: unknown,
+  ): void {
+    try {
+      pi.appendEntry("workflow:log", {
+        timestamp: Date.now(),
+        level,
+        component,
+        message,
+        data,
+      });
+    } catch (err) {
+      // 日志写入失败不应阻断主流程（stale context / session replacement 时 listener 仍可触发）
+      void err;
+    }
+  }
+
  // ── Helper: 解析 sessionDir ───
 
   function resolveSessionDir(): string {
@@ -115,8 +137,10 @@ export default function workflowExtension(pi: ExtensionAPI): void {
       agentRegistry: state.agentRegistry,
       sessionDir: state.sessionDir,
       activeTempFiles: state.activeTempFiles,
+      eventBus: pi.events,
       scheduleTimeBudget: (runId: string, budgetTimeMs: number) =>
         scheduleTimeBudget(runId, deps, budgetTimeMs),
+      log,
     };
     return deps;
   }
@@ -160,6 +184,11 @@ export default function workflowExtension(pi: ExtensionAPI): void {
         if (run.state.status === "running") {
           run.state.error = "Process killed (kill-9 or crash recovery)";
           run.transition("done", "failed");
+          // 崩溃恢复的 run 无匹配 pending:unregister，补发以避免 goal 持续误报 active
+          pi.events.emit("pending:unregister", {
+            id: run.runId,
+            reason: "failed",
+          });
         }
         runs.set(run.runId, run);
       }
@@ -275,8 +304,14 @@ export default function workflowExtension(pi: ExtensionAPI): void {
     get activeTempFiles() {
       return getDeps().activeTempFiles;
     },
+    get eventBus() {
+      return getDeps().eventBus;
+    },
     get scheduleTimeBudget() {
       return getDeps().scheduleTimeBudget;
+    },
+    get log() {
+      return getDeps().log;
     },
   };
 

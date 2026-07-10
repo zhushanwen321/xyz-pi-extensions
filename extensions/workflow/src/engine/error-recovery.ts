@@ -300,10 +300,15 @@ function dispatchAgentCall(
  // 上方 status !== "running" 已保证此处非 done（且 transition 内含 done no-op 守卫）。
       if (run.state.budget.isExceeded()) {
         run.state.error = run.state.error ?? "Budget exceeded";
+        deps.log?.("debug", "workflow:error-recovery", "budget exceeded, transition done", { runId: run.runId });
         try {
           run.transition("done", "budget_limited");
           void deps.store.save(run);
+          deps.log?.("debug", "workflow:error-recovery", "run saved after budget done", { runId: run.runId, reason: run.state.reason });
  // C-4: budget 终止也触发完成通知
+          deps.log?.("debug", "workflow:error-recovery", "emit pending:unregister", { runId: run.runId, reason: run.state.reason });
+          deps.eventBus?.emit("pending:unregister", { id: run.runId, reason: run.state.reason ?? "completed" });
+          deps.log?.("debug", "workflow:error-recovery", "emit pending:unregister done", { runId: run.runId });
           deps.onRunDone?.(run);
         } catch (err) {
  // run 可能在 budget 检查后、transition 前被并发 abort——忽略
@@ -358,6 +363,7 @@ async function handleReturn(
   msg: ReturnMsg,
   deps: LifecycleDeps,
 ): Promise<void> {
+  deps.log?.("debug", "workflow:error-recovery", "handleReturn", { runId: run.runId, status: run.state.status });
  // 捕获 worker 诊断日志（P2-2）
   if (msg.workerLogs && msg.workerLogs.length > 0) {
     run.state.errorLogs = msg.workerLogs;
@@ -365,7 +371,11 @@ async function handleReturn(
   run.state.scriptResult = msg.result;
   run.transition("done", "completed");
   await deps.store.save(run);
- // C-4: run 到达 done 终态 → 通知 Interface 层
+  deps.log?.("debug", "workflow:error-recovery", "run saved after return", { runId: run.runId, reason: run.state.reason });
+ // C-4: run 到达 done 终态 → 注销 pending-notification + 通知 Interface 层
+  deps.log?.("debug", "workflow:error-recovery", "emit pending:unregister", { runId: run.runId, reason: run.state.reason });
+  deps.eventBus?.emit("pending:unregister", { id: run.runId, reason: run.state.reason ?? "completed" });
+  deps.log?.("debug", "workflow:error-recovery", "emit pending:unregister done", { runId: run.runId });
   deps.onRunDone?.(run);
 }
 
@@ -400,9 +410,14 @@ export async function handleWorkerError(
 
  // 超限 → failed
   run.state.error = err.message;
+  deps.log?.("debug", "workflow:error-recovery", "handleWorkerError retries exceeded, transition done", { runId: run.runId, count });
   run.transition("done", "failed");
   await deps.store.save(run);
- // C-4: run 到达 done 终态 → 通知 Interface 层
+  deps.log?.("debug", "workflow:error-recovery", "run saved after worker error", { runId: run.runId, reason: run.state.reason });
+ // C-4: run 到达 done 终态 → 注销 pending-notification + 通知 Interface 层
+  deps.log?.("debug", "workflow:error-recovery", "emit pending:unregister", { runId: run.runId, reason: run.state.reason });
+  deps.eventBus?.emit("pending:unregister", { id: run.runId, reason: run.state.reason ?? "completed" });
+  deps.log?.("debug", "workflow:error-recovery", "emit pending:unregister done", { runId: run.runId });
   deps.onRunDone?.(run);
 }
 
@@ -475,9 +490,14 @@ export async function handleScriptError(
 
  // 超限 → failed
   run.state.error = `Workflow failed after ${MAX_WORKER_RETRIES} retries: ${errorMsg}`;
+  deps.log?.("debug", "workflow:error-recovery", "handleScriptError retries exceeded, transition done", { runId: run.runId, count });
   run.transition("done", "failed");
   await deps.store.save(run);
- // C-4: run 到达 done 终态 → 通知 Interface 层
+  deps.log?.("debug", "workflow:error-recovery", "run saved after script error", { runId: run.runId, reason: run.state.reason });
+ // C-4: run 到达 done 终态 → 注销 pending-notification + 通知 Interface 层
+  deps.log?.("debug", "workflow:error-recovery", "emit pending:unregister", { runId: run.runId, reason: run.state.reason });
+  deps.eventBus?.emit("pending:unregister", { id: run.runId, reason: run.state.reason ?? "completed" });
+  deps.log?.("debug", "workflow:error-recovery", "emit pending:unregister done", { runId: run.runId });
   deps.onRunDone?.(run);
 }
 

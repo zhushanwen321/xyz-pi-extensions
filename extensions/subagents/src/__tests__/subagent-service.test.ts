@@ -400,6 +400,161 @@ describe("SubagentService", () => {
       }
     });
   });
+
+  // ============================================================
+  // pending-notifications emit 断言 (H4)
+  // ============================================================
+  //
+  // [背景] PR #82 在 subagent-service.ts 新增 emitPendingRegister/Unregister 调用，
+  // 5 个 emit 点：register（execute L309）、unregister(failed)（finalizeFailed 经
+  // finalizeRecord）、unregister(cancelled)（cancelBackground）、unregister(done)
+  //（finalizeRecord 正常完成）、worktree-fail（finalizeFailed 路径，reason=failed）。
+  // 此前本文件对这些 emit 零断言，本块补齐。
+  //
+  // [覆盖策略] 本块覆盖不依赖 runSpawn 完成的 emit 路径：
+  //   - register emit：execute 内 createRecordForMode 之后立即触发，在 worktreeManager.create
+  //     之前。用 worktree:true+fork:true 让 worktreeManager.create 在测试环境（agentDir 非 git
+  //     repo → git status 抛错）失败，既触发 register emit，又顺路走 finalizeFailed →
+  //     unregister(failed)。sync/wait=true 与 background/wait=false 两条 mode 各测一遍，
+  //     覆盖场景 1/2 的 register 部分与场景 3 的 unregister(failed)。
+  //   - unregister(cancelled)：cancelBackground 路径。手动注入 running background record 后
+  //     调公共 cancel(id) API，无需 runSpawn（覆盖场景 4）。
+  //
+  // [未覆盖路径] 需 mock spawn 才能跑完 runSpawn 的路径，本文件约定不 mock spawn
+  // （见文件头——execute 集成测试在 execute-nesting.test.ts / run-spawn-integration.test.ts）：
+  //   - finalizeRecord status="done"（sync/background 正常完成 → unregister(done)）
+  //   - finalizeRecord status="cancelled" 经 runAndFinalize 路径（cancel 抢先 CAS 时
+  //     runAndFinalize 侧 tryTransition 失败跳过 finalizeRecord，由 cancelBackground 侧 emit——
+  //     本块 cancel 用例覆盖的即此后端 emit）
+  //   - background detached 正常完成回注（kickOffBackground.then → notifyComplete，走 sendMessage 非 emit）
+  // register emit 的 payload（type:"subagent"、name）由本块 worktree-fail 路径附带覆盖。
+
+  describe("pending-notifications emit 断言 (H4)", () => {
+    /** 构造已就绪 service（initSession + initModel）并保留 pi 引用以断言 events.emit。 */
+    function makeReadyServiceWithPi(): {
+      service: SubagentService;
+      pi: ReturnType<typeof makePi>;
+    } {
+      const pi = makePi();
+      const service = new SubagentService({ cwd: agentDir, modelService });
+      service.initSession({ pi, sessionId: "s1" });
+      // 注入 modelRegistry + ctxModel：让 resolveIdentity 越过 resolveModel，
+      // 使 worktreeManager.create（git status 在非 repo 抛错）成为稳定失败点，
+      // 而非 modelService.resolveModel 抛错（那会在 record 创建之前，无法触发 register emit）。
+      modelService.initModel({
+        modelRegistry: {
+          getAvailable: () => [],
+          find: () => undefined,
+          hasConfiguredAuth: () => false,
+        },
+        sessionId: "s1",
+        ctxModel: { id: "ctx-model", name: "Ctx", provider: "p", reasoning: false },
+      });
+      return { service, pi };
+    }
+
+    /** 从 service 取出 private store（手动注入 running record 用，与 R0-D 块同模式）。 */
+    function getStore(service: SubagentService): RecordStore {
+      return Reflect.get(service, "store") as RecordStore;
+    }
+
+    /** 手动构造 running background record（带 controller）并注册到 store（绕过 execute/spawn）。 */
+    function injectRunningBackground(service: SubagentService, id: string): ExecutionRecord {
+      const controller = new AbortController();
+      const record = createRecord(id, {
+        agent: "general-purpose",
+        model: "test/model",
+        mode: "background",
+        task: "cancel target",
+        startedAt: 1_000_000,
+        rootSessionId: "s1",
+        controller,
+      });
+      getStore(service).register(record);
+      return record;
+    }
+
+    const ctxModel: ModelInfo = { id: "ctx-model", name: "Ctx", provider: "p", reasoning: false };
+
+    it("sync execute + worktree 创建失败 → register + unregister(reason=failed) 被 emit", async () => {
+      const { service, pi } = makeReadyServiceWithPi();
+
+      const handle = await service.execute({
+        task: "wt fail sync",
+        worktree: true,
+        fork: true,
+        wait: true,
+        ctxModel,
+      });
+
+      // worktreeManager.create 在 agentDir（非 git repo）抛错 → buildEarlyFailedHandle 返回 sync 形状
+      expect(handle.mode).toBe("sync");
+
+      // register emit：execute 内 createRecordForMode 之后立即触发（sync → id 前缀 run-）
+      expect(pi.events.emit).toHaveBeenCalledWith(
+        "pending:register",
+        expect.objectContaining({
+          type: "subagent",
+          id: expect.stringMatching(/^run-/),
+          name: "general-purpose",
+        }),
+      );
+      // unregister(failed) emit：finalizeFailed → finalizeRecord 末尾触发
+      expect(pi.events.emit).toHaveBeenCalledWith(
+        "pending:unregister",
+        expect.objectContaining({ reason: "failed" }),
+      );
+    });
+
+    it("background execute + worktree 创建失败 → register(bg-id) + unregister(failed) 被 emit", async () => {
+      const { service, pi } = makeReadyServiceWithPi();
+
+      const handle = await service.execute({
+        task: "wt fail bg",
+        worktree: true,
+        fork: true,
+        wait: false,
+        ctxModel,
+      });
+
+      // worktree create 抛错在 kickOffBackground 之前（execute 同步 catch），返回 background 形状
+      expect(handle.mode).toBe("background");
+
+      // register emit：background mode → id 前缀 bg-
+      expect(pi.events.emit).toHaveBeenCalledWith(
+        "pending:register",
+        expect.objectContaining({
+          type: "subagent",
+          id: expect.stringMatching(/^bg-/),
+          name: "general-purpose",
+        }),
+      );
+      expect(pi.events.emit).toHaveBeenCalledWith(
+        "pending:unregister",
+        expect.objectContaining({ reason: "failed" }),
+      );
+    });
+
+    it("cancel(background) → unregister(reason=cancelled) 被 emit，register 未被 emit", () => {
+      const { service, pi } = makeReadyServiceWithPi();
+      const record = injectRunningBackground(service, "bg-cancel-1");
+      expect(record.status).toBe("running");
+
+      const ok = service.cancel("bg-cancel-1");
+
+      // cancel CAS 抢锁成功 → cancelBackground 完整收尾 + emit
+      expect(ok).toBe(true);
+      expect(pi.events.emit).toHaveBeenCalledWith(
+        "pending:unregister",
+        expect.objectContaining({ id: "bg-cancel-1", reason: "cancelled" }),
+      );
+      // record 手动注入（未走 execute）→ register 不应被 emit
+      expect(pi.events.emit).not.toHaveBeenCalledWith("pending:register", expect.anything());
+
+      // 清理 notifier 定时器（cancelBackground → notifyComplete 可能启动 sliding window timer）
+      service.dispose();
+    });
+  });
 });
 
 // ============================================================

@@ -60,12 +60,14 @@ function makeDeps(overrides?: {
   store?: RunStore;
   workerHost?: WorkerHost;
   onRunDone?: (run: WorkflowRun) => void;
+  eventBus?: { emit: (channel: string, data: unknown) => void };
 }): {
   store: RunStore;
   workerHost: WorkerHost;
   runner: AgentRunner;
   runs: Map<string, WorkflowRun>;
   onRunDone: (run: WorkflowRun) => void;
+  eventBus: { emit: (channel: string, data: unknown) => void };
 } {
   return {
     store: overrides?.store ?? {
@@ -79,6 +81,9 @@ function makeDeps(overrides?: {
     runs: new Map(),
  // T-2: onRunDone 默认注入 spy，让 abortRun 的 done,aborted 站点可被断言。
     onRunDone: overrides?.onRunDone ?? vi.fn(),
+ // M5: eventBus 默认注入 spy，让 abortRun 真实 pending:unregister emit 可被断言
+ //    （区别于 launcher.test.ts 在 workerHost.start mock 内自行 bake emit 的伪路径）。
+    eventBus: overrides?.eventBus ?? { emit: vi.fn() },
   };
 }
 
@@ -165,6 +170,11 @@ describe("runWorkflow 时间预算（C.7 scheduleTimeBudget）", () => {
       expect(run.state.error).toBe("Time budget exceeded");
  // runtime 已 release（done ⟺ runtime undefined，不变式 I1）
       expect(run.runtime).toBeUndefined();
+ // M5: time_limited 走同一 abortRun emit 点，reason 随 doneReason 动态流入（非硬编码）
+      expect(deps.eventBus.emit).toHaveBeenCalledWith(
+        "pending:unregister",
+        expect.objectContaining({ id: runId, reason: "time_limited" }),
+      );
     } finally {
       vi.useRealTimers();
     }
@@ -360,6 +370,11 @@ describe("abortRun", () => {
     expect(run.runtime).toBeUndefined(); // releaseRuntime
  // T-2: abortRun 的 done,aborted 站点触发 onRunDone
     expect(deps.onRunDone).toHaveBeenCalledWith(run);
+ // M5: abortRun 真实 emit pending:unregister（lifecycle.ts 的唯一 emit 点，非 launcher mock bake）
+    expect(deps.eventBus.emit).toHaveBeenCalledWith(
+      "pending:unregister",
+      expect.objectContaining({ id: runId, reason: "aborted" }),
+    );
   });
 
   it("done 状态 abort → no-op（不抛错不改状态）", async () => {
@@ -387,6 +402,11 @@ describe("abortRun", () => {
 
     expect(run.state.status).toBe("done");
     expect(run.state.reason).toBe("aborted");
+ // M5: paused→abort 路径也走 abortRun emit 点
+    expect(deps.eventBus.emit).toHaveBeenCalledWith(
+      "pending:unregister",
+      expect.objectContaining({ id: runId, reason: "aborted" }),
+    );
   });
 
   it("runId 不存在 → 抛错", async () => {

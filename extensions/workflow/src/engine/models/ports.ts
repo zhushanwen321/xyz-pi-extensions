@@ -106,6 +106,19 @@ export interface LifecycleDeps {
  /** run 到达 done 终态时的回调（C-4 修复，可选）。Interface 层注入 notifyDone。 */
   onRunDone?: (run: WorkflowRun) => void;
  /**
+ * 跨扩展事件总线（pending-notifications register/unregister 信号灯）。
+ *
+ * runWorkflow 启动时 emit pending:register；所有 transition("done") 路径 emit
+ * pending:unregister。两处均通过本端口（Engine 不直接依赖 Pi SDK）。可选——
+ * 无 pending-notifications 扩展时 no-op（向后兼容）。
+ */
+  eventBus?: { emit(channel: string, data: unknown): void };
+ /**
+ * 调试日志端口（Engine 不直接依赖 Pi SDK）。Interface 层注入实现。
+ * 关键路径记录 run 启动、保存、pending 注册/注销，便于排查异步操作状态。
+ */
+  log?: (level: "debug" | "info" | "warn" | "error", component: string, message: string, data?: unknown) => void;
+ /**
  * BL-1：agent/skill/schema 解析依赖（per-session，可选）。
  *
  * Interface 层 factory 在 session_start 注入：agentRegistry（扫描 .agents/agents 等
