@@ -27,7 +27,8 @@ xyz-pi-extensions/
 │   ├── ask-user/            → @zhushanwen/pi-ask-user
 │   ├── subagents/           → @zhushanwen/pi-subagents
 │   └── pending-notifications/ → @zhushanwen/pi-pending-notifications
-├── shared/                      # 内部共享包（private，不独立发布）
+├── shared/                      # 内部共享包（private 或仅内部引用）
+│   ├── budget-accounting/  → @zhushanwen/pi-budget-accounting (token 加权计算，goal/workflow 共享)
 │   ├── quota-providers/     → @zhushanwen/pi-quota-providers
 │   ├── taste-lint/          → @zhushanwen/pi-taste-lint
 │   └── types/               → @zhushanwen/pi-types
@@ -43,7 +44,7 @@ xyz-pi-extensions/
 
 **设计原则**：
 - `extensions/` = Pi 扩展产品，可发布的 npm 包（`@zhushanwen/pi-*`）
-- `shared/` = 内部共享依赖（private 或仅内部引用），不面向终端用户
+- `shared/` = 内部共享依赖（private 或仅内部引用），budget-accounting 是 published 供 goal/workflow 共享 token 加权计算
 - Skills 跟着 owner 走：extension-bundled skills 通过 `resources_discover` 自动注册
 - 独立 skills 放 `skills/`，它们是 Markdown 资源不是包
 - types 是 private 包，仅通过 `workspace:*` 供其他包引用
@@ -787,10 +788,11 @@ ln -s /path/to/xyz-pi-extensions/skills/<name> ~/.agents/skills/<name>
 | `extensions/subagents/` | `@zhushanwen/pi-subagents` | 进程内 subagent 执行运行时（agent 发现、模型解析、并发控制） | — |
 | `extensions/pending-notifications/` | `@zhushanwen/pi-pending-notifications` | 异步操作注册表（EventBus + session entries 跟踪 workflow/subagent） | — |
 
-**`shared/`** — 内部共享包（private）
+**`shared/`** — 内部共享包（private 或仅内部引用）
 
 | 包名 | npm name | 说明 |
 |------|----------|------|
+| `shared/budget-accounting/` | `@zhushanwen/pi-budget-accounting` | Token 加权计算（goal/workflow 共享 weightTokens） |
 | `shared/quota-providers/` | `@zhushanwen/pi-quota-providers` | Quota/Provider 配置加载 |
 | `shared/taste-lint/` | `@zhushanwen/pi-taste-lint` | ESLint 品味规则 |
 | `shared/types/` | `@zhushanwen/pi-types` | 共享类型定义 |

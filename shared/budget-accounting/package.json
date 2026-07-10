@@ -1,0 +1,29 @@
+{
+  "name": "@zhushanwen/pi-budget-accounting",
+  "version": "0.0.1",
+  "description": "Shared token budget accounting for Pi extensions — weighted token calculation",
+  "type": "module",
+  "main": "src/index.ts",
+  "keywords": [
+    "pi-package",
+    "pi",
+    "budget",
+    "token",
+    "accounting"
+  ],
+  "license": "MIT",
+  "files": [
+    "src/",
+    "index.ts"
+  ],
+  "scripts": {
+    "typecheck": "npx tsc --noEmit",
+    "test": "vitest run"
+  },
+  "peerDependencies": {
+    "@mariozechner/pi-coding-agent": "*"
+  },
+  "devDependencies": {
+    "vitest": "^4.1.8"
+  }
+}

@@ -9,32 +9,28 @@
  * - 90% 预警用查询式 isThresholdReached（无状态，可重复查）。
  * - maxTokens===0 视为不限制（守卫，避免首个 agent 完成误判 budget_limited）。
  *
+ * 加权 token 计算口径（INPUT/CACHE_READ/CACHE_WRITE/OUTPUT_WEIGHT）由 shared 包
+ * `@zhushanwen/pi-budget-accounting` 提供——goal 与 workflow 共享同一口径，
+ * 详见该包 src/accounting.ts 头注释（四桶互斥 + cacheRead 失真说明）。
+ *
  * 层归属：Engine。
  *
  * 参考：domain-models.md §4（字段/不变式/操作）。
  */
+import {
+  CACHE_READ_WEIGHT,
+  CACHE_WRITE_WEIGHT,
+  INPUT_WEIGHT,
+  OUTPUT_WEIGHT,
+  weightTokens,
+} from "@zhushanwen/pi-budget-accounting";
 import type { AgentUsage } from "./types.js";
 
 /** Soft limit：总调用数超此值发预警（FR-7，从 ConcurrencyGate 迁入）。 */
 export const SOFT_MAX_AGENTS_WARNING = 500;
 
-/**
- * Budget 加权系数（token 口径）。
- *
- * usedTokens 不再是四项原始 token 简单求和，而是加权后的「等效消耗」，
- * 反映不同 token 桶的真实计费/处理开销差异：
- * - input（非缓存新增）：首次见到、需完整处理的新内容，权重 1（基准）
- * - cacheRead（命中缓存）：读取历史，开销极低，按 1/50 折算（权重 0.02）
- * - cacheWrite（首次写入缓存）：本版本不计入 budget（权重 0）
- * - output：模型自回归生成，开销最高，权重 2
- *
- * 这避免了长 session 中 cacheRead 随轮次单调累积导致 budget 被快速烧穿的失真
- * （详见讨论：cacheRead 在 N 轮里被报 N 次，去重上下文只有一份）。
- */
-export const INPUT_WEIGHT = 1;
-export const CACHE_READ_WEIGHT = 0.02;
-export const CACHE_WRITE_WEIGHT = 0;
-export const OUTPUT_WEIGHT = 2;
+// 权重常量从 shared 包 re-export，保持现有 import 站点（budget.test.ts 等）不变。
+export { CACHE_READ_WEIGHT, CACHE_WRITE_WEIGHT, INPUT_WEIGHT, OUTPUT_WEIGHT };
 
 /**
  * Budget 值对象。
@@ -73,16 +69,12 @@ export class Budget {
  /**
  * 累加一次 agent 调用的 usage（加权口径）。
  *
- * 四项 token 按各自权重（INPUT/CACHE_READ/CACHE_WRITE/OUTPUT_WEIGHT）折算后求和，
+ * 四项 token 经 shared weightTokens 加权求和（INPUT/CACHE_READ/CACHE_WRITE/OUTPUT_WEIGHT），
  * 而非原始 token 数直接相加。retry 间的真实消耗如实记录，避免预算被低估。
- * 详见上方权重常量的口径说明。
+ * 详见 shared `@zhushanwen/pi-budget-accounting` 的口径说明。
  */
   consume(usage: AgentUsage): void {
-    this.usedTokens +=
-      usage.input * INPUT_WEIGHT +
-      usage.output * OUTPUT_WEIGHT +
-      usage.cacheRead * CACHE_READ_WEIGHT +
-      usage.cacheWrite * CACHE_WRITE_WEIGHT;
+    this.usedTokens += weightTokens(usage);
     this.usedCost += usage.cost;
   }
 

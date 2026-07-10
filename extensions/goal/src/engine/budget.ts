@@ -1,12 +1,14 @@
 /**
  * Budget 决策引擎 — 纯函数
  *
- * 零 Pi 依赖。import from "./types"。
+ * 零 Pi 依赖。import from "./types" + shared `@zhushanwen/pi-budget-accounting`。
  *
  * FR-6.5: tick 是纯函数（不调 Date.now，不查 status）
  * FR-6.2: checkBudgetOnTurnEnd 用 4 个独立 flag
- * FR-8.6: accumulateTokens token 累加算法
+ * FR-8.6: accumulateTokens token 累加算法（加权口径，与 workflow 共享 weightTokens）
  */
+
+import { INPUT_WEIGHT, weightTokens } from "@zhushanwen/pi-budget-accounting";
 
 import type { GoalRuntimeState } from "./types";
 
@@ -45,14 +47,32 @@ export interface BudgetCheckResult {
 
 // ── token 累加（FR-8.6）──────────────────────────────
 
+/**
+ * 累加一轮 message_end 的 token 用量（加权口径，与 workflow 共享）。
+ *
+ * 当 input/output 存在时，用 shared weightTokens 加权计算：
+ * input×1 + output×2 + cacheRead×0.02 + cacheWrite×0。
+ *
+ * 修复：原公式 `max(input - cacheRead, 0) + output` 基于「input 包含 cacheRead」的
+ * 错误假设。pi 的 input/cacheRead 互斥（Anthropic 四桶分离，OpenAI 主动减去 cached），
+ * input 已是净新增非缓存 token，无需再减 cacheRead。原公式在 cacheRead>0 时低估 token
+ * 用量，导致预算超限判断滞后。
+ *
+ * fallback：input/output 都为 0 时用 totalTokens（极罕见，非标准 provider）。
+ * totalTokens 无法区分四桶，按 input 权重 1（基准）保守估算。
+ */
 export function accumulateTokens(currentTokensUsed: number, usage: TokenUsage): number {
 	const input = usage.input ?? 0;
 	const output = usage.output ?? 0;
-	const cacheRead = usage.cacheRead ?? 0;
 	if (input > 0 || output > 0) {
-		return currentTokensUsed + Math.max(input - cacheRead, 0) + output;
+		return currentTokensUsed + weightTokens({
+			input,
+			output,
+			cacheRead: usage.cacheRead ?? 0,
+			cacheWrite: 0, // goal 的 TokenUsage 不追踪 cacheWrite
+		});
 	}
-	return currentTokensUsed + (usage.totalTokens ?? 0);
+	return currentTokensUsed + (usage.totalTokens ?? 0) * INPUT_WEIGHT;
 }
 
 // ── 时间累计（FR-6.5 纯函数）──────────────────────────

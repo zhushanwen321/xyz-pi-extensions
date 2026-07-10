@@ -21,6 +21,9 @@
     "src/",
     "index.ts"
   ],
+  "dependencies": {
+    "@zhushanwen/pi-budget-accounting": "workspace:*"
+  },
   "peerDependencies": {
     "@earendil-works/pi-ai": "*",
     "@earendil-works/pi-tui": "*",

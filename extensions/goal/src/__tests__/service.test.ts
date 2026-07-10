@@ -141,8 +141,9 @@ describe("applyEvent — 简单事件", () => {
 				usage: { input: 100, output: 50, cacheRead: 20 },
 			},
 		}, makeFakePorts());
-		// accumulateTokens: max(100 - 20, 0) + 50 = 130
-		expect(session.state.tokensUsed).toBe(before + 130);
+		// accumulateTokens: weightTokens({input:100, output:50, cacheRead:20, cacheWrite:0})
+		// = 100×1 + 50×2 + 20×0.02 = 200.4
+		expect(session.state.tokensUsed).toBe(before + 200.4);
 	});
 
 	it("message_end 忽略非 assistant 消息", () => {

@@ -25,7 +25,9 @@
     "index.ts",
     "skills/"
   ],
-  "dependencies": {},
+  "dependencies": {
+    "@zhushanwen/pi-budget-accounting": "workspace:*"
+  },
   "peerDependencies": {
     "@mariozechner/pi-coding-agent": "*",
     "@mariozechner/pi-tui": "*",
