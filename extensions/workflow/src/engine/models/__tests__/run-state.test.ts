@@ -123,7 +123,8 @@ describe("RunState 字段可读写", () => {
       contextTokens: 150,
       turns: 1,
     });
-    expect(state.budget.usedTokens).toBe(150);
+    // 加权：input(100)*1 + output(50)*2 = 200
+    expect(state.budget.usedTokens).toBe(200);
   });
 
   it("trace 可 append", () => {
