@@ -399,6 +399,8 @@ export interface ExecuteOptions {
   skillPath?: string;
   appendSystemPrompt?: string[];
   schema?: Record<string, unknown>;
+  /** D-A6 bridge: workflow schemaEnv 经 ExecuteOptions 透传到 runSpawn childEnv。 */
+  schemaEnv?: string;
   maxTurns?: number;
   graceTurns?: number;
   /** sync 模式来自 Pi tool 框架；background 模式 hub 忽略，自建 controller。 */

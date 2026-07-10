@@ -48,6 +48,10 @@ import { BgNotifier } from "./notifier.ts";
 import type { StatusFilter } from "./record-store.ts";
 import { RecordStore } from "./record-store.ts";
 import { writeCancelledTombstone } from "./tombstone-store.ts";
+
+// D-A10: workflow 侧 AgentResult 映射（executeAndAwait 出口）
+import { mapToWorkflowAgentResult } from "./agent-result-mapper.ts";
+import type { AgentResult as WorkflowAgentResult } from "../orchestration/models/types.ts";
 import type { ModelConfigService } from "./model-config-service.ts";
 import { WorktreeManager } from "./worktree-manager.ts";
 
@@ -381,6 +385,64 @@ export class SubagentService {
     return this.cancelBackground(record);
   }
 
+  // ── 编排层专用接口（workflow 消费）──────────────────────
+
+  /**
+   * workflow 编排层专用：sync-await 接口，内部走 background 管道但返回 Promise<AgentResult>。
+   *
+   * 与 execute() 的区别（D-A1）：
+   *   1. 返回 workflow AgentResult（content 字段），非 ExecutionHandle
+   *   2. 不调 kickOffBackground → 不触发 notifier.notify → 不注入 followUp（BC-11）
+   *   3. T2 删 sync 时 executeAndAwait 不受牵连（独立方法）
+   *
+   * 共享：runSpawn + ConcurrencyPool + record + pending emit（D-A4）。
+   */
+  async executeAndAwait(
+    opts: ExecuteOptions,
+    signal?: AbortSignal,
+    onEvent?: (event: AgentEvent) => void,
+  ): Promise<WorkflowAgentResult> {
+    this.assertReady();
+
+    // ── BC-12 嵌套护栏：复用 execute() 的 execCtxAls 深度检查 ──
+    const parentNesting = this.execCtxAls.getStore();
+    const nestingDepth = parentNesting ? parentNesting.depth + 1 : 0;
+    if (nestingDepth > MAX_FORK_DEPTH) {
+      throw new ForkDepthExceededError(
+        `subagent nesting depth ${nestingDepth} > ${MAX_FORK_DEPTH} (max recursion), refusing to spawn deeper`,
+      );
+    }
+
+    // ── 步骤 1: IDENTITY 解析 ──
+    const identity = await this.resolveIdentity(opts);
+
+    // ── 步骤 2: RECORD 创建（mode="background" 进池）──
+    const record = this.createRecordForMode(identity, opts, "background");
+    emitPendingRegister(this.pi, record.id, record.agent);
+
+    // ── 步骤 3: SessionRunnerContext ──
+    const ctx = this.buildSessionRunnerContext(opts.cwd);
+
+    // ── 步骤 4: signal 决议 ──
+    const effectiveSignal = signal ?? record.controller?.signal;
+
+    // ── 步骤 5: runAndFinalize（await，不 detached）──
+    // BC-11：onUpdate 置 undefined（不回流 tool UI 细节），onEvent 独立传（AgentEvent 透传 workflow）
+    const result = await this.runAndFinalize(
+      record,
+      { ...opts, onUpdate: undefined },
+      ctx,
+      identity,
+      effectiveSignal,
+      PRIORITY_BACKGROUND,
+      onEvent,
+    );
+
+    // ── 步骤 6: D-A10 AgentResult 映射 + pending unregister ──
+    emitPendingUnregister(this.pi, record.id, result.success ? "done" : "failed");
+    return mapToWorkflowAgentResult(result);
+  }
+
   // ── 状态查询（TUI 调）──────────────────────────────────
 
   /** 订阅 store 变更（widget/list requestRender）。返回取消订阅。 */
@@ -487,6 +549,7 @@ export class SubagentService {
     identity: ResolvedIdentity,
     signal: AbortSignal | undefined,
     priority: number,
+    rawOnEvent?: (event: AgentEvent) => void,
   ): Promise<AgentResult> {
     // 仅 background 进并发池限流。sync 不进池，原因：
     // ① sync 由主 agent sequential executionMode 天然串行，无需限流；
@@ -496,9 +559,10 @@ export class SubagentService {
     const pooled = record.mode === "background";
     if (pooled) await this.pool.acquire(priority);
     // onEvent 包装：AgentEvent → onUpdate(project(record)) 回流调用方
-    const onEvent = opts.onUpdate
-      ? (event: AgentEvent): void => this.onEventThrottled(record, event, opts.onUpdate!)
-      : undefined;
+    const onEvent = rawOnEvent
+      ?? (opts.onUpdate
+        ? (event: AgentEvent): void => this.onEventThrottled(record, event, opts.onUpdate!)
+        : undefined);
 
     // 解析 worktree 参数：boolean → WorktreeHandle | undefined
     let worktreeHandle: WorktreeHandle | undefined;
