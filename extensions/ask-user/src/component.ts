@@ -1,14 +1,16 @@
 // src/component.ts
-import { type Component, matchesKey, truncateToWidth } from "@mariozechner/pi-tui";
+import { type Component, matchesKey, parseKey, truncateToWidth } from "@mariozechner/pi-tui";
 
 import { allOptions, renderQuestionView } from "./question-view";
-import { buildResult, renderSubmitView } from "./submit-view";
+import { buildResult, renderButtonBar, renderSubmitView } from "./submit-view";
 import {
 	createQuestionState,
 	HEADER_MAX_CHARS,
+	isHighSurrogate,
 	type Question,
 	type QuestionState,
 	type Result,
+	SURROGATE_PAIR_LEN,
 	type ThemeLike,
 } from "./types";
 
@@ -32,7 +34,6 @@ export class AskUserComponent implements Component {
 
 	private states: QuestionState[];
 	private activeTab: number = 0;
-	private editorText: string = "";
 
 	/** Submit tab 上的左右焦点：默认 Submit；← / → 切换；Enter 触发当前项。
 	 *  问题 tab 上无意义（仅视觉占位），不参与输入路由。 */
@@ -107,7 +108,7 @@ export class AskUserComponent implements Component {
 		} else {
 			const q = this.questions[this.activeTab]!;
 			const state = this.states[this.activeTab]!;
-			for (const line of renderQuestionView(q, state, t, innerWidth, this.isSingle, this.editorText)) {
+			for (const line of renderQuestionView(q, state, t, innerWidth, this.isSingle, state.draftText)) {
 				add(line);
 			}
 		}
@@ -115,7 +116,7 @@ export class AskUserComponent implements Component {
 		// 多问题：底部按钮栏（Submit / Cancel）。Submit tab 上不重复渲染（renderSubmitView 内嵌 focus 高亮）
 		if (!this.isSingle && this.activeTab < this.questions.length) {
 			inner.push("");
-			this.renderButtonBar(innerWidth, add, null);
+			add(renderButtonBar(this.theme, this.allConfirmed(), null));
 		}
 
 		// 用 box 边框包裹：每行 pad 到 innerWidth 后加 │ 左右边框
@@ -162,28 +163,6 @@ export class AskUserComponent implements Component {
 		add(truncateToWidth(parts.join(""), innerWidth));
 	}
 
-	/**
-	 * 底部按钮栏：[ Submit ]   [ Cancel ]。
-	 * focus: null=纯展示（问题 tab），"submit"/"cancel"=高亮对应按钮（Submit tab）。
-	 */
-	private renderButtonBar(
-		innerWidth: number,
-		add: (s: string) => void,
-		focus: "submit" | "cancel" | null,
-	): void {
-		const t = this.theme;
-		const allDone = this.allConfirmed();
-		const isSubmit = focus === "submit";
-		const isCancel = focus === "cancel";
-		const submit = isSubmit
-			? (allDone ? t.fg("success", t.bold(" Submit ")) : t.fg("accent", t.bold(" Submit ")))
-			: (allDone ? t.fg("success", " Submit ") : t.fg("dim", " Submit "));
-		const cancel = isCancel
-			? t.fg("accent", t.bold(" Cancel "))
-			: t.fg("muted", " Cancel ");
-		add(`${t.fg("dim", "[")}${submit}${t.fg("dim", "]")}   ${t.fg("dim", "[")}${cancel}${t.fg("dim", "]")}`);
-	}
-
 	// ── 输入路由 ──
 	handleInput(data: string): void {
 		if (this._resolved) return;
@@ -215,15 +194,22 @@ export class AskUserComponent implements Component {
 			return;
 		}
 
+		// options mode → delegate to handleOptionsInput
+		this.handleOptionsInput(data, state, q);
+	}
+
+	/**
+	 * options 模式的输入处理（从 handleInput 拆出）。
+	 * 含：Esc 回退/确认取消、←/→ 切 tab、↑/↓ 移光标、Enter 确认、Space toggle。
+	 */
+	private handleOptionsInput(data: string, state: QuestionState, q: Question): void {
 		// Esc → 回退到上一个问题；在首个问题时进入确认取消覆盖层
 		if (matchesKey(data, "escape")) {
 			this.escBackOrConfirm();
 			return;
 		}
 
-		// ← / → 切换问题 tab（多问题，options 模式）：末尾 → 进入 Submit tab，
-		// 首个 ← 停在首个问题（不环绕）。Tab/Shift+Tab 不在问题 tab 切 tab——
-		// 留给 Submit tab 上的 Submit/Cancel 焦点切换。
+		// ← / → 切换问题 tab（多问题，options 模式）
 		if (!this.isSingle && matchesKey(data, "right")) {
 			this.gotoTab(Math.min(this.activeTab + 1, this.questions.length));
 			return;
@@ -250,12 +236,12 @@ export class AskUserComponent implements Component {
 		const opts = allOptions(q);
 		const onOther = state.cursorIndex === opts.length - 1;
 
-		// Other row → Enter opens freeform editor（单选/多选统一入口）。
-		//   单选/多选普通选项的 Enter 各自有不同语义（确认/加入选中），与 Other 互斥：
-		//   onOther 时本分支先消费 Enter，下面多选/单选分支不再处理。
+		// Other row → Enter opens freeform editor
 		if (onOther && matchesKey(data, "enter")) {
+			state.savedOptionsCursorIndex = state.cursorIndex;
 			state.mode = "freeform";
-			this.editorText = state.freeTextValue ?? "";
+			state.draftText = state.freeTextValue ?? state.freeDraft ?? "";
+			state.cursorIndex = state.draftText.length;
 			this.invalidate();
 			this.tui.requestRender();
 			return;
@@ -267,18 +253,12 @@ export class AskUserComponent implements Component {
 				return;
 			}
 			if (matchesKey(data, "enter")) {
-				// Enter 先把光标所在的普通选项加入选中再确认，与单选分支（Enter 时
-				// selectedIndex = cursorIndex）保持一致。即使 freeTextValue 已存在
-				// （Other 录入），也尊重「在此选项上按 Enter 想选中它」的意图，避免
-				// 静默用旧 Other 文本确认。add 幂等，不会误取消已选项。
 				state.selectedIndices.add(state.cursorIndex);
 				this.afterConfirm(state, q);
 				return;
 			}
 		} else if (!q.multiSelect && !onOther) {
 			if (matchesKey(data, "enter")) {
-				// FR-14（答案回改）：不检查 confirmed —— 用户回退到已答 tab 重新
-				// Enter 即覆盖旧答案。freeTextValue 同步清空，防 Other 残留。
 				state.selectedIndex = state.cursorIndex;
 				state.freeTextValue = null;
 				this.afterConfirm(state, q);
@@ -332,80 +312,157 @@ export class AskUserComponent implements Component {
 	}
 
 	private handleEditorInput(data: string, state: QuestionState, q: Question): void {
+		// parseKey 白名单拦截 — 替代旧的 matchesKey 散调 + 兜底 printable 遍历
+		const keyId = parseKey(data);
+		if (keyId !== undefined) {
+			this.handleEditorKey(data, keyId, state, q);
+			return;
+		}
+		this.handleEditorPaste(data, state);
+	}
+
+	/** parseKey 命中的键：escape/enter/backspace/光标移动/space/printable 各有语义，
+	 *  其他 special key（功能键/modifier 组合）no-op。 */
+	private handleEditorKey(data: string, keyId: string, state: QuestionState, q: Question): void {
 		if (matchesKey(data, "escape")) {
-			if (state.mode === "comment") {
-				// AC-17: Esc in comment = skip comment, advance (keep existing commentValue)
-				state.mode = "options";
-				this.editorText = "";
-				this.advance();
-				return;
-			}
-			// Esc in freeform editor = back to options (discard input)
-			state.mode = "options";
-			this.editorText = "";
-			this.invalidate();
-			this.tui.requestRender();
+			this.handleEditorEsc(state);
 			return;
 		}
 		if (matchesKey(data, "enter")) {
-			const text = this.editorText.trim();
-			if (state.mode === "freeform") {
-				if (text) {
-					state.freeTextValue = text;
-					state.selectedIndex = null;
-					state.mode = "options";
-					this.editorText = "";
-					// freeform 保存后走 afterConfirm（可能进 comment 模式）
-					this.afterConfirm(state, q);
-				} else {
-					// FR-6: 空 Enter 仅清除 freeTextValue、关闭编辑器回选项列表，不含确认语义（不置 confirmed）
-					state.freeTextValue = null;
-					state.mode = "options";
-					this.editorText = "";
-					// 对齐 toggleIndex 守卫：清空后若全无答案，重置 confirmed，维持 confirmed ⟹ 有答案 不变式
-					if ((q.multiSelect ? state.selectedIndices.size === 0 : state.selectedIndex === null) && state.freeTextValue === null) {
-						state.confirmed = false;
-					}
-					this.invalidate();
-					this.tui.requestRender();
-				}
-				return;
-			}
-			// comment mode：保存评论后直接前进（不再回头进 comment）
-			state.commentValue = text || null;
-			state.mode = "options";
-			this.editorText = "";
-			this.advance();
+			this.handleEditorEnter(state, q);
 			return;
 		}
 		if (matchesKey(data, "backspace")) {
-			this.editorText = this.editorText.slice(0, -1);
-			this.invalidate();
-			this.tui.requestRender();
+			this.deleteCharBeforeCursor(state);
 			return;
 		}
-		// Printable char(s) — handle both single keystrokes and multi-char paste.
-		// Terminals deliver pasted text as a single data chunk; iterating each char
-		// ensures the full paste is captured instead of silently dropping everything
-		// after the first character.
-		// 先剥离 bracketed paste 标记序列：启用该模式的终端会把粘贴内容包裹在
-		// \x1b[200~ ... \x1b[201~ 中。下面的 `c >= " "` 守卫会滤掉 ESC(\x1b)，
-		// 但序列里的可见字符（[200~/[201~）会残留混进编辑器文本，必须显式剥离。
+		if (this.moveCursor(data, state)) return;
+		// 空格特判：parseKey(" ") 返回 "space"（非单字符），需显式插入
+		if (matchesKey(data, "space")) {
+			this.insertAtCursor(state, " ");
+			return;
+		}
+		// 单字符 printable：parseKey("a") 返回 "a"（code 32-126），在光标处插入
+		if (keyId.length === 1 && keyId >= " " && keyId <= "~") {
+			this.insertAtCursor(state, keyId);
+			return;
+		}
+		// 其他 special key（功能键/modifier 组合）→ no-op（不泄漏）
+	}
+
+	/** Esc：comment 跳过评论并 advance；freeform 存 freeDraft 草稿后回 options。 */
+	private handleEditorEsc(state: QuestionState): void {
+		if (state.mode === "comment") {
+			// comment Esc: skip comment, advance (keep existing commentValue)
+			state.mode = "options";
+			state.draftText = "";
+			state.cursorIndex = state.savedOptionsCursorIndex;
+			this.advance();
+			return;
+		}
+		// freeform Esc: save draft to freeDraft (separate from submitted freeTextValue)
+		// so discarded drafts don't pollute the answer or trigger auto-confirm.
+		state.freeDraft = state.draftText || null;
+		state.mode = "options";
+		state.draftText = "";
+		state.cursorIndex = state.savedOptionsCursorIndex;
+		this.invalidate();
+		this.tui.requestRender();
+	}
+
+	/** Enter：freeform 有文本→提交，空文本→回退；comment→保存评论并 advance。 */
+	private handleEditorEnter(state: QuestionState, q: Question): void {
+		const text = state.draftText.trim();
+		if (state.mode === "freeform") {
+			state.cursorIndex = state.savedOptionsCursorIndex;
+			if (text) {
+				state.freeTextValue = text;
+				state.selectedIndex = null;
+				state.mode = "options";
+				state.draftText = "";
+				this.afterConfirm(state, q);
+			} else {
+				state.freeTextValue = null;
+				state.mode = "options";
+				state.draftText = "";
+				// freeTextValue 刚清空；confirmed 仅在无其他选择时置 false（允许重新作答）
+				if (q.multiSelect ? state.selectedIndices.size === 0 : state.selectedIndex === null) {
+					state.confirmed = false;
+				}
+				this.invalidate();
+				this.tui.requestRender();
+			}
+			return;
+		}
+		state.commentValue = text || null;
+		state.mode = "options";
+		state.draftText = "";
+		state.cursorIndex = state.savedOptionsCursorIndex;
+		this.advance();
+	}
+
+	/** 在光标处插入文本，光标前移 text.length。 */
+	private insertAtCursor(state: QuestionState, text: string): void {
+		state.draftText = state.draftText.slice(0, state.cursorIndex) + text + state.draftText.slice(state.cursorIndex);
+		state.cursorIndex += text.length;
+		this.invalidate();
+		this.tui.requestRender();
+	}
+
+	/** 删除光标前一个 code point（surrogate pair 时删整个 code point）。 */
+	private deleteCharBeforeCursor(state: QuestionState): void {
+		if (state.cursorIndex <= 0) return;
+		const deleteCount = state.cursorIndex >= SURROGATE_PAIR_LEN && isHighSurrogate(state.draftText, state.cursorIndex - SURROGATE_PAIR_LEN) ? SURROGATE_PAIR_LEN : 1;
+		state.draftText = state.draftText.slice(0, state.cursorIndex - deleteCount) + state.draftText.slice(state.cursorIndex);
+		state.cursorIndex -= deleteCount;
+		this.invalidate();
+		this.tui.requestRender();
+	}
+
+	/** 光标移动（left/right/home/end），surrogate pair 安全跳过代理中间位。
+	 *  返回 true 表示命中了移动键；false 表示非移动键，交由上层处理。 */
+	private moveCursor(data: string, state: QuestionState): boolean {
+		if (matchesKey(data, "left")) {
+			const newLeft = state.cursorIndex - 1;
+			state.cursorIndex = newLeft > 0 && isHighSurrogate(state.draftText, newLeft - 1)
+				? newLeft - 1
+				: Math.max(0, newLeft);
+		} else if (matchesKey(data, "right")) {
+			state.cursorIndex = isHighSurrogate(state.draftText, state.cursorIndex)
+				? Math.min(state.draftText.length, state.cursorIndex + SURROGATE_PAIR_LEN)
+				: Math.min(state.draftText.length, state.cursorIndex + 1);
+		} else if (matchesKey(data, "home")) {
+			state.cursorIndex = 0;
+		} else if (matchesKey(data, "end")) {
+			state.cursorIndex = state.draftText.length;
+		} else {
+			return false;
+		}
+		this.invalidate();
+		this.tui.requestRender();
+		return true;
+	}
+
+	/** 多字符粘贴 chunk → printable 提取（BC-1/BC-2/BC-3 保持）。
+	 *  未识别控制序列（OSC/DA/DCS/APC/unknown CSI）整体丢弃，不提取可见残渣。
+	 *  排除 bracketed paste 标记防 C-PASTE 退化。依赖 StdinBuffer 序列拆分保证 data 整体性。 */
+	private handleEditorPaste(data: string, state: QuestionState): void {
+		if (data.startsWith("\x1b") && !data.includes("\x1b[200~") && !data.includes("\x1b[201~")) {
+			return;
+		}
 		const cleaned = data.replace(/\x1b\[200~|\x1b\[201~/g, "");
-		// for...of 按 code point 迭代：代理对（如 😀 U+1F600）作为一个 c（length===2）出现，
-		// 因此不能用 `c.length === 1` 守卫——那会把所有 BMP 之外的字符（emoji、部分 CJK 扩展）全过滤。
-		// 只保留 `c >= " "`（code point 比较），过滤控制字符（< 空格 U+0020）。
 		let changed = false;
-		for (const c of cleaned) {
+		// 用 Array.from 正确拆分 emoji/surrogate pairs
+		for (const c of Array.from(cleaned)) {
 			if (c >= " ") {
-				this.editorText += c;
+				state.draftText = state.draftText.slice(0, state.cursorIndex) + c + state.draftText.slice(state.cursorIndex);
+				state.cursorIndex += c.length;
 				changed = true;
 			}
 		}
 		if (changed) {
 			this.invalidate();
 			this.tui.requestRender();
-			return;
 		}
 	}
 
@@ -454,10 +511,10 @@ export class AskUserComponent implements Component {
 	private afterConfirm(state: QuestionState, q: Question): void {
 		state.confirmed = true;
 		if (q.allowComment && state.mode !== "comment") {
-			// 进入评论输入行。预填已有评论，空 Enter=清除、新文本=覆盖（FR-4 item6）。
-			// 允许回改时重新编辑/清除已输入评论，避免评论被错误附着到后改的答案。
+			state.savedOptionsCursorIndex = state.cursorIndex;
 			state.mode = "comment";
-			this.editorText = state.commentValue ?? "";
+			state.draftText = state.commentValue ?? "";
+			state.cursorIndex = state.draftText.length;
 			this.invalidate();
 			this.tui.requestRender();
 			return;

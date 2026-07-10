@@ -26,6 +26,26 @@
 > coding-closeout 从 ⑥验收清单提炼：破坏即事故的用例。每条标溯源。
 > 与 NFR.md「验证」字段双向引用。
 
+### RB-1 方向键/功能键不得泄漏为可见字符  [from: fix-ask-user-arrow-leak]
+
+- **用例**：freeform/commment 模式发送任意 special key（方向键/F1-F12/ctrl+arrow/alt+arrow），draftText 不得包含 `[`、`C`、`[` 等转义序列残片
+- **破坏后果**：用户输入区出现乱码（[D[D[C），破坏表单提交
+- **测试文件**：`extensions/ask-user/src/__tests__/component-keymap.test.ts` + `w3-regression.test.ts`
+- **相关约束**：NFR CS-1（parseKey 白名单）
+
+### RB-2 草稿跨 tab 切换保持  [from: fix-ask-user-arrow-leak]
+
+- **用例**：Q1 输入文本 → 切到 Q2 → 切回 Q1 → 草稿恢复
+- **破坏后果**：用户输入丢失，体验倒退
+- **测试文件**：`extensions/ask-user/src/__tests__/w2-draft-hint.test.ts`
+
+### RB-3  [from: fix-ask-user-unknown-csi-leak]
+
+- **断言**：handleEditorInput fallback 分支投递 ESC 开头的未识别控制序列（OSC-BEL/OSC-ST/DA1/DA2/DCS/APC/SS3/unknown CSI/连续序列），editorText 不含任何控制序列可见残渣
+- **破坏即**：中（终端自发序列/OSC 响应/DA 响应在 ask_user 编辑器活跃时乱码渗入）
+- **关联约束**：RISK-2（StdinBuffer 序列拆分假设）
+- **测试文件**：`extensions/ask-user/src/__tests__/component-keymap.test.ts`（C-CSI-1~10 + C-CSI-R1~R7，17 条用例）
+
 ### {待沉淀 RB-N}  [from: {topic}]
 
 - **用例来源**：⑥验收清单 {ID}

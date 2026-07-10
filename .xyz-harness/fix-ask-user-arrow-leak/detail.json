@@ -1,0 +1,177 @@
+{
+  "format": "mid-detail",
+  "objective": "修复 ask-user 编辑器方向键泄漏乱码（[D[D[D）的 bug，并将键码解析与输入路由重构为白名单架构（复用 SDK parseKey）；同步修复 editorText 归属（迁移到 QuestionState.draftText）、功能键覆盖盲区、UX 提示缺失等架构层面问题。产出 issues.md + non-functional-design.md + code-architecture.md + execution-plan.md。",
+  "waves": [
+    {
+      "id": "W1",
+      "issues": ["#1"],
+      "dependsOn": [],
+      "parallelGroup": "core-fix"
+    },
+    {
+      "id": "W2",
+      "issues": ["#2", "#3", "#4"],
+      "dependsOn": ["W1"],
+      "parallelGroup": "refactor+ux"
+    },
+    {
+      "id": "W3",
+      "issues": ["#5"],
+      "dependsOn": ["W2"],
+      "parallelGroup": "regression"
+    }
+  ],
+  "testCases": [
+    {
+      "id": "T2.1",
+      "layer": "unit",
+      "scenario": "连按 3 次右箭头不泄漏",
+      "steps": "freeform 打开后 ×3 RIGHT",
+      "assertion": "draftText 不含 [ / C，保持空串",
+      "executor": "vitest",
+      "file": "extensions/ask-user/src/__tests__/component.test.ts"
+    },
+    {
+      "id": "T2.2",
+      "layer": "unit",
+      "scenario": "4 方向键夹输入 a/b",
+      "steps": "DOWN→RIGHT→a→UP→LEFT→b",
+      "assertion": "draftText === \"ab\"",
+      "executor": "vitest"
+    },
+    {
+      "id": "T2.3",
+      "layer": "unit",
+      "scenario": "no-op 集合遍历（home/end/insert/pageUp/pageDown/f1/delete）",
+      "steps": "freeform 打开后逐个发送 special key",
+      "assertion": "draftText 不变",
+      "executor": "vitest"
+    },
+    {
+      "id": "T2.4",
+      "layer": "unit",
+      "scenario": "modifier 采样矩阵（18 用例）",
+      "steps": "ctrl/alt/shift/super × {up/down/left/right} + ctrl+shift × {up/down}",
+      "assertion": "每条 draftText 不泄漏 modifier 后可见字符",
+      "executor": "vitest"
+    },
+    {
+      "id": "T2.5",
+      "layer": "unit",
+      "scenario": "单字符空格输入追加（parseKey space 特判）",
+      "steps": "freeform 打开后发送单字符空格",
+      "assertion": "draftText 含空格",
+      "executor": "vitest"
+    },
+    {
+      "id": "T1.1",
+      "layer": "unit",
+      "scenario": "多字符 chunk 完整捕获",
+      "steps": "freeform 打开后发送 \"hello world\"",
+      "assertion": "draftText 含全文本（含空格）",
+      "executor": "vitest"
+    },
+    {
+      "id": "T1.2",
+      "layer": "unit",
+      "scenario": "emoji 代理对保留",
+      "steps": "发送 \"fix the 🐛 bug\"",
+      "assertion": "emoji 不丢",
+      "executor": "vitest"
+    },
+    {
+      "id": "T1.3",
+      "layer": "unit",
+      "scenario": "控制字符过滤",
+      "steps": "发送 \"ab\\tcd\"",
+      "assertion": "draftText === \"abcd\"",
+      "executor": "vitest"
+    },
+    {
+      "id": "T1.4",
+      "layer": "unit",
+      "scenario": "空输入 no-op",
+      "steps": "发送空字符串",
+      "assertion": "无副作用",
+      "executor": "vitest"
+    },
+    {
+      "id": "T1.5",
+      "layer": "unit",
+      "scenario": "单字符 backward-compat",
+      "steps": "发送 \"x\"",
+      "assertion": "draftText === \"x\"",
+      "executor": "vitest"
+    },
+    {
+      "id": "T1.6",
+      "layer": "unit",
+      "scenario": "bracketed paste 剥离",
+      "steps": "发送 \\x1b[200~hello\\x1b[201~",
+      "assertion": "draftText === \"hello\"",
+      "executor": "vitest"
+    },
+    {
+      "id": "T3.1",
+      "layer": "unit",
+      "scenario": "Q1 freeform 草稿切走再回来恢复",
+      "steps": "Q1 输 abc → Esc → 回 Q1 重进 freeform",
+      "assertion": "draftText 恢复 \"abc\"",
+      "executor": "vitest"
+    },
+    {
+      "id": "T3.2",
+      "layer": "unit",
+      "scenario": "Q1/Q3 草稿互相独立",
+      "steps": "Q1 输 a、Q3 输 c，互切",
+      "assertion": "两草稿不污染",
+      "executor": "vitest"
+    },
+    {
+      "id": "T3.3",
+      "layer": "unit",
+      "scenario": "comment 回改预填旧评论",
+      "steps": "答题+评论 → 回改重进 comment",
+      "assertion": "comment 编辑器预填旧评论",
+      "executor": "vitest"
+    },
+    {
+      "id": "T3.4",
+      "layer": "unit",
+      "scenario": "freeform Enter 清 selectedIndex（BC-4b）",
+      "steps": "单选先选 opt0 → Other 输文本 → Enter",
+      "assertion": "state.selectedIndex === null",
+      "executor": "vitest"
+    },
+    {
+      "id": "T4.1",
+      "layer": "unit",
+      "scenario": "freeform 提示行含 Backspace deletes",
+      "steps": "freeform 打开后 render",
+      "assertion": "渲染含 \"Backspace deletes\"",
+      "executor": "vitest"
+    },
+    {
+      "id": "T4.2",
+      "layer": "unit",
+      "scenario": "comment 提示行含 Backspace deletes",
+      "steps": "comment 打开后 render",
+      "assertion": "渲染含 \"Backspace deletes\"",
+      "executor": "vitest"
+    },
+    {
+      "id": "T5.1",
+      "layer": "unit",
+      "scenario": "现有 180 测试全绿 + 全部新增用例复跑",
+      "steps": "pnpm --filter @zhushanwen/pi-ask-user test",
+      "assertion": "零失败",
+      "executor": "vitest"
+    }
+  ],
+  "deliverables": {
+    "issues": "issues.md",
+    "nonFunctional": "non-functional-design.md",
+    "codeArchitecture": "code-architecture.md",
+    "executionPlan": "execution-plan.md"
+  }
+}

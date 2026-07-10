@@ -288,7 +288,7 @@ describe("AskUserComponent — Other free-text editor", () => {
 		c.handleInput(ENTER);
 		const lines = c.render(60);
 		// freeform 模式：光标行（█）出现，editor 已在 Other 行原地渲染
-		expect(lines.some((l) => l.includes("█"))).toBe(true);
+		expect(lines.some((l) => l.includes("\x1b[7m"))).toBe(true);
 		// 不再独立 "Your answer" 提示块
 		expect(lines.some((l) => l.includes("Your answer"))).toBe(false);
 	});
@@ -300,7 +300,7 @@ describe("AskUserComponent — Other free-text editor", () => {
 		c.handleInput(TAB);
 		const lines = c.render(60);
 		// Tab 不再打开 Other 编辑器（仅 Enter）；单问题下 Tab 是 no-op
-		expect(lines.some((l) => l.includes("█"))).toBe(false);
+		expect(lines.some((l) => l.includes("\x1b[7m"))).toBe(false);
 	});
 
 	it("C-27: editor accepts printable characters", () => {
@@ -334,7 +334,7 @@ describe("AskUserComponent — Other free-text editor", () => {
 		c.handleInput(ESC);
 		const lines = c.render(60);
 		// Back in options mode — no cursor block (freeform inactive)
-		expect(lines.some((l) => l.includes("█"))).toBe(false);
+		expect(lines.some((l) => l.includes("\x1b[7m"))).toBe(false);
 	});
 
 	it("C-29: editor Enter with text saves and submits (single)", () => {
@@ -358,7 +358,7 @@ describe("AskUserComponent — Other free-text editor", () => {
 		expect(result.val).toBeUndefined();
 		// Back in options mode — no cursor block (freeform inactive)
 		const lines = c.render(60);
-		expect(lines.some((l) => l.includes("█"))).toBe(false);
+		expect(lines.some((l) => l.includes("\x1b[7m"))).toBe(false);
 	});
 });
 
@@ -374,7 +374,7 @@ describe("AskUserComponent — multi-char paste in editor", () => {
 		c.handleInput(ENTER); // 打开 freeform 编辑器
 		c.handleInput("hello world"); // 一次粘贴多字符
 		const lines = c.render(60);
-		const editorLine = lines.find((l) => l.includes("█"));
+		const editorLine = lines.find((l) => l.includes("\x1b[7m"));
 		expect(editorLine).toBeDefined();
 		// 完整文本保留（非仅首字符 "h"）
 		expect(editorLine).toContain("hello world");
@@ -388,7 +388,7 @@ describe("AskUserComponent — multi-char paste in editor", () => {
 		c.handleInput(ENTER);
 		c.handleInput("fix the 🐛 bug");
 		const lines = c.render(60);
-		const editorLine = lines.find((l) => l.includes("█"));
+		const editorLine = lines.find((l) => l.includes("\x1b[7m"));
 		expect(editorLine).toBeDefined();
 		// emoji 完整保留，不丢失
 		expect(editorLine).toContain("fix the 🐛 bug");
@@ -403,7 +403,7 @@ describe("AskUserComponent — multi-char paste in editor", () => {
 		c.handleInput(ENTER);
 		c.handleInput("ab\tcd");
 		const lines = c.render(60);
-		const editorLine = lines.find((l) => l.includes("█"));
+		const editorLine = lines.find((l) => l.includes("\x1b[7m"));
 		expect(editorLine).toBeDefined();
 		// 可打印字符保留，控制字符 \t 被过滤
 		expect(editorLine).toContain("abcd");
@@ -422,7 +422,7 @@ describe("AskUserComponent — multi-char paste in editor", () => {
 		expect(result.val).toBeUndefined();
 		expect(after).toEqual(before);
 		// 编辑器仍在（光标在），editorText 仍为空
-		expect(after.some((l) => l.includes("█"))).toBe(true);
+		expect(after.some((l) => l.includes("\x1b[7m"))).toBe(true);
 	});
 
 	it("C-PASTE-5: single printable char still works (backward-compat)", () => {
@@ -433,7 +433,7 @@ describe("AskUserComponent — multi-char paste in editor", () => {
 		c.handleInput(ENTER);
 		c.handleInput("x"); // 单字符
 		const lines = c.render(60);
-		const editorLine = lines.find((l) => l.includes("█"));
+		const editorLine = lines.find((l) => l.includes("\x1b[7m"));
 		expect(editorLine).toBeDefined();
 		expect(editorLine).toContain("x");
 	});
@@ -448,7 +448,7 @@ describe("AskUserComponent — multi-char paste in editor", () => {
 		c.handleInput(ENTER); // 打开 freeform
 		c.handleInput("\x1b[200~hello\x1b[201~");
 		const lines = c.render(60);
-		const editorLine = lines.find((l) => l.includes("█"));
+		const editorLine = lines.find((l) => l.includes("\x1b[7m"));
 		expect(editorLine).toBeDefined();
 		expect(editorLine).toContain("hello");
 		expect(editorLine).not.toContain("[200~");
@@ -465,7 +465,7 @@ describe("AskUserComponent — multi-char paste in editor", () => {
 		c.handleInput("\x1b[200~foo ");
 		c.handleInput(" bar\x1b[201~");
 		const lines = c.render(60);
-		const editorLine = lines.find((l) => l.includes("█"));
+		const editorLine = lines.find((l) => l.includes("\x1b[7m"));
 		expect(editorLine).toContain("foo  bar");
 		expect(editorLine).not.toContain("[200~");
 		expect(editorLine).not.toContain("[201~");
@@ -821,7 +821,7 @@ describe("AskUserComponent — new behavior (post-refactor)", () => {
 		// 独立 "Your answer" 提示行已消失
 		expect(lines.some((l) => l.includes("Your answer"))).toBe(false);
 		// freeform cursor 出现
-		expect(lines.some((l) => l.includes("█"))).toBe(true);
+		expect(lines.some((l) => l.includes("\x1b[7m"))).toBe(true);
 		// 依然能看见 "Auth" "Search"（普通选项不变）
 		expect(lines.some((l) => l.includes("Auth"))).toBe(true);
 		expect(lines.some((l) => l.includes("Search"))).toBe(true);
@@ -914,5 +914,20 @@ describe("AskUserComponent — new behavior (post-refactor)", () => {
 		// focus=Submit（默认），按 Enter → 不提交（Q2/Q3 未答）
 		c.handleInput(ENTER);
 		expect(result.val).toBeUndefined();
+	});
+
+	it("C-TAB-NOLEAK: Tab in options mode with single question is no-op", () => {
+		const c = new AskUserComponent(
+			[{ question: "Pick one", options: [{ label: "A" }, { label: "B" }] }],
+			mockTui,
+			stubTheme,
+			() => {},
+		);
+		c.handleInput(DOWN);
+		c.handleInput(TAB);
+		// 不应 crash，选项仍可见
+		const lines = c.render(60);
+		expect(lines.some((l: string) => l.includes("A"))).toBe(true);
+		expect(lines.some((l: string) => l.includes("B"))).toBe(true);
 	});
 });

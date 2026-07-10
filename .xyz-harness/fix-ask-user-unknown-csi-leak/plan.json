@@ -1,0 +1,55 @@
+{
+  "format": "lite",
+  "objective": "修复 ask-user freeform/comment 编辑器 handleEditorInput fallback 分支泄漏未识别控制序列（OSC/DA/DCS/APC/unknown CSI）到 editorText 的 bug。parseKey 返回 undefined 时，ESC 开头的未识别序列的可见残渣被当文本追加。修复：fallback 入口加 ESC 开头硬守卫（排除 bracketed paste 标记），整体丢弃。",
+  "waves": [
+    {
+      "id": "W1",
+      "changes": [
+        "extensions/ask-user/src/component.ts"
+      ],
+      "dependsOn": [],
+      "parallelGroup": "g1"
+    }
+  ],
+  "testCases": [
+    {
+      "id": "E1",
+      "layer": "mock",
+      "scenario": "OSC11 背景色响应（未配对，终端自发）投递到活跃 freeform 编辑器，可见残渣不泄漏进 editorText",
+      "steps": "openFreeform([singleQ]) 打开编辑器；handleInput(\"\\x1b]11;rgb:1/2/3\\x07\")；handleInput(\"a\")；render(60)；取含 █ 的 editorLine",
+      "expected": {
+        "text": "editorLine 含 \"a\"，且不含 ]/r/g/b/1 任意一个字符（OSC 可见残渣被守卫丢弃）"
+      },
+      "executor": "vitest",
+      "requiresScreenshot": false,
+      "file": "extensions/ask-user/src/__tests__/component-keymap.test.ts",
+      "describe": "AskUserComponent — unknown control sequence leak fix (C-CSI)"
+    },
+    {
+      "id": "E2",
+      "layer": "mock",
+      "scenario": "DA2 设备属性响应 + unknown CSI 连续投递到活跃 freeform 编辑器，可见残渣均不泄漏",
+      "steps": "openFreeform([singleQ]) 打开编辑器；handleInput(\"\\x1b[>0c\")；handleInput(\"\\x1b[99~\")；handleInput(\"ok\")；render(60)；取含 █ 的 editorLine",
+      "expected": {
+        "text": "editorLine 含 \"ok\"，且不含 [/>/0/c/9/~ 任意一个字符（两类控制序列可见残渣均被守卫丢弃）"
+      },
+      "executor": "vitest",
+      "requiresScreenshot": false,
+      "file": "extensions/ask-user/src/__tests__/component-keymap.test.ts",
+      "describe": "AskUserComponent — unknown control sequence leak fix (C-CSI)"
+    },
+    {
+      "id": "E3-r",
+      "layer": "real",
+      "scenario": "真实 Pi session 中 ask_user freeform 编辑器活跃时，外部向终端注入未配对 OSC11 响应字节流，编辑器无乱码渗入",
+      "steps": "[需集成环境] 启动真实 pi → 触发 ask_user 工具进入 freeform 编辑器（导航 Other + Enter）→ 用 printf '\\x1b]11;rgb:1/2/3\\x07' 向 tty 注入 OSC11 响应 → 键入若干字符 → 目视检查编辑器内容",
+      "expected": {
+        "text": "编辑器仅含用户键入的字符，无 ]/rgb/数字 等控制序列可见残渣"
+      },
+      "executor": "manual",
+      "requiresScreenshot": false,
+      "file": "extensions/ask-user/src/__tests__/component-keymap.test.ts",
+      "describe": "AskUserComponent — unknown control sequence leak fix (C-CSI) [需集成环境]"
+    }
+  ]
+}

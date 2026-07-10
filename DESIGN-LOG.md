@@ -11,6 +11,8 @@
 |-------|------|------|------|---------|------|
 | 2026-05-22-batch-operations | 批量操作 | 05-22 | — | — | in-progress |
 | 2026-05-24-subagent-memory-session | subagent memory session | 05-24 | — | — | in-progress |
+| fix-ask-user-arrow-leak | ask-user 方向键泄漏修复 + parseKey 白名单重构 | 07-09 | 07-09 | .xyz-harness/fix-ask-user-arrow-leak/ | archived |
+| fix-ask-user-unknown-csi-leak | unknown CSI/OSC 泄漏修复 | 07-09 | 07-09 | .xyz-harness/fix-ask-user-unknown-csi-leak/ | archived |
 
 ## 状态语义
 

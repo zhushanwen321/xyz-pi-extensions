@@ -2,13 +2,8 @@
 import { describe, expect, it } from "vitest";
 
 import { getSplitPaneWidths, renderQuestionView } from "../question-view";
-import { createQuestionState, type Question, type QuestionState, type ThemeLike } from "../types";
-
-const stubTheme: ThemeLike = {
-	fg: (_t: string, s: string) => s,
-	bg: (_t: string, s: string) => s,
-	bold: (s: string) => s,
-};
+import { createQuestionState, type Question, type QuestionState } from "../types";
+import { stubTheme } from "./fixtures";
 
 const singleQ: Question = {
 	question: "Which database?",
@@ -148,9 +143,10 @@ describe("renderQuestionView — Other editor mode", () => {
 			"my draft",
 		);
 		const t = text(lines);
-		// Other 行原地变 [ ] <input>█（freeform 模式不依赖 buildEditorBlock 独立编辑块）
-		expect(t).toContain("my draft");
-		expect(t).toContain("█");
+		// cursorIndex=2 → █ 在 "my" 和 " draft" 之间
+		expect(t).toContain("my");
+		expect(t).toContain("draft");
+		expect(t).toContain("\x1b[7m");
 		// 不再独立 "Your answer" 提示行
 		expect(t).not.toContain("Your answer");
 		// 需求4：Other 在 freeform 态也有编号前缀（与其他选项一致）。
@@ -177,8 +173,11 @@ describe("renderQuestionView — Other editor mode", () => {
 		// 多选 box [ ] + 编号 3. 都在编辑行上
 		expect(t).toContain("[ ]");
 		expect(t).toContain("3. ");
-		expect(t).toContain("custom");
-		expect(t).toContain("█");
+		// cursorIndex=2 → cursor 在 "s" 上: "cu\x1b[7ms\x1b[27mtom" — "stom" 被 cursor 打断
+		expect(t).toContain("cu");
+		expect(t).toContain("s");
+		expect(t).toContain("tom");
+		expect(t).toContain("\x1b[7m");
 	});
 
 	it("Q-16: Other with saved free-text shows checkmark + preview", () => {
@@ -227,10 +226,13 @@ describe("renderQuestionView — Other editor mode", () => {
 		expect(xCount).toBe(60);
 		expect(lines.some((l) => l.includes("x"))).toBe(true);
 		// 光标仍在末尾出现
-		expect(t).toContain("█");
-		// 每个含 x 的行都不超过总宽 width（stubTheme 无 ANSI，长度=可见宽）
+		expect(t).toContain("\x1b[7m");
+		// 每个含 x 的行可见宽度不超过 width（strip ANSI 后测量）
 		for (const l of lines) {
-			if (l.includes("x")) expect(l.length).toBeLessThanOrEqual(width);
+			if (l.includes("x")) {
+				const visible = l.replace(/\x1b\[[0-9;]*m/g, "");
+				expect(visible.length).toBeLessThanOrEqual(width);
+			}
 		}
 	});
 
@@ -252,7 +254,7 @@ describe("renderQuestionView — Other editor mode", () => {
 			input,
 		);
 		// 用 █ 定位编辑器行（help 行不含 █），排除 “submit” 含 a 的干扰
-		const editorLines = lines.filter((l) => l.includes("█"));
+		const editorLines = lines.filter((l) => l.includes("\x1b[7m"));
 		expect(editorLines.length).toBe(1);
 		// 全部 60 个 a 都在这一行（未被换行拆分）
 		const aCount = editorLines[0]!.split("").filter((c) => c === "a").length;
@@ -273,7 +275,8 @@ describe("renderQuestionView — Other editor mode", () => {
 		);
 		// 统计含输入内容的行数 = input 渲染行数（应被截到 5 行）
 		// 编号 "3. " 现在是 styled 内容的一部分，首行包裹段 "3." 不含 'y'
-		const inputLines = lines.filter((l) => l.includes("y") || l.includes("3."));
+		// 排除 help 行（含 "Type to add" 的提示行也含 'y'）
+		const inputLines = lines.filter((l) => (l.includes("y") || l.includes("3.")) && !l.includes("Type to add"));
 		expect(inputLines.length).toBe(5);
 		// 最后一行带省略号（表示还有更多，光标已被省略号取代）
 		expect(inputLines[inputLines.length - 1]).toContain("…");
@@ -387,7 +390,7 @@ describe("renderQuestionView — Other row alignment", () => {
 			"custom",
 		);
 		const normalLine = lines.find((l) => l.includes("Postgres"))!;
-		const otherLine = lines.find((l) => l.includes("█"))!;
+		const otherLine = lines.find((l) => l.includes("\x1b[7m"))!;
 		// stubTheme 无 ANSI，indexOf 反映可见列位置。普通选项编号 idx === Other 编号 idx
 		expect(normalLine.indexOf("1.")).toBe(otherLine.indexOf("3."));
 	});
