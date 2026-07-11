@@ -13,6 +13,7 @@
 | 2026-05-24-subagent-memory-session | subagent memory session | 05-24 | — | — | in-progress |
 | fix-ask-user-arrow-leak | ask-user 方向键泄漏修复 + parseKey 白名单重构 | 07-09 | 07-09 | .xyz-harness/fix-ask-user-arrow-leak/ | archived |
 | fix-ask-user-unknown-csi-leak | unknown CSI/OSC 泄漏修复 | 07-09 | 07-09 | .xyz-harness/fix-ask-user-unknown-csi-leak/ | archived |
+| swf-merge-exec-chain | T1 包结构合并 + 执行链统一 | 07-10 | 07-10 | .xyz-harness/swf-merge-exec-chain/ | archived |
 
 ## 状态语义
 

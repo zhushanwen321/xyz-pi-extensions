@@ -265,6 +265,31 @@ importers:
         specifier: ^4.1.8
         version: 4.1.8(@types/node@24.12.4)(@vitest/coverage-v8@4.1.8)(vite@8.0.16(@types/node@24.12.4)(jiti@2.7.0)(yaml@2.9.0))
 
+  extensions/subagents-workflow:
+    dependencies:
+      '@mariozechner/pi-ai':
+        specifier: '*'
+        version: 0.73.1(ws@8.21.0)(zod@4.4.3)
+      '@mariozechner/pi-coding-agent':
+        specifier: '*'
+        version: 0.73.1(ws@8.21.0)(zod@4.4.3)
+      '@mariozechner/pi-tui':
+        specifier: '*'
+        version: 0.73.1
+      '@sinclair/typebox':
+        specifier: '*'
+        version: 0.34.49
+      '@zhushanwen/pi-structured-output':
+        specifier: '*'
+        version: 0.2.1(@mariozechner/pi-coding-agent@0.73.1(ws@8.21.0)(zod@4.4.3))(@sinclair/typebox@0.34.49)
+    devDependencies:
+      '@types/node':
+        specifier: ^24.0.0
+        version: 24.12.4
+      vitest:
+        specifier: ^4.1.8
+        version: 4.1.8(@types/node@24.12.4)(@vitest/coverage-v8@4.1.8)(vite@8.0.16(@types/node@24.12.4)(jiti@2.7.0)(yaml@2.9.0))
+
   extensions/todo:
     dependencies:
       '@earendil-works/pi-ai':

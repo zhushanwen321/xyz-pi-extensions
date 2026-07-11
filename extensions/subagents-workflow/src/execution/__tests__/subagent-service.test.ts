@@ -38,12 +38,10 @@ function makeModelService(agentDir: string): ModelConfigService {
 }
 
 function makePi(): PiLike & {
-  sendMessage: ReturnType<typeof vi.fn>;
   appendEntry: ReturnType<typeof vi.fn>;
   events: { emit: ReturnType<typeof vi.fn> };
 } {
   return {
-    sendMessage: vi.fn(),
     appendEntry: vi.fn(),
     events: { emit: vi.fn() },
   };
@@ -425,7 +423,7 @@ describe("SubagentService", () => {
   //   - finalizeRecord status="cancelled" 经 runAndFinalize 路径（cancel 抢先 CAS 时
   //     runAndFinalize 侧 tryTransition 失败跳过 finalizeRecord，由 cancelBackground 侧 emit——
   //     本块 cancel 用例覆盖的即此后端 emit）
-  //   - background detached 正常完成回注（kickOffBackground.then → notifyComplete，走 sendMessage 非 emit）
+  //   - background detached 正常完成回注（finalizeRecord → emitPendingUnregister(done, {result,error,patchFile})）
   // register emit 的 payload（type:"subagent"、name）由本块 worktree-fail 路径附带覆盖。
 
   describe("pending-notifications emit 断言 (H4)", () => {
@@ -475,7 +473,7 @@ describe("SubagentService", () => {
 
     const ctxModel: ModelInfo = { id: "ctx-model", name: "Ctx", provider: "p", reasoning: false };
 
-    it("background execute + worktree 创建失败 → register(bg-id) + unregister(failed) 被 emit", async () => {
+    it("background execute + worktree 创建失败 → register(bg-id) + unregister(failed) 携带 error 被 emit", async () => {
       const { service, pi } = makeReadyServiceWithPi();
 
       const handle = await service.execute({
@@ -498,9 +496,10 @@ describe("SubagentService", () => {
           name: "general-purpose",
         }),
       );
+      // T2: unregister(failed) 携带 error 字段（供 pending-notifications 消费侧 sendMessage）
       expect(pi.events.emit).toHaveBeenCalledWith(
         "pending:unregister",
-        expect.objectContaining({ reason: "failed" }),
+        expect.objectContaining({ reason: "failed", error: expect.any(String) }),
       );
     });
 
@@ -515,12 +514,11 @@ describe("SubagentService", () => {
       expect(ok).toBe(true);
       expect(pi.events.emit).toHaveBeenCalledWith(
         "pending:unregister",
-        expect.objectContaining({ id: "bg-cancel-1", reason: "cancelled" }),
+        expect.objectContaining({ id: "bg-cancel-1", reason: "cancelled", error: "cancelled by user" }),
       );
       // record 手动注入（未走 execute）→ register 不应被 emit
       expect(pi.events.emit).not.toHaveBeenCalledWith("pending:register", expect.anything());
 
-      // 清理 notifier 定时器（cancelBackground → notifyComplete 可能启动 sliding window timer）
       service.dispose();
     });
   });

@@ -1,0 +1,124 @@
+{
+  "$schema": "./extension-dependencies.schema.json",
+  "_skeleton_purpose": "UC-8 / #7 extension-dependencies.json 变更骨架（diff 视图，非完整文件）。实现时合并到根 extension-dependencies.json。标注【新增】【迁移】【标注】三类改动。",
+  "_skeleton_note": "本文件是变更骨架，不是可直接 ajv 校验的完整 extension-dependencies.json。完整文件 = 现有 16 条 + 本骨架的 3 类改动。实现后必须跑 `npx ajv-cli validate -s extension-dependencies.schema.json -d extension-dependencies.json`（AC-8.3）。",
+
+  "changes": [
+    {
+      "type": "新增",
+      "uc": "UC-8",
+      "ac": "AC-8.1",
+      "reason": "T1 创建新包 pi-subagents-workflow（合并 pi-subagents + pi-workflow），T3 补正式 extension-dependencies 条目",
+      "entry": {
+        "name": "@zhushanwen/pi-subagents-workflow",
+        "directory": "extensions/subagents-workflow",
+        "dependsOn": [
+          {
+            "package": "@zhushanwen/pi-structured-output",
+            "type": "runtime",
+            "reason": "workflow 脚本的 agent() schema 结构化输出引用 tool 名（structured-output），运行时需要 extension 已加载（同原 pi-subagents/pi-workflow 的 schema 契约 enforcement）"
+          },
+          {
+            "package": "@zhushanwen/pi-pending-notifications",
+            "type": "optional",
+            "reason": "T2 通知合并后 background 完成事件经 pending:unregister EventBus 发给 pending-notifications 消费；缺失时降级（事件 emit 但无消费方，不报错）"
+          }
+        ]
+      }
+    },
+
+    {
+      "type": "迁移",
+      "uc": "UC-8",
+      "ac": "AC-8.2",
+      "reason": "coding-workflow 的 pi.__workflowRun 硬依赖现在在新包（T1 合并），runtime 依赖必须从 pi-workflow 迁移到 pi-subagents-workflow",
+      "target": "@zhushanwen/pi-coding-workflow",
+      "before": {
+        "dependsOn": [
+          {
+            "package": "@zhushanwen/pi-workflow",
+            "type": "runtime",
+            "reason": "ReviewGate / TestFixLoopGate 通过 pi.__workflowRun 启动 workflow 脚本；硬依赖，缺失时 gate.run() 直接抛错（无 fallback）"
+          },
+          {
+            "package": "@zhushanwen/pi-goal",
+            "type": "optional",
+            "reason": "Phase 2/3 通过 __goalInit 启动 goal，缺失时降级跳过"
+          }
+        ]
+      },
+      "after": {
+        "dependsOn": [
+          {
+            "package": "@zhushanwen/pi-subagents-workflow",
+            "type": "runtime",
+            "reason": "ReviewGate / TestFixLoopGate + execute-full-workflow 通过 pi.__workflowRun 启动 workflow 脚本；硬依赖，缺失时 gate.run() 直接抛错（无 fallback）。T1 合并后 pi.__workflowRun 在新包"
+          },
+          {
+            "package": "@zhushanwen/pi-goal",
+            "type": "optional",
+            "reason": "Phase 2/3 通过 __goalInit 启动 goal，缺失时降级跳过"
+          }
+        ]
+      }
+    },
+
+    {
+      "type": "标注",
+      "uc": "UC-8",
+      "ac": "AC-8.4",
+      "reason": "旧两包 deprecated（D-004 原样保留只标记），在 extension-dependencies.json 保留条目但注明被新包取代",
+      "targets": [
+        {
+          "name": "@zhushanwen/pi-workflow",
+          "directory": "extensions/workflow",
+          "annotation": "superseded_by @zhushanwen/pi-subagents-workflow（T1 合并，deprecated）。条目保留供已安装用户追溯，新安装请用新包",
+          "dependsOn_unchanged": [
+            {
+              "package": "@zhushanwen/pi-structured-output",
+              "type": "optional",
+              "reason": "schema 结构化输出，缺失时降级为纯文本"
+            }
+          ]
+        },
+        {
+          "name": "@zhushanwen/pi-subagents",
+          "directory": "extensions/subagents",
+          "annotation": "superseded_by @zhushanwen/pi-subagents-workflow（T1 合并，deprecated）。条目保留供已安装用户追溯，新安装请用新包",
+          "dependsOn_unchanged": [
+            {
+              "package": "@zhushanwen/pi-structured-output",
+              "type": "runtime",
+              "reason": "schema 契约 enforcement 引用 tool 名（structured-output），运行时需要 extension 已加载，代码层不 import"
+            }
+          ]
+        }
+      ],
+      "schema_compatibility_note": "现有 extension-dependencies.schema.json 无 supersededBy 字段。实现选项：(a) 在 reason 字段首部加 'superseded_by @zhushanwen/pi-subagents-workflow.' 前缀（不改 schema）；(b) 扩展 schema 加可选 supersededBy 字段。推荐 (a)——最小改动，ajv 直接通过（AC-8.3）。若选 (b)，须同步更新 extension-dependencies.schema.json + 跑 ajv 校验。"
+    }
+  ],
+
+  "post_implementation_checks": [
+    {
+      "id": "T8.1",
+      "layer": "unit",
+      "check": "extensions[] 含 name=@zhushanwen/pi-subagents-workflow 条目"
+    },
+    {
+      "id": "T8.2",
+      "layer": "unit",
+      "check": "coding-workflow.dependsOn 含 @zhushanwen/pi-subagents-workflow(runtime)，不含 @zhushanwen/pi-workflow"
+    },
+    {
+      "id": "T8.3",
+      "layer": "integration",
+      "command": "npx ajv-cli validate -s extension-dependencies.schema.json -d extension-dependencies.json",
+      "expect": "exit 0"
+    },
+    {
+      "id": "T8.4",
+      "layer": "unit",
+      "check": "pi-workflow/pi-subagents 条目含 superseded 标注（reason 前缀或 supersededBy 字段）"
+    }
+  ]
+}

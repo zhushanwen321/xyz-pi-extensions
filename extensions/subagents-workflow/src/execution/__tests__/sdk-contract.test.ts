@@ -6,11 +6,11 @@
 // 核心断言（[MANDATORY] checklist）：
 //   1. registerSubagentsCommand 注册名为 "subagents" 的命令，handler 是 (args, ctx)
 //   2. registerSubagentTool 注册名为 "subagent" 的工具，schema 存在
-//   3. notifier sendMessage 用 triggerTurn:true + deliverAs:followUp
+//   3. pending:unregister 事件携带 result/error/patchFile 时消费侧 sendMessage（T2 后替代 notifier）
 //   4. session_start handler 类型签名 (event, ctx) → 编译期保证（stub 精确类型）
 //
 // 不导入 index.ts（它经 getAgentDir 值导入触发 alias 解析失败——alias 指向
-// .d.ts-only stub）。改测叶子注册函数 + notifier 直接断言。session_start 的
+// .d.ts-only stub）。改测叶子注册函数。session_start 的
 // (event, ctx) 双参数契约由 tsconfig 的精确 stub 类型在编译期强制（见
 // shared/types/mariozechner/index.d.ts 注释：modelRegistry/cwd/ui 不在 event 上）。
 
@@ -48,7 +48,6 @@ vi.mock("../subagent-service.ts", () => ({
 }));
 
 import { registerSubagentsCommand } from "../../interface/subagents.ts";
-import { BgNotifier, type NotifierHost } from "../notifier.ts";
 import { registerSubagentTool } from "../../interface/subagent-tool.ts";
 import { mockExtensionApi } from "./helpers/mock-extension-api.ts";
 
@@ -193,38 +192,16 @@ describe("subagent tool contract [MANDATORY]", () => {
 });
 
 // ============================================================
-// notifier sendMessage 契约 [MANDATORY]
+// pending:unregister 事件契约 [MANDATORY]（T2 后 notifier 职责转移至此）
 // ============================================================
-describe("notifier sendMessage contract [MANDATORY]", () => {
-  it("sendMessage uses triggerTurn:true + deliverAs:followUp", () => {
-    const sendMessage = vi.fn();
-    const host = {
-      sendMessage,
-      hasRunningBackground: () => false,
-    };
-    const notifier = new BgNotifier(host as NotifierHost);
-    notifier.notify({
-      id: "bg-1",
-      status: "done",
-      agent: "worker",
-      result: "done",
-      startedAt: 0,
-      endedAt: 1,
-    });
-    expect(sendMessage).toHaveBeenCalledWith(
-      expect.objectContaining({ display: true }),
-      { triggerTurn: true, deliverAs: "followUp" },
-    );
-  });
-
-  it("immediate flush when hasRunningBackground is false", () => {
-    const sendMessage = vi.fn();
-    const host = { sendMessage, hasRunningBackground: () => false };
-    const notifier = new BgNotifier(host as NotifierHost);
-    notifier.notify({ id: "bg-1", status: "done", agent: "w", result: "ok", startedAt: 0, endedAt: 1 });
-    expect(sendMessage).toHaveBeenCalledTimes(1);
-  });
-});
+//
+// T2 后 background 完成通知改由 pending-notifications 扩展消费 pending:unregister
+// 事件后调 pi.sendMessage。subagent-service 的 emitPendingUnregister 在终态路径
+// 携带 result/error/patchFile，消费侧据此构造 customType:"subagent-bg-notify" 消息
+// 并以 triggerTurn:true + deliverAs:"followUp" 注入。
+//
+// 此处的契约由 pending-notifications 的单元测试覆盖（断言 sendMessage 调用参数），
+// 本套件不再直接测试 BgNotifier（已删除）。
 
 // ============================================================
 // session_start handler 双参数契约 — 编译期保证

@@ -1,0 +1,8 @@
+{
+  "format": "mid-clarify",
+  "objective": "T3: 预制脚本模板（chain/parallel/scatter-gather/map-reduce）+ ADR-030 撰写 + ADR-026完全/029部分superseded + AGENTS.md/CLAUDE.md目录更新 + extension-dependencies.json（含coding-workflow依赖迁移）+ workflow-script-format skill更新 + coding-execute skill worktree编排更新 + 旧包deprecated标记+CHANGELOG迁移指引。三主题收尾。",
+  "deliverables": {
+    "requirements": "requirements.md",
+    "systemArchitecture": "system-architecture.md"
+  }
+}

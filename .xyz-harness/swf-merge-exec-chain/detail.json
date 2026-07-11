@@ -1,0 +1,302 @@
+{
+  "format": "mid-detail",
+  "objective": "将 @zhushanwen/pi-subagents 和 @zhushanwen/pi-workflow 合并为新包 @zhushanwen/pi-subagents-workflow（extensions/subagents-workflow/）。两部分工作：(1) 包结构合并——两包文件迁入新包目录，合并 package.json/extension-dependencies.json；(2) 执行链统一——workflow 的 SubprocessAgentRunner 改为委托 SubagentService.executeAndAwait（新增 sync-await 接口，剥离 notify 保留护栏+onEvent），消除两包间重复代码（按 D-A7 分类处理）。本 topic 是 T2/T3 的前置基线。",
+  "waves": [
+    {
+      "id": "wave-0",
+      "issues": [
+        "#1"
+      ],
+      "dependsOn": []
+    },
+    {
+      "id": "wave-1",
+      "issues": [
+        "#2"
+      ],
+      "dependsOn": [
+        "wave-0"
+      ]
+    },
+    {
+      "id": "wave-2",
+      "issues": [
+        "#3"
+      ],
+      "dependsOn": [
+        "wave-0"
+      ]
+    },
+    {
+      "id": "wave-3",
+      "issues": [
+        "#5"
+      ],
+      "dependsOn": [
+        "wave-0"
+      ]
+    },
+    {
+      "id": "wave-4",
+      "issues": [
+        "#4"
+      ],
+      "dependsOn": [
+        "wave-1",
+        "wave-2",
+        "wave-3"
+      ]
+    },
+    {
+      "id": "wave-5",
+      "issues": [
+        "#6"
+      ],
+      "dependsOn": [
+        "wave-0"
+      ]
+    },
+    {
+      "id": "wave-6",
+      "issues": [
+        "#7"
+      ],
+      "dependsOn": [
+        "wave-4",
+        "wave-5"
+      ]
+    }
+  ],
+  "testCases": [
+    {
+      "id": "T3.1",
+      "layer": "unit",
+      "scenario": "SAR 委托 executeAndAwait 返回 content",
+      "steps": "opts{prompt}, mockSS 返回 {text:\"ok\",success:true}",
+      "assertion": "AgentResult.content=\"ok\"，SAR 调 executeAndAwait 1 次",
+      "executor": "vitest"
+    },
+    {
+      "id": "T3.2",
+      "layer": "unit",
+      "scenario": "parsedOutput 透传",
+      "steps": "opts{schema}, mockSS 返回 {parsedOutput:{x:1}}",
+      "assertion": "AgentResult.parsedOutput={x:1}",
+      "executor": "vitest"
+    },
+    {
+      "id": "T3.3",
+      "layer": "unit",
+      "scenario": "executeAndAwait 内部失败 → error 不 reject",
+      "steps": "mockSS 返回 {success:false,error:\"boom\"}",
+      "assertion": "AgentResult.error=\"boom\"，不 throw",
+      "executor": "vitest"
+    },
+    {
+      "id": "T3.4",
+      "layer": "unit",
+      "scenario": "cwd 透传（非 git worktree）",
+      "steps": "opts{cwd:\"/tmp/x\"}",
+      "assertion": "mapToExecuteOptions 传 cwd=\"/tmp/x\"",
+      "executor": "vitest"
+    },
+    {
+      "id": "T3.5",
+      "layer": "unit",
+      "scenario": "model 填底——opts.model 空 → ctxModel",
+      "steps": "opts{model:undefined}, ctxModel=\"glm-5.1\"",
+      "assertion": "ExecuteOptions.model=\"glm-5.1\"",
+      "executor": "vitest"
+    },
+    {
+      "id": "T3.6",
+      "layer": "unit",
+      "scenario": "timeoutMs 超时 → signal abort → error",
+      "steps": "opts{timeoutMs:50}, mockSS 收到已 abort 的 signal",
+      "assertion": "mergedSignal.aborted=true，50ms 内 abort",
+      "executor": "vitest"
+    },
+    {
+      "id": "T3.7",
+      "layer": "unit",
+      "scenario": "onEvent 桥接 AgentEvent 透传",
+      "steps": "mockSS onEvent 发 {type:\"tool_start\"}",
+      "assertion": "workflow onEvent 收到 AgentEvent（非 raw）",
+      "executor": "vitest"
+    },
+    {
+      "id": "T3.8",
+      "layer": "unit",
+      "scenario": "嵌套超限 → throw → SAR catch → error",
+      "steps": "mockSS executeAndAwait throw ForkDepthExceededError",
+      "assertion": "AgentResult.error 含 nesting depth，SAR 不 reject",
+      "executor": "vitest"
+    },
+    {
+      "id": "T3.9",
+      "layer": "unit",
+      "scenario": "schemaEnv 透传",
+      "steps": "opts{schemaEnv:'{...}'}",
+      "assertion": "mapToExecuteOptions 设 schemaEnv",
+      "executor": "vitest"
+    },
+    {
+      "id": "T3.10",
+      "layer": "unit",
+      "scenario": "不触发 followUp（BC-11）",
+      "steps": "mock pi.sendMessage = jest.fn",
+      "assertion": "sendMessage 0 调用",
+      "executor": "vitest"
+    },
+    {
+      "id": "T3.11",
+      "layer": "unit",
+      "scenario": "schemaEnv 不传 → childEnv 无 PI_WORKFLOW_SCHEMA",
+      "steps": "ExecuteOptions 无 schemaEnv",
+      "assertion": "runSpawn childEnv 不含 PI_WORKFLOW_SCHEMA",
+      "executor": "vitest"
+    },
+    {
+      "id": "T3.12",
+      "layer": "e2e",
+      "scenario": "真实 spawn pi 全链贯穿",
+      "steps": "workflow 脚本 agent({prompt:\"echo hi\"})",
+      "assertion": "AgentResult.content 非空，reason=completed",
+      "executor": "vitest"
+    },
+    {
+      "id": "T3.13",
+      "layer": "integration",
+      "scenario": "executeAndAwait 异常分支 finalize 覆盖",
+      "steps": "spawn 失败/超时",
+      "assertion": "record settled 为 failed，无泄漏",
+      "executor": "vitest"
+    },
+    {
+      "id": "T3.14",
+      "layer": "unit",
+      "scenario": "AgentResult 映射字段对齐",
+      "steps": "mapToWorkflowAgentResult 纯函数单测",
+      "assertion": "text→content/!success→error/parsedOutput+usage+toolCalls 直通",
+      "executor": "vitest"
+    },
+    {
+      "id": "T3.15",
+      "layer": "integration",
+      "scenario": "pending emit 显式调用",
+      "steps": "executeAndAwait 全程 mock EventBus",
+      "assertion": "pending:register + pending:unregister 成对触发",
+      "executor": "vitest"
+    },
+    {
+      "id": "T3.16",
+      "layer": "unit",
+      "scenario": "schemaEnv 不传时 BC-6 childEnv 等价",
+      "steps": "runSpawn(opts 无 schemaEnv)",
+      "assertion": "childEnv 不含 PI_WORKFLOW_SCHEMA",
+      "executor": "vitest"
+    },
+    {
+      "id": "T3.17",
+      "layer": "integration",
+      "scenario": "mergeTimeoutSignal listener 清理",
+      "steps": "连续多次 SAR.run（timeoutMs），检查 listener 计数",
+      "assertion": "listener 不累积，正常完成后摘除",
+      "executor": "vitest"
+    },
+    {
+      "id": "T3.18",
+      "layer": "integration",
+      "scenario": "dispose 兜底覆盖 workflow 子进程",
+      "steps": "SAR 委托 spawn 后调 dispose",
+      "assertion": "spawnedChildren Set 中无存活子进程",
+      "executor": "vitest"
+    },
+    {
+      "id": "T3.19",
+      "layer": "unit",
+      "scenario": "AgentCallOpts→ExecuteOptions 映射保真",
+      "steps": "mapToExecuteOptions 全字段单测",
+      "assertion": "systemPromptFiles 跳过/skillPath 透传/cwd 透传/model 填底",
+      "executor": "vitest"
+    },
+    {
+      "id": "T3.20",
+      "layer": "integration",
+      "scenario": "withSlot 不独立占池",
+      "steps": "嵌套调用检查槽位计数",
+      "assertion": "槽位占用=N 而非 2N（单池唯一）",
+      "executor": "vitest"
+    },
+    {
+      "id": "T3.21",
+      "layer": "integration",
+      "scenario": "projectLiveProgress 迁移保留",
+      "steps": "迁移后跑 WorkflowsView live 进度渲染",
+      "assertion": "updateFromEvent 仍驱动 liveRecord，渲染不变",
+      "executor": "vitest"
+    },
+    {
+      "id": "T4.1",
+      "layer": "unit",
+      "scenario": "tool execute(sync) 行为不变",
+      "steps": "现有 subagent-service.test 用例",
+      "assertion": "全绿（回归）",
+      "executor": "vitest"
+    },
+    {
+      "id": "T4.2",
+      "layer": "unit",
+      "scenario": "tool execute(background) 行为不变",
+      "steps": "现有用例",
+      "assertion": "全绿（回归）",
+      "executor": "vitest"
+    },
+    {
+      "id": "T4.3",
+      "layer": "unit",
+      "scenario": "tool 层 schemaEnv 恒 undefined",
+      "steps": "subagent-tool 调 execute",
+      "assertion": "opts.schemaEnv undefined",
+      "executor": "vitest"
+    },
+    {
+      "id": "T5.1",
+      "layer": "unit",
+      "scenario": "pi.__workflowRun 签名 + 返回结构不变",
+      "steps": "现有 index.test L245",
+      "assertion": "status=done + reason + scriptResult（回归）",
+      "executor": "vitest"
+    },
+    {
+      "id": "T5.2",
+      "layer": "unit",
+      "scenario": "脚本内 agent 失败 → reason=failed",
+      "steps": "workflow 脚本 agent() 抛错",
+      "assertion": "WorkflowRunResult.reason=\"failed\"",
+      "executor": "vitest"
+    },
+    {
+      "id": "T5.3",
+      "layer": "unit",
+      "scenario": "pending emit 不变",
+      "steps": "runAndWait 全程 mock EventBus",
+      "assertion": "pending:register + pending:unregister 各 1 次",
+      "executor": "vitest"
+    },
+    {
+      "id": "T5.4",
+      "layer": "integration",
+      "scenario": "coding-workflow tsc 全绿",
+      "steps": "pnpm --filter @zhushanwen/pi-coding-workflow typecheck",
+      "assertion": "tsc 0 error",
+      "executor": "tsc"
+    }
+  ],
+  "deliverables": {
+    "issues": "issues.md（7 个 issue，P0×1 + P1×5 + P2×1，M-5/M-6 已决策 D-008/D-009）",
+    "nonFunctional": "non-functional-design.md（7 issue × 7 维度，12 ⚠️ 风险点，12 条回灌登记）",
+    "codeArchitecture": "code-architecture.md（9 章节，3 时序图，29 条 test-matrix，9 个骨架文件）",
+    "executionPlan": "execution-plan.md（7 Wave，prefactor+5 垂直切片+验收，29 条测试验收清单）"
+  }
+}

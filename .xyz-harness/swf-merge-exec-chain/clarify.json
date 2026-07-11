@@ -1,0 +1,8 @@
+{
+  "format": "mid-clarify",
+  "objective": "将 @zhushanwen/pi-subagents 和 @zhushanwen/pi-workflow 合并为新包 @zhushanwen/pi-subagents-workflow（extensions/subagents-workflow/）。两部分工作：(1) 包结构合并——两包文件迁入新包目录，合并 package.json/extension-dependencies.json；(2) 执行链统一——workflow 的 SubprocessAgentRunner 改为委托 SubagentService.execute（新增 executeAndAwait sync-await 接口），删除两包间约 1200 行重复代码。本 topic 是 T2（删sync/并发池/通知）和 T3（预制脚本/文档）的前置基线。",
+  "deliverables": {
+    "requirements": "requirements.md",
+    "systemArchitecture": "system-architecture.md"
+  }
+}
