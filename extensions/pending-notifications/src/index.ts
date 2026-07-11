@@ -157,9 +157,6 @@ export default function pendingNotificationsExtension(pi: ExtensionAPI): void {
 		debugLog("debug", "listener: pending:unregister parsed", parsed);
 
 		const status = mapReasonToStatus(parsed.reason);
-		// 先读 entry 取 agent 名（unregister 后 entry 仍在 map，但先读语义更清晰）。
-		// unknown/duplicate id → changed=false → return，不重复 appendEntry / 不重复 notify。
-		const entry = registry.operations.get(parsed.id);
 		const changed = unregister(registry, parsed.id, status);
 		if (!changed) {
 			debugLog("debug", "listener: pending:unregister ignored (unknown id)", { id: parsed.id });
@@ -172,32 +169,13 @@ export default function pendingNotificationsExtension(pi: ExtensionAPI): void {
 			status,
 		});
 
-		// T2: subagent 完成通知。当 payload 携带 result/error/patchFile 时（仅 subagent
-		// 终态路径 emit），调 pi.sendMessage 注入完成消息到 LLM（替代已删除的 BgNotifier）。
-		// workflow 的 unregister 不携带这些字段，不触发通知。
-		if (parsed.result !== undefined || parsed.error !== undefined || parsed.patchFile !== undefined) {
-			sendSubagentNotify(pi, {
-				id: parsed.id,
-				agent: entry?.name ?? parsed.id,
-				status: reasonToNotifyStatus(parsed.reason),
-				result: parsed.result,
-				error: parsed.error,
-				patchFile: parsed.patchFile,
-			}, isRpcMode);
-		}
-
 		debugLog("debug", "listener: pending:unregister appended", { id: parsed.id });
 	}));
-
-	// RPC 模式标志（session_start 捕获，传给 sendSubagentNotify 构造 __gui__）
-	let isRpcMode = false;
 
 	// ── session_start：从持久化 entries 重建 registry ────────
 	pi.on("session_start", (_event, ctx: ExtensionContext) => {
 		registry = createRegistry();
 		currentSessionId = ctx.sessionManager.getSessionId();
-		// RPC 模式下 hasUI 为 false（无 TUI 渲染入口）
-		isRpcMode = !ctx.hasUI;
 
 		const entries = ctx.sessionManager.getEntries();
 		const now = Date.now();
@@ -324,94 +302,4 @@ function formatList(active: PendingEntry[]): string {
 	if (active.length === 0) return "No pending operations";
 	const lines = active.map((op) => `- [${op.type}] ${op.name} (id=${op.id})`);
 	return `${active.length} pending operation(s):\n${lines.join("\n")}`;
-}
-
-// ── T2: subagent 完成通知（替代已删除的 BgNotifier）─────────
-
-/** 发送给主对话的 customType（bg-notify-render 消费）。与原 notifier.ts 保持一致。 */
-const NOTIFY_CUSTOM_TYPE = "subagent-bg-notify";
-
-/** 完成通知的 record 形状（与 bg-notify-render.ts 的 BgNotifyRecord 对齐）。 */
-interface NotifyRecord {
-	id: string;
-	status: "done" | "failed" | "cancelled";
-	agent: string;
-	result?: string;
-	error?: string;
-	patchFile?: string;
-}
-
-/** 将事件 reason 映射为通知 record 的 status（bg-notify-render 要求 done/failed/cancelled）。 */
-function reasonToNotifyStatus(reason: string): "done" | "failed" | "cancelled" {
-	switch (reason) {
-		case "done": return "done";
-		case "failed": return "failed";
-		case "cancelled": return "cancelled";
-		case "completed": return "done";
-		default: return "done";
-	}
-}
-
-/**
- * 构造 content（进 LLM context）——与原 BgNotifier.buildLlmContent 格式一致，不截断。
- *
- * content 经 convertToLlm 转成 user message 进 LLM context。截断会让 AI 被迫 poll
- * 拉全量，与 background 模式「不轮询」的设计目标矛盾。block 的视觉展示靠 details
- * （renderer 自己 firstLine + truncLine 压缩），与 content 解耦。
- */
-function buildNotifyContent(record: NotifyRecord): string {
-	const agent = record.agent;
-	const id = record.id;
-	switch (record.status) {
-		case "done": {
-			const base = `Subagent "${agent}" (${id}) completed. Result:\n${record.result ?? "(empty)"}`;
-			if (record.patchFile) {
-				return `${base}\n\nThis subagent ran in an isolated worktree; its file changes were captured as a patch:\n  ${record.patchFile}\nTo bring these changes into the current repo, run: \`git apply ${record.patchFile}\``;
-			}
-			return base;
-		}
-		case "failed":
-			return `Subagent "${agent}" (${id}) failed: ${record.error ?? "(unknown error)"}`;
-		case "cancelled":
-			return `Subagent "${agent}" (${id}) cancelled.`;
-	}
-}
-
-/**
- * 注入 subagent 完成通知到主对话。
- *
- * deliverAs:"followUp" + triggerTurn:true：完成通知在当前 streaming turn 结束后
- * 唤醒父 agent 处理结果（followUp 不打断 streaming、不锁滚动）；空闲时立即 prompt 新 turn。
- * details 作为 bg-notify-render 的渲染数据源（与原 BgNotifier 输出一致）。
- */
-/**
- * 注入 subagent 完成通知。
- *
- * @param isRpcMode 是否为 RPC 模式（从 session_start 的 ctx.mode 捕获）。
- * RPC 模式下附加 __gui__ 结构化渲染数据，供 xyz-agent GUI 渲染。
- */
-function sendSubagentNotify(pi: ExtensionAPI, record: NotifyRecord, isRpcMode?: boolean): void {
-	const details: Record<string, unknown> = { ...record };
-
-	// GUI 协议：RPC 模式下附加 __gui__ 结构化渲染数据
-	if (isRpcMode) {
-		details.__gui__ = {
-			v: 1,
-			component: {
-				type: "subagent-trace",
-				props: {
-					agent: record.agent,
-					status: record.status === "done" ? "done" : record.status === "failed" ? "failed" : "cancelled",
-					result: record.result,
-				},
-			},
-		};
-	}
-
-	pi.sendMessage({
-		customType: NOTIFY_CUSTOM_TYPE,
-		content: buildNotifyContent(record),
-		display: true,
-		details,
-	}, { triggerTurn: true, deliverAs: "followUp" });
 }

@@ -40,10 +40,12 @@ function makeModelService(agentDir: string): ModelConfigService {
 function makePi(): PiLike & {
   appendEntry: ReturnType<typeof vi.fn>;
   events: { emit: ReturnType<typeof vi.fn> };
+  sendMessage: ReturnType<typeof vi.fn>;
 } {
   return {
     appendEntry: vi.fn(),
     events: { emit: vi.fn() },
+    sendMessage: vi.fn(),
   };
 }
 
@@ -496,10 +498,10 @@ describe("SubagentService", () => {
           name: "general-purpose",
         }),
       );
-      // T2: unregister(failed) 携带 error 字段（供 pending-notifications 消费侧 sendMessage）
+      // unregister(failed) 只记 registry 状态（通知由 BgNotifier 发，不在这条事件里）
       expect(pi.events.emit).toHaveBeenCalledWith(
         "pending:unregister",
-        expect.objectContaining({ reason: "failed", error: expect.any(String) }),
+        expect.objectContaining({ reason: "failed" }),
       );
     });
 
@@ -514,7 +516,7 @@ describe("SubagentService", () => {
       expect(ok).toBe(true);
       expect(pi.events.emit).toHaveBeenCalledWith(
         "pending:unregister",
-        expect.objectContaining({ id: "bg-cancel-1", reason: "cancelled", error: "cancelled by user" }),
+        expect.objectContaining({ id: "bg-cancel-1", reason: "cancelled" }),
       );
       // record 手动注入（未走 execute）→ register 不应被 emit
       expect(pi.events.emit).not.toHaveBeenCalledWith("pending:register", expect.anything());

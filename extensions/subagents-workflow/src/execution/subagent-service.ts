@@ -52,13 +52,19 @@ import { mapToWorkflowAgentResult } from "./agent-result-mapper.ts";
 import type { AgentResult as WorkflowAgentResult } from "../orchestration/models/types.ts";
 import type { ModelConfigService } from "./model-config-service.ts";
 import { WorktreeManager } from "./worktree-manager.ts";
+import { BgNotifier } from "./notifier.ts";
+import type { BgNotifyRecord, NotifierHost } from "./notifier.ts";
 
 /** Pi ExtensionAPI 的最小接口（duck-typed）。
- *  T2 后 background 完成通知改由 pending-notifications 扩展消费 pending:unregister
- *  事件后直接调 pi.sendMessage，subagent-service 自身不再调 sendMessage。 */
+ *  subagent-service 直接调 pi.sendMessage 发 background 完成通知（BgNotifier 滑动窗口合并），
+ *  不委托 pending-notifications EventBus 中继——后者只管 registry 不参与通知发送。 */
 interface PiLike {
   appendEntry(customType: string, data?: unknown): void;
   events: { emit(channel: string, data: unknown): void };
+  sendMessage(
+    message: { customType: string; content: string; display: boolean; details?: unknown },
+    options?: { triggerTurn?: boolean; deliverAs?: "steer" | "followUp" | "nextTurn" },
+  ): void;
 }
 
 /** pending-notifications 注册/注销 helper（避免重复代码）。 */
@@ -74,14 +80,10 @@ function emitPendingUnregister(
   pi: PiLike | null,
   id: string,
   reason: string,
-  opts?: { result?: string; error?: string; patchFile?: string },
 ): void {
   pi?.events.emit("pending:unregister", {
     id,
     reason,
-    ...(opts?.result !== undefined && { result: opts.result }),
-    ...(opts?.error !== undefined && { error: opts.error }),
-    ...(opts?.patchFile !== undefined && { patchFile: opts.patchFile }),
   });
 }
 
@@ -162,6 +164,8 @@ export class SubagentService {
   private sessionId: string | null = null;
   private _disposed = false;
   private _seq = 0;
+  /** background 完成通知器（滑动窗口合并 + 去重）。session_start revive，shutdown dispose。 */
+  private readonly notifier: BgNotifier;
   /** [MF#4][MF#2] fork 深度按 async 调用链传递（AsyncLocalStorage），替代共享可变计数器。
    *  主 session=0；fork 进入子 session 期间推进为子深度，供嵌套 fork 的 execute（子 agent
    *  在 run() 期间再调 subagent tool）经 ALS 读到自身深度作为 parentForkDepth。并发 background
@@ -185,6 +189,7 @@ export class SubagentService {
     this.worktreeManager = new WorktreeManager(this.modelService.getAgentDir());
     const sessionsDir = getSubagentSessionDir(this.modelService.getAgentDir(), init.cwd);
     this.store = new RecordStore(sessionsDir);
+    this.notifier = new BgNotifier(this.piAdapter());
   }
 
   // ── 生命周期（index.ts 调）──────────────────────────────
@@ -207,6 +212,7 @@ export class SubagentService {
     // revive（dispose 的逆操作：/resume /fork /new 后复活）
     this._disposed = false;
     this.store.revive();
+    this.notifier.revive();
   }
 
   /** session 结束清理（清定时器，丢弃 pending 通知）。幂等。 */
@@ -244,10 +250,46 @@ export class SubagentService {
       if (s.timer !== undefined) clearTimeout(s.timer);
     }
     this.throttleState.clear();
+    // flush 待发通知后 dispose（防丢失）
+    this.notifier.flushPendingNotifications();
+    this.notifier.dispose();
     this.store.dispose();
   }
 
   // ── 执行（subagent-tool 调）────────────────────────────
+
+  /** background 完成回注（record → BgNotifyRecord 映射 + notifier.notify）。 */
+  private notifyComplete(record: ExecutionRecord): void {
+    this.notifier.notify(this.toNotifyRecord(record));
+  }
+
+  /** notifier 的 NotifierHost 适配器（绑定到 pi.sendMessage + store 查询）。 */
+  private piAdapter(): NotifierHost {
+    return {
+      sendMessage: (message, options) => {
+        this.pi?.sendMessage(message, options);
+      },
+      hasRunningBackground: () => {
+        return this.store.listRunning().some((r) => r.mode === "background");
+      },
+    };
+  }
+
+  /** record → BgNotifyRecord（notifier.notify 入参映射，内部不外露）。 */
+  private toNotifyRecord(record: ExecutionRecord): BgNotifyRecord {
+    const snap = snapshot(record);
+    return {
+      id: snap.id,
+      status: snap.status as "done" | "failed" | "cancelled",
+      agent: snap.agent,
+      model: snap.model,
+      result: snap.result,
+      error: snap.error,
+      startedAt: snap.startedAt,
+      endedAt: snap.endedAt,
+      patchFile: record.patchFile,
+    };
+  }
 
   /**
    * 预解析 model（renderCall 标题行用，同步）。
@@ -600,6 +642,13 @@ export class SubagentService {
     priority: number,
   ): void {
     void this.runAndFinalize(record, opts, ctx, identity, signal, priority)
+      .then(() => {
+        // background 回注：仅当本路径抢到 CAS（status 已转 done/failed）才 notify。
+        // cancel 抢先时 status=cancelled，cancelBackground 自己 notify，此处跳过。
+        if (record.status !== "cancelled") {
+          this.notifyComplete(record);
+        }
+      })
       .catch((err: unknown) => {
         // detached 吞错：runAndFinalize 内部已 finalize record（含 emitPendingUnregister），不外抛
         // 完成通知由 finalizeRecord 内的 emitPendingUnregister 承担（pending-notifications 消费）。
@@ -656,11 +705,8 @@ export class SubagentService {
         bestEffort(err, "removeAliveMarker (cancelBackground)");
       }
     }
-    // pending-notifications：cancel 注销
-    // pending-notifications：cancel 注销（携带 error，让消费侧触发完成通知）
-    emitPendingUnregister(this.pi, record.id, "cancelled", {
-      error: record.error,
-    });
+    // pending-notifications：cancel 注销（只记 registry 状态，通知由 BgNotifier 发）
+    emitPendingUnregister(this.pi, record.id, "cancelled");
     return true;
   }
 
@@ -745,12 +791,8 @@ export class SubagentService {
       }
     }
 
-    // pending-notifications：终态注销（携带 result/error/patchFile，消费侧 sendMessage 到 LLM）
-    emitPendingUnregister(this.pi, record.id, status, {
-      result: record.result,
-      error: record.error,
-      patchFile: record.patchFile,
-    });
+    // pending-notifications：终态注销（只记 registry 状态，通知由 BgNotifier 发）
+    emitPendingUnregister(this.pi, record.id, status);
   }
 
   /**
