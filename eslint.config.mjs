@@ -17,6 +17,9 @@ export default [
       // 独立 JS 脚本（不用 TS 规则检查）
       '.pi/workflows/**',
       'extensions/*/workflows/**',
+      'extensions/*/.pi/workflows/**',
+      // 示例文件（给用户的 CommonJS 脚本，非项目源码）
+      'extensions/*/examples/**',
       'skills/browser-automation/scripts/**',
     ],
   },
