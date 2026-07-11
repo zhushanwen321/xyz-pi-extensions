@@ -136,6 +136,14 @@ await pipeline(
 
 **嵌套配额**：`workflow()` 调用走同一 ConcurrencyPool，按 depth 分层分配配额（`max(1, 6 - depth)`，保底 1 槽防饿死）。`parallel()` 内的 `workflow()` 调用共享父 workflow 的配额池，超出自动排队（不报错）。嵌套深度受 `MAX_FORK_DEPTH` 护栏保护（见 ADR-030 决策 3）。
 
+**返回值**：`workflow()` 返回 `AgentResult` 对象（与 `agent()` 一致）：
+- 成功：`{ content: string, parsedOutput?: object }`——content 是子 workflow execute() 返回值的 JSON 字符串；parsedOutput 是返回值为对象时的原样回传
+- 失败：`{ content: "", error: string }`——子 workflow 未找到/lint 失败/执行异常/被 abort
+
+**循环检测**：`workflow()` 自动追踪调用链（A→B→C），如果目标 name 已在当前调用链中（如 A→B→A），立即返回 error result（`Circular workflow call detected: A → B → A`），不执行子 workflow。
+
+**预算继承**：子 workflow 的 token 预算继承父 workflow 的剩余预算。子 workflow 消耗的 tokens/cost 执行后累加回父 workflow 的预算池。父 workflow abort 时子 workflow 级联 abort。
+
 **chain 基础示例**（顺序：每步输出作下步输入）：
 ```javascript
 const a = await workflow("extract", { source: inputPath });
