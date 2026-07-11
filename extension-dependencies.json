@@ -8,7 +8,7 @@
         {
           "package": "@zhushanwen/pi-structured-output",
           "type": "optional",
-          "reason": "schema 结构化输出，缺失时降级为纯文本"
+          "reason": "superseded_by @zhushanwen/pi-subagents-workflow（T1 合并，deprecated，ADR-030）。条目保留供已安装用户追溯，新安装请用新包。原依赖说明：schema 结构化输出，缺失时降级为纯文本"
         }
       ]
     },
@@ -125,7 +125,7 @@
         {
           "package": "@zhushanwen/pi-structured-output",
           "type": "runtime",
-          "reason": "schema 契约 enforcement 引用 tool 名（structured-output），运行时需要 extension 已加载，代码层不 import"
+          "reason": "superseded_by @zhushanwen/pi-subagents-workflow（T1 合并，deprecated，ADR-030）。条目保留供已安装用户追溯，新安装请用新包。原依赖说明：schema 契约 enforcement 引用 tool 名（structured-output），运行时需要 extension 已加载，代码层不 import"
         }
       ]
     },

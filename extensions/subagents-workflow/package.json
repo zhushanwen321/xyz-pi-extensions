@@ -21,6 +21,7 @@
     "index.ts",
     "agents/",
     "skills/",
+    "examples/",
     "src/index.ts",
     "src/execution/",
     "src/orchestration/",
