@@ -41,7 +41,7 @@ import type { LauncherDeps } from "./orchestration/launcher.ts";
 import { runAndWait, executeNestedWorkflow, type WorkflowRunResult } from "./orchestration/launcher.ts";
 import { pauseRun, scheduleTimeBudget } from "./orchestration/lifecycle.ts";
 import type { WorkflowRun } from "./orchestration/models/workflow-run.ts";
-import { AgentRegistry } from "./orchestration/agent-discovery.ts";
+import type { AgentRegistry } from "./execution/agent-registry.ts";
 import { cleanupAllTempFiles as cleanupAllFiles } from "./orchestration/agent-opts-resolver.ts";
 import { JsonlRunStore } from "./orchestration/jsonl-run-store.ts";
 import { SubprocessAgentRunner } from "./execution/subprocess-agent-runner.ts";
@@ -242,8 +242,11 @@ export default function subagentsWorkflowExtension(pi: ExtensionAPI): void {
     });
     const runs = new Map<string, WorkflowRun>();
 
-    const agentRegistry = new AgentRegistry(process.cwd());
-    agentRegistry.discoverAll();
+    // F-4/D-003: 复用 modelService 的 AgentRegistry（discovery.json 契约 + 包内 builtin），
+    // 取代旧 orchestration/agent-discovery.ts 的 7 路径自爬。新 AgentRegistry 仅扫 flat
+    // 目录（无 nested extensions/*/agents、node_modules 迭代），发现路径由 discovery.json
+    // （Pi resources_discover，ADR-028）声明——与 subagents 域共用同一份发现结果。
+    const agentRegistry = modelService.getAgentRegistry();
 
     try {
       const loaded = await store.loadAll();

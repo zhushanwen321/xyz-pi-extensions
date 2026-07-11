@@ -11,7 +11,7 @@
  * 层归属：Engine。零 infra 依赖（AC-1）。
  */
 import type { AgentEvent } from "../../shared/agent-event.ts";
-import type { AgentRegistry } from "../agent-discovery.ts";
+import type { AgentRegistry } from "../../execution/agent-registry.ts";
 import type { WorkerHandle } from "../worker-handle.ts";
 import type { RunSpec } from "./run-spec.ts";
 import type { AgentCallOpts, AgentResult } from "./types.ts";

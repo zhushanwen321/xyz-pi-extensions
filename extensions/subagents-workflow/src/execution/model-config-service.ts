@@ -180,6 +180,17 @@ export class ModelConfigService {
   }
 
   /**
+   * AgentRegistry 实例（workflow 域复用，F-4/D-003 统一）。
+   *
+   * workflow 域（resolveAgentOpts via LifecycleDeps.agentRegistry）需要与 subagents 域
+   * 完全相同的 agent 名→config 解析，复用本实例避免二次扫描。registry 在 initModel
+   * （每次 session_start）调 discoverAll hot-reload，两域共享同一份发现结果。
+   */
+  getAgentRegistry(): AgentRegistry {
+    return this.agentRegistry;
+  }
+
+  /**
    * discovery.json 声明的 skill 目录（供 SubagentService 注入子 session）。
    * 每次调用重新读 loader（mtime 缓存），支持宿主运行时修改 discovery.json 后下次生效。
    */

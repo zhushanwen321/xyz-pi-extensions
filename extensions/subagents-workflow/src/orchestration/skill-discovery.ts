@@ -1,7 +1,7 @@
 /**
  * Skill path discovery — resolve a skill name to its directory or SKILL.md path.
  *
- * Symmetric to agent-discovery.ts (which discovers agents): this module owns
+ * Symmetric to execution/agent-registry.ts (which discovers agents): this module owns
  * the resource-discovery concern for skills across project / user / npm sources.
  */
 

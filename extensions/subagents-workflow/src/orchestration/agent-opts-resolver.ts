@@ -19,7 +19,7 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 
 import type { AgentCallOpts } from "./models/types.ts";
-import { AgentRegistry } from "./agent-discovery.ts";
+import type { AgentRegistry } from "../execution/agent-registry.ts";  // type-only（本文件不 new，只接收实例参数）
 import { resolveSkillPath } from "./skill-discovery.ts";
 
 const UUID_SLICE_LEN = 8;
@@ -49,7 +49,7 @@ export function resolveAgentOpts(
 
  // Resolve agent system prompt
   if (opts.agent) {
-    const discovered = agentRegistry.resolve(opts.agent);
+    const discovered = agentRegistry.get(opts.agent);  // 新 API: get() 替代 resolve()，返回 AgentConfig（含 systemPrompt+model）
     if (!discovered) return { opts, error: `Agent not found: ${opts.agent}` };
 
     const hasSystemPrompt = discovered.systemPrompt.trim().length > 0;
