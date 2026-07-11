@@ -1,3 +1,9 @@
+// ⚠️ DEPRECATED COPY — This file is part of the deprecated @zhushanwen/pi-workflow package (ADR-030).
+// The canonical definition lives at:
+//   extensions/subagent-workflow/src/orchestration/models/budget.ts
+// which includes additional methods (e.g. remaining()) not present here.
+// Do not modify this file — update the canonical source instead.
+
 /**
  * Workflow Extension — Budget 值对象
  *
@@ -17,6 +23,24 @@ import type { AgentUsage } from "./types.js";
 
 /** Soft limit：总调用数超此值发预警（FR-7，从 ConcurrencyGate 迁入）。 */
 export const SOFT_MAX_AGENTS_WARNING = 500;
+
+/**
+ * Budget 加权系数（token 口径）。
+ *
+ * usedTokens 不再是四项原始 token 简单求和，而是加权后的「等效消耗」，
+ * 反映不同 token 桶的真实计费/处理开销差异：
+ * - input（非缓存新增）：首次见到、需完整处理的新内容，权重 1（基准）
+ * - cacheRead（命中缓存）：读取历史，开销极低，按 1/50 折算（权重 0.02）
+ * - cacheWrite（首次写入缓存）：本版本不计入 budget（权重 0）
+ * - output：模型自回归生成，开销最高，权重 2
+ *
+ * 这避免了长 session 中 cacheRead 随轮次单调累积导致 budget 被快速烧穿的失真
+ * （详见讨论：cacheRead 在 N 轮里被报 N 次，去重上下文只有一份）。
+ */
+export const INPUT_WEIGHT = 1;
+export const CACHE_READ_WEIGHT = 0.02;
+export const CACHE_WRITE_WEIGHT = 0;
+export const OUTPUT_WEIGHT = 2;
 
 /**
  * Budget 值对象。
@@ -53,14 +77,22 @@ export class Budget {
   }
 
  /**
- * 累加一次 agent 调用的 usage。
+ * 累加一次 agent 调用的 usage（加权口径）。
  *
- * 四项 token 全计（input+output+cacheRead+cacheWrite），retry 间的真实计费
- * 如实记录，否则 budget 限制被 retry/cache 双重放大或低估。
+ * 四项 token 按各自权重（INPUT/CACHE_READ/CACHE_WRITE/OUTPUT_WEIGHT）折算后求和，
+ * 而非原始 token 数直接相加。retry 间的真实消耗如实记录，避免预算被低估。
+ * 详见上方权重常量的口径说明。
  */
   consume(usage: AgentUsage): void {
-    this.usedTokens += usage.input + usage.output + usage.cacheRead + usage.cacheWrite;
-    this.usedCost += usage.cost;
+    // QMF-2 fix: NaN 守卫——非有限值当 0 处理，防 usedTokens 变 NaN 导致预算限制失效
+    const numOrZero = (v: number | undefined): number =>
+      typeof v === "number" && Number.isFinite(v) ? v : 0;
+    this.usedTokens +=
+      numOrZero(usage.input) * INPUT_WEIGHT +
+      numOrZero(usage.output) * OUTPUT_WEIGHT +
+      numOrZero(usage.cacheRead) * CACHE_READ_WEIGHT +
+      numOrZero(usage.cacheWrite) * CACHE_WRITE_WEIGHT;
+    this.usedCost += numOrZero(usage.cost);
   }
 
  /** 累加调用计数（每次 agent dispatch 后调用）。 */

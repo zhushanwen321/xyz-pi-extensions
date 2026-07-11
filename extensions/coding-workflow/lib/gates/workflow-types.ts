@@ -14,9 +14,9 @@
  *   fail to type-check unless workflow's package is resolvable. The shapes here
  *   are a narrow, stable RPC contract (D-8) intentionally kept independent.
  *
- *   The canonical definitions live in the workflow extension:
- *     - DoneReason        → extensions/workflow/src/engine/models/types.ts
- *     - WorkflowRunResult → extensions/workflow/src/engine/launcher.ts
+ *   The canonical definitions live in the subagent-workflow extension:
+ *     - DoneReason        → extensions/subagent-workflow/src/orchestration/models/types.ts
+ *     - WorkflowRunResult → extensions/subagent-workflow/src/orchestration/launcher.ts
  *   These mirrors MUST stay byte-identical. If workflow changes the union,
  *   update both files + the gate tests in one commit.
  *
@@ -29,7 +29,7 @@
 
 /**
  * Terminal reason for a workflow run. Mirror of
- * `extensions/workflow/src/engine/models/types.ts:DoneReason`.
+ * `extensions/subagent-workflow/src/orchestration/models/types.ts:DoneReason`.
  */
 export type DoneReason =
   | "completed"
@@ -42,7 +42,7 @@ export type DoneReason =
 
 /**
  * Return shape of `pi.__workflowRun`. Mirror of
- * `extensions/workflow/src/engine/launcher.ts:WorkflowRunResult`.
+ * `extensions/subagent-workflow/src/orchestration/launcher.ts:WorkflowRunResult`.
  *
  * `status` is always `"done"` (the RPC blocks until the run reaches a terminal
  * state). The specific terminal reason is in `reason`.

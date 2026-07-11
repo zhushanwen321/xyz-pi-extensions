@@ -1,6 +1,8 @@
 # ADR-028: Subagents 资源发现与宿主解耦（discovery.json 契约）
 
-## Status: Accepted
+## Status: Superseded by [ADR-031](./031-unified-resource-discovery.md)
+
+> ADR-031 统一了 agent/workflow 资源发现，废弃了 discovery.json 契约。本 ADR 的 discovery.json 机制不再使用，保留作历史参考。
 
 ## Context
 

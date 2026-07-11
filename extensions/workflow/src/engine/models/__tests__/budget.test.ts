@@ -22,10 +22,11 @@ function usage(partial: Partial<AgentUsage>): AgentUsage {
 // ── consume ──────────────────────────────────────────────────
 
 describe("Budget.consume", () => {
-  it("累加四项 token（input+output+cacheRead+cacheWrite）", () => {
+  it("加权累加四项 token（input×1 + output×2 + cacheRead×0.02 + cacheWrite×0）", () => {
     const b = new Budget({ maxTokens: 1000 });
     b.consume(usage({ input: 10, output: 20, cacheRead: 5, cacheWrite: 5, cost: 0.1 }));
-    expect(b.usedTokens).toBe(40);
+    // 10*1 + 20*2 + 5*0.02 + 5*0 = 50.1
+    expect(b.usedTokens).toBe(50.1);
     expect(b.usedCost).toBe(0.1);
   });
 
@@ -33,7 +34,8 @@ describe("Budget.consume", () => {
     const b = new Budget();
     b.consume(usage({ input: 100 }));
     b.consume(usage({ input: 50, output: 50 }));
-    expect(b.usedTokens).toBe(200);
+    // 100*1 + (50*1 + 50*2) = 250
+    expect(b.usedTokens).toBe(250);
   });
 
   it("无副作用回调——consume 后无任何通知发出（D-12）", () => {

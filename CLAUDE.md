@@ -20,12 +20,13 @@ xyz-pi-extensions/
 │   ├── statusline/          → @zhushanwen/pi-statusline
 │   ├── structured-output/   → @zhushanwen/pi-structured-output
 │   ├── unified-hooks/       → @zhushanwen/pi-unified-hooks
-│   ├── workflow/            → @zhushanwen/pi-workflow
+│   ├── subagent-workflow/ → @zhushanwen/pi-subagent-workflow (合并 subagents + workflow，单包统一执行链 + workflow() 嵌套编排 + 分层配额；ADR-030；含统一资源发现模块 src/shared/resource-discovery.ts，agent .md 与 workflow .js 共享扫描逻辑 + manifest 校验，ADR-031)
+│   ├── workflow/            → @zhushanwen/pi-workflow (⚠️ deprecated, superseded by pi-subagent-workflow, ADR-030)
 │   ├── model-switch/        → @zhushanwen/pi-model-switch
 │   ├── turn-timing/         → @zhushanwen/pi-turn-timing
 │   ├── plan/                → @zhushanwen/pi-plan
 │   ├── ask-user/            → @zhushanwen/pi-ask-user
-│   ├── subagents/           → @zhushanwen/pi-subagents
+│   ├── subagents/           → @zhushanwen/pi-subagents (⚠️ deprecated, superseded by pi-subagent-workflow, ADR-030)
 │   └── pending-notifications/ → @zhushanwen/pi-pending-notifications
 ├── shared/                      # 内部共享包（private，不独立发布）
 │   ├── quota-providers/     → @zhushanwen/pi-quota-providers
@@ -47,7 +48,7 @@ xyz-pi-extensions/
 - Skills 跟着 owner 走：extension-bundled skills 通过 `resources_discover` 自动注册
 - 独立 skills 放 `skills/`，它们是 Markdown 资源不是包
 - types 是 private 包，仅通过 `workspace:*` 供其他包引用
-- coding-workflow 内置 model.ts 用于 resolveModelByComplexity，subagent 功能由 pi-subagents（npm）提供
+- coding-workflow 内置 model.ts 用于 resolveModelByComplexity，subagent + workflow 编排由 pi-subagent-workflow（npm）提供（合并自 pi-subagents + pi-workflow，ADR-030）
 - Harness 是逻辑概念，不存在叫 "harness" 的物理目录
 
 **目录归属原则**：
@@ -245,7 +246,7 @@ bash .githooks/check-structure
 
 - 扩展在 Pi 进程内执行，**不是独立进程**
 - 同一进程可能有多个 session。模块级 `let` 变量会被所有 session 共享，必须用闭包或 session_start 重建
-- 扩展不能依赖 fs 之外的 Node.js 原生模块（网络、child_process 等由 Pi 核心控制）。两个已知例外：`@zhushanwen/pi-workflow` 通过 `child_process.spawn` 起独立 Pi 进程执行 agent（见 `extensions/workflow/src/infra/pi-runner.ts`，[ADR-025](./docs/adr/025-agent-execution-in-process.md) 记录了向进程内迁移的决策但尚未实施）；`@zhushanwen/pi-subagents` 已改为进程内 `createAgentSession()`，不 spawn，仅在 `execFileSync("git", ...)` 等只读子进程调用上使用 child_process
+- 扩展不能依赖 fs 之外的 Node.js 原生模块（网络、child_process 等由 Pi 核心控制）。已知例外：`@zhushanwen/pi-subagent-workflow` 合并后走单执行链——SubprocessAgentRunner 委托 SubagentService.executeAndAwait（`executeAndAwait` → `runSpawn` → `spawn("pi", ["--mode","json"])` 子进程，进程隔离），`session-runner.runSpawn` 是唯一的 Pi 子进程 spawn 点（ADR-030 决策 2）；另在 `execFileSync("git", ...)` 等只读子进程调用上使用 child_process。旧包 `pi-workflow`/`pi-subagents` 的双 spawn 路径已 superseded（ADR-030）；旧包 `pi-subagents` 曾用的进程内 `createAgentSession()` 路径在合并时被有意回退为 spawn（进程隔离优先，见 ADR-025 Status 更新）
 
 ### 资源自包含
 
@@ -779,12 +780,13 @@ ln -s /path/to/xyz-pi-extensions/skills/<name> ~/.agents/skills/<name>
 | `extensions/statusline/` | `@zhushanwen/pi-statusline` | Pi 状态栏 | — |
 | `extensions/structured-output/` | `@zhushanwen/pi-structured-output` | Schema 结构化输出（tool call 机制） | — |
 | `extensions/unified-hooks/` | `@zhushanwen/pi-unified-hooks` | Hook 管理 | — |
-| `extensions/workflow/` | `@zhushanwen/pi-workflow` | 通用 DAG 执行引擎 | — |
+| `extensions/subagent-workflow/` | `@zhushanwen/pi-subagent-workflow` | 合并 subagents + workflow，单包统一执行链 + workflow() 嵌套编排（chain/parallel/scatter-gather/map-reduce）+ 分层配额（ADR-030） | workflow-script-format |
+| `extensions/workflow/` | `@zhushanwen/pi-workflow` | ⚠️ deprecated，superseded by pi-subagent-workflow（ADR-030）。通用 DAG 执行引擎 | — |
 | `extensions/model-switch/` | `@zhushanwen/pi-model-switch` | 模型切换 | — |
 | `extensions/turn-timing/` | `@zhushanwen/pi-turn-timing` | Turn 各阶段耗时记录 | — |
 | `extensions/plan/` | `@zhushanwen/pi-plan` | 轻量级 Plan Mode（brainstorming + writing-plans） | — |
 | `extensions/ask-user/` | `@zhushanwen/pi-ask-user` | 内联自适应 ask_user 工具（单/多问题、分屏预览、内联编辑器） | — |
-| `extensions/subagents/` | `@zhushanwen/pi-subagents` | 进程内 subagent 执行运行时（agent 发现、模型解析、并发控制） | — |
+| `extensions/subagents/` | `@zhushanwen/pi-subagents` | ⚠️ deprecated，superseded by pi-subagent-workflow（ADR-030）。进程内 subagent 执行运行时（agent 发现、模型解析、并发控制） | — |
 | `extensions/pending-notifications/` | `@zhushanwen/pi-pending-notifications` | 异步操作注册表（EventBus + session entries 跟踪 workflow/subagent） | — |
 
 **`shared/`** — 内部共享包（private）

@@ -38,11 +38,13 @@ const makeState = (overrides: Partial<GoalRuntimeState> = {}): GoalRuntimeState 
 // ── accumulateTokens（FR-8.6）─────────────────────────
 
 describe("accumulateTokens", () => {
-	it("input/output 有 → max(input-cacheRead,0)+output", () => {
-		expect(accumulateTokens(1000, { input: 100, output: 50, cacheRead: 20 })).toBe(1130);
+	it("input/output 有 → 加权 input×1 + cacheRead×0.02 + output×2", () => {
+		// 100×1 + 20×0.02 + 50×2 = 200.4；1000 + 200.4 = 1200.4
+		expect(accumulateTokens(1000, { input: 100, output: 50, cacheRead: 20 })).toBe(1200.4);
 	});
-	it("cacheRead > input → max=0", () => {
-		expect(accumulateTokens(1000, { input: 50, output: 30, cacheRead: 100 })).toBe(1030);
+	it("cacheRead > input → 加权后 input 仍计全量（不折底为 0）", () => {
+		// 50×1 + 100×0.02 + 30×2 = 112；1000 + 112 = 1112
+		expect(accumulateTokens(1000, { input: 50, output: 30, cacheRead: 100 })).toBe(1112);
 	});
 	it("input=0 output=0 → fallback totalTokens", () => {
 		expect(accumulateTokens(1000, { totalTokens: 200 })).toBe(1200);
@@ -50,8 +52,8 @@ describe("accumulateTokens", () => {
 	it("全空 → 不累加", () => {
 		expect(accumulateTokens(1000, {})).toBe(1000);
 	});
-	it("无 cacheRead → 视为 0", () => {
-		expect(accumulateTokens(0, { input: 100, output: 50 })).toBe(150);
+	it("无 cacheRead → 视为 0（加权 100×1 + 0×0.02 + 50×2 = 200）", () => {
+		expect(accumulateTokens(0, { input: 100, output: 50 })).toBe(200);
 	});
 });
 

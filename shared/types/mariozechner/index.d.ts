@@ -84,7 +84,6 @@ declare module "@mariozechner/pi-coding-agent" {
 	export type CustomEntry<T = Record<string, unknown>> = SessionEntry & { customType: string } & T;
 	export type Theme = any;
 	export type ThemeColor = string;
-	export type ExtensionCommandContext = any;
 	export type AgentToolResult<T = any> = { content: Array<{ type: "text"; text: string } | { type: "image"; data: string; mimeType: string }>; details: T; isError?: boolean };
 	// 真实签名: (partialResult: AgentToolResult<T>) => void（收完整 result 对象，非裸 T）。默认泛型 any。
 	export type AgentToolUpdateCallback<T = unknown> = (partialResult: AgentToolResult<T>) => void;

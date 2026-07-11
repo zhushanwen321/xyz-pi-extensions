@@ -263,9 +263,13 @@ function parseRegisterEvent(data: unknown): ParsedRegister | null {
 interface ParsedUnregister {
 	id: string;
 	reason: string;
+	result?: string;
+	error?: string;
+	patchFile?: string;
 }
 
-/** 解析 pending:unregister 事件 data（容错缺失/类型错误字段） */
+/** 解析 pending:unregister 事件 data（容错缺失/类型错误字段）。
+ *  T2 后 subagent 完成路径携带可选的 result/error/patchFile，供消费侧 sendMessage。 */
 function parseUnregisterEvent(data: unknown): ParsedUnregister | null {
 	if (typeof data !== "object" || data === null) return null;
 	const d = data as Record<string, unknown>;
@@ -273,6 +277,9 @@ function parseUnregisterEvent(data: unknown): ParsedUnregister | null {
 	return {
 		id: d.id,
 		reason: typeof d.reason === "string" ? d.reason : "completed",
+		result: typeof d.result === "string" ? d.result : undefined,
+		error: typeof d.error === "string" ? d.error : undefined,
+		patchFile: typeof d.patchFile === "string" ? d.patchFile : undefined,
 	};
 }
 

@@ -37,6 +37,7 @@ interface MockSetup {
 	handlers: HandlerRegistry;
 	appendEntryMock: ReturnType<typeof vi.fn>;
 	registerToolMock: ReturnType<typeof vi.fn>;
+	sendMessageMock: ReturnType<typeof vi.fn>;
 }
 
 function createMockPi(): MockSetup {
@@ -67,7 +68,7 @@ function createMockPi(): MockSetup {
 		},
 	} as unknown as ExtensionAPI;
 
-	return { pi, handlers, appendEntryMock, registerToolMock };
+	return { pi, handlers, appendEntryMock, registerToolMock, sendMessageMock };
 }
 
 function createMockCtx(entries: MockSessionEntry[], sessionId = "sess-current"): ExtensionContext {
@@ -374,6 +375,7 @@ describe("pendingNotificationsExtension factory", () => {
 			}
 		});
 	});
+
 
 	describe("safeAppendEntry error handling", () => {
 		it("appendEntry throwing (stale context) does not break register listener, registry still updated", async () => {

@@ -194,7 +194,8 @@ describe("JsonlRunStore", () => {
       });
       const [loaded] = await store2.loadAll();
       expect(loaded!.state.budget.maxTokens).toBe(1000);
-      expect(loaded!.state.budget.usedTokens).toBe(150);
+      // 加权：input(100)*1 + output(50)*2 = 200
+    expect(loaded!.state.budget.usedTokens).toBe(200);
       expect(loaded!.state.budget.usedCost).toBe(0.05);
       expect(loaded!.state.budget.totalCallCount).toBe(2);
     });

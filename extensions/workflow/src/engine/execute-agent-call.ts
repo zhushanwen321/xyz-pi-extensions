@@ -12,8 +12,8 @@
  * - 成功：consume usage + incrementCallCount + markDone + trace.update(completed)
  *
  * 关键设计：
- * - **D.4**：构造合法 AgentUsage，cacheWrite 合并到 input（cacheWrite 本质是写入缓存的
- * input token，避免在 consume 的 input+output+cacheRead+cacheWrite 四项求和里被双重计数）。
+ * - **usage 透传**：result.usage 直接交给 budget.consume，加权由 Budget 内部的权重常量
+ * 处理（见 budget.ts）。此函数不再做 usage 形状的改写。
  * - **参数显式化**：runner 直接传入（而非 ctx.getRun(runId).pool），无 runId 查找 / pool 守卫。
  * - **stale-state 检查**：signal.aborted 时早返回。WorkflowRun 状态由调用方 lifecycle
  * 持有，executeAgentCall 只关心单次 call 生命周期。
@@ -27,7 +27,7 @@ import type { AgentCall } from "./models/agent-call.js";
 import type { Budget } from "./models/budget.js";
 import type { AgentRunner } from "./models/ports.js";
 import type { Trace } from "./models/trace.js";
-import type { AgentResult, AgentUsage } from "./models/types.js";
+import type { AgentResult } from "./models/types.js";
 
 // ── 常量 ─────────────────────────────────────────────────────
 
@@ -62,25 +62,6 @@ export function isStaleContextErrorMsg(msg: string | undefined): boolean {
 }
 
 // ── 内部 helper ──────────────────────────────────────────────
-
-/**
- * 累加单次 agent 调用的 usage 到 budget（D.4）。
- *
- * cacheWrite 合并到 input（cacheWrite 本质是为缓存写入的 input token），
- * cacheWrite 设 0 避免 consume 四项求和里被双重计数。构造合法 AgentUsage，
- * 不用 `as never` 绕类型。
- */
-function consumeUsage(budget: Budget, u: AgentUsage): void {
-  budget.consume({
-    input: u.input + u.cacheWrite,
-    output: u.output,
-    cacheRead: u.cacheRead,
-    cacheWrite: 0,
-    cost: u.cost,
-    contextTokens: u.contextTokens,
-    turns: u.turns,
-  });
-}
 
 /**
  * 计算第 n 次重试前的退避时间（ms）。
@@ -147,9 +128,9 @@ export async function executeAgentCall(
 
   const result = await runner.run(call.opts, signal, onEvent);
 
- // 累加 usage（D.4：cacheWrite 合并到 input，cacheWrite=0 避免双重计数）
+ // 累加 usage（加权由 budget.consume 内部按权重常量处理，见 budget.ts）
   if (result.usage) {
-    consumeUsage(budget, result.usage);
+    budget.consume(result.usage);
   }
 
  // stale-context：不重试（P1-5）

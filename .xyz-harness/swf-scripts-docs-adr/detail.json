@@ -1,0 +1,605 @@
+{
+  "format": "mid-detail",
+  "objective": "T3: 预制脚本模板 + ADR-030 + ADR-026/029 superseded + AGENTS.md/extension-deps + skill 文档更新 + coding-execute worktree 转移 + 旧包 deprecated。三主题收尾。",
+  "waves": [
+    {
+      "id": "W0",
+      "issues": [
+        "#1",
+        "#2",
+        "#6",
+        "#7"
+      ],
+      "dependsOn": [],
+      "parallelGroup": "A"
+    },
+    {
+      "id": "W1",
+      "issues": [
+        "#3",
+        "#4"
+      ],
+      "dependsOn": [
+        "W0"
+      ],
+      "parallelGroup": "B"
+    },
+    {
+      "id": "W2",
+      "issues": [
+        "#5",
+        "#8"
+      ],
+      "dependsOn": [
+        "W1"
+      ],
+      "parallelGroup": "C"
+    }
+  ],
+  "testCases": [
+    {
+      "id": "T1.1",
+      "layer": "unit",
+      "scenario": "chain.example.js 含 meta + workflow() + phase",
+      "steps": "grep 文件源码",
+      "assertion": "命中 name:chain + ≥2 处 workflow( + phase(",
+      "executor": "vitest",
+      "dependsOn": [],
+      "parallelGroup": "EX"
+    },
+    {
+      "id": "T1.2",
+      "layer": "integration",
+      "scenario": "chain.example.js 通过 lintScript",
+      "steps": "lintScript(source)",
+      "assertion": "valid=true 无 error",
+      "executor": "vitest",
+      "dependsOn": [
+        "T1.1"
+      ],
+      "parallelGroup": "EX"
+    },
+    {
+      "id": "T1.3",
+      "layer": "unit",
+      "scenario": "chain 含 try-catch 返回 error",
+      "steps": "grep source",
+      "assertion": "命中 catch + status:error",
+      "executor": "vitest",
+      "dependsOn": [
+        "T1.1"
+      ],
+      "parallelGroup": "EX"
+    },
+    {
+      "id": "T1.5",
+      "layer": "unit",
+      "scenario": "chain 含 require() 无 ESM import",
+      "steps": "grep source",
+      "assertion": "命中 require( 无 import",
+      "executor": "vitest",
+      "dependsOn": [
+        "T1.1"
+      ],
+      "parallelGroup": "EX"
+    },
+    {
+      "id": "T1.6",
+      "layer": "e2e",
+      "scenario": "chain 复制到 .pi/workflows/ + workflow run",
+      "steps": "复制+run",
+      "assertion": "引擎加载成功",
+      "executor": "vitest",
+      "dependsOn": [
+        "T1.2"
+      ],
+      "parallelGroup": "E2E"
+    },
+    {
+      "id": "T1.7",
+      "layer": "integration",
+      "scenario": "package.json files 含 examples/",
+      "steps": "npm pack --dry-run 或 jq .files",
+      "assertion": "tarball 含 examples/*.example.js",
+      "executor": "vitest",
+      "dependsOn": [
+        "T1.1"
+      ],
+      "parallelGroup": "EX"
+    },
+    {
+      "id": "T2.1",
+      "layer": "unit",
+      "scenario": "parallel.example.js 含 parallel() + workflow()",
+      "steps": "grep source",
+      "assertion": "命中 parallel( + workflow(",
+      "executor": "vitest",
+      "dependsOn": [],
+      "parallelGroup": "EX"
+    },
+    {
+      "id": "T2.2",
+      "layer": "integration",
+      "scenario": "parallel.example.js 通过 lintScript",
+      "steps": "lintScript(source)",
+      "assertion": "valid=true",
+      "executor": "vitest",
+      "dependsOn": [
+        "T2.1"
+      ],
+      "parallelGroup": "EX"
+    },
+    {
+      "id": "T2.3",
+      "layer": "unit",
+      "scenario": "parallel 用 allSettled 语义",
+      "steps": "grep source",
+      "assertion": "注释含 allSettled 或部分失败不 reject",
+      "executor": "vitest",
+      "dependsOn": [
+        "T2.1"
+      ],
+      "parallelGroup": "EX"
+    },
+    {
+      "id": "T2.4",
+      "layer": "unit",
+      "scenario": "parallel 注释含分层配额规则",
+      "steps": "grep source",
+      "assertion": "命中 maxConcurrent=6 与 max(1,6-N)",
+      "executor": "vitest",
+      "dependsOn": [
+        "T2.1"
+      ],
+      "parallelGroup": "EX"
+    },
+    {
+      "id": "T2.5",
+      "layer": "e2e",
+      "scenario": "parallel 模板可被 workflow run 加载",
+      "steps": "复制+run",
+      "assertion": "引擎加载成功",
+      "executor": "vitest",
+      "dependsOn": [
+        "T2.2"
+      ],
+      "parallelGroup": "E2E"
+    },
+    {
+      "id": "T3.1",
+      "layer": "unit",
+      "scenario": "scatter-gather 含 split→process→merge 三段",
+      "steps": "grep phase",
+      "assertion": "命中 3 个 phase",
+      "executor": "vitest",
+      "dependsOn": [],
+      "parallelGroup": "EX"
+    },
+    {
+      "id": "T3.2",
+      "layer": "integration",
+      "scenario": "scatter-gather 通过 lintScript",
+      "steps": "lintScript(source)",
+      "assertion": "valid=true",
+      "executor": "vitest",
+      "dependsOn": [
+        "T3.1"
+      ],
+      "parallelGroup": "EX"
+    },
+    {
+      "id": "T3.3",
+      "layer": "unit",
+      "scenario": "scatter-gather 含 parallel(process) + workflow(merge)",
+      "steps": "grep",
+      "assertion": "命中 parallel( + workflow(merge",
+      "executor": "vitest",
+      "dependsOn": [
+        "T3.1"
+      ],
+      "parallelGroup": "EX"
+    },
+    {
+      "id": "T3.4",
+      "layer": "unit",
+      "scenario": "scatter-gather 含 try-catch",
+      "steps": "grep",
+      "assertion": "命中 catch + error",
+      "executor": "vitest",
+      "dependsOn": [
+        "T3.1"
+      ],
+      "parallelGroup": "EX"
+    },
+    {
+      "id": "T3.5",
+      "layer": "e2e",
+      "scenario": "scatter-gather 可被 workflow run 加载",
+      "steps": "复制+run",
+      "assertion": "引擎加载成功",
+      "executor": "vitest",
+      "dependsOn": [
+        "T3.2"
+      ],
+      "parallelGroup": "E2E"
+    },
+    {
+      "id": "T4.1",
+      "layer": "unit",
+      "scenario": "map-reduce 含 parallel map → reduce 两段",
+      "steps": "grep phase",
+      "assertion": "命中 2 段 map/reduce",
+      "executor": "vitest",
+      "dependsOn": [],
+      "parallelGroup": "EX"
+    },
+    {
+      "id": "T4.2",
+      "layer": "integration",
+      "scenario": "map-reduce 通过 lintScript",
+      "steps": "lintScript(source)",
+      "assertion": "valid=true",
+      "executor": "vitest",
+      "dependsOn": [
+        "T4.1"
+      ],
+      "parallelGroup": "EX"
+    },
+    {
+      "id": "T4.3",
+      "layer": "unit",
+      "scenario": "map-reduce 含 workflow(reduce)",
+      "steps": "grep",
+      "assertion": "命中 workflow(reduce",
+      "executor": "vitest",
+      "dependsOn": [
+        "T4.1"
+      ],
+      "parallelGroup": "EX"
+    },
+    {
+      "id": "T4.4",
+      "layer": "e2e",
+      "scenario": "map-reduce 可被 workflow run 加载",
+      "steps": "复制+run",
+      "assertion": "引擎加载成功",
+      "executor": "vitest",
+      "dependsOn": [
+        "T4.2"
+      ],
+      "parallelGroup": "E2E"
+    },
+    {
+      "id": "T5.1",
+      "layer": "unit",
+      "scenario": "ADR-030 含四节",
+      "steps": "grep ## 标题",
+      "assertion": "命中 Status/Context/Decision/Consequences",
+      "executor": "vitest",
+      "parallelGroup": "DOC"
+    },
+    {
+      "id": "T5.2",
+      "layer": "unit",
+      "scenario": "Status = Accepted",
+      "steps": "grep Status 行",
+      "assertion": "命中 Status: Accepted",
+      "executor": "vitest",
+      "dependsOn": [
+        "T5.1"
+      ],
+      "parallelGroup": "DOC"
+    },
+    {
+      "id": "T5.3",
+      "layer": "unit",
+      "scenario": "Decision 含 4 项核心决策关键词",
+      "steps": "grep Decision",
+      "assertion": "命中 合并/执行链/配额/sync",
+      "executor": "vitest",
+      "dependsOn": [
+        "T5.1"
+      ],
+      "parallelGroup": "DOC"
+    },
+    {
+      "id": "T5.4",
+      "layer": "unit",
+      "scenario": "并发上限标注来源 T2",
+      "steps": "grep",
+      "assertion": "命中 maxConcurrent=6 + T2/system-architecture 来源字样",
+      "executor": "vitest",
+      "dependsOn": [
+        "T5.1"
+      ],
+      "parallelGroup": "DOC"
+    },
+    {
+      "id": "T5.5",
+      "layer": "unit",
+      "scenario": "引用 ADR-026/029 为前置",
+      "steps": "grep",
+      "assertion": "命中 ADR-026 + ADR-029",
+      "executor": "vitest",
+      "dependsOn": [
+        "T5.1"
+      ],
+      "parallelGroup": "DOC"
+    },
+    {
+      "id": "T5.6",
+      "layer": "unit",
+      "scenario": "ADR-030 含 L3A 承接说明",
+      "steps": "grep",
+      "assertion": "命中 L3A",
+      "executor": "vitest",
+      "dependsOn": [
+        "T5.1"
+      ],
+      "parallelGroup": "DOC"
+    },
+    {
+      "id": "T6.1",
+      "layer": "unit",
+      "scenario": "ADR-026 Status = Superseded by ADR-030",
+      "steps": "grep Status",
+      "assertion": "命中 Superseded + ADR-030",
+      "executor": "vitest",
+      "dependsOn": [
+        "T5.1"
+      ],
+      "parallelGroup": "DOC"
+    },
+    {
+      "id": "T6.2",
+      "layer": "unit",
+      "scenario": "ADR-029 Status = Partially superseded",
+      "steps": "grep Status",
+      "assertion": "命中 Partially superseded + ADR-030",
+      "executor": "vitest",
+      "dependsOn": [
+        "T5.1"
+      ],
+      "parallelGroup": "DOC"
+    },
+    {
+      "id": "T6.3",
+      "layer": "unit",
+      "scenario": "ADR-029 说明段逐决策标注",
+      "steps": "grep 说明段",
+      "assertion": "命中 决策2/worktree/仍有效",
+      "executor": "vitest",
+      "dependsOn": [
+        "T6.2"
+      ],
+      "parallelGroup": "DOC"
+    },
+    {
+      "id": "T6.4",
+      "layer": "unit",
+      "scenario": "ADR-026/029 正文保留不动",
+      "steps": "git diff",
+      "assertion": "diff 只含 Status 行 + 说明段，正文无删改",
+      "executor": "vitest",
+      "dependsOn": [
+        "T6.1"
+      ],
+      "parallelGroup": "DOC"
+    },
+    {
+      "id": "T7.1",
+      "layer": "unit",
+      "scenario": "AGENTS.md 目录树含 subagents-workflow",
+      "steps": "grep",
+      "assertion": "命中 subagents-workflow",
+      "executor": "vitest",
+      "parallelGroup": "DOC"
+    },
+    {
+      "id": "T7.2",
+      "layer": "unit",
+      "scenario": "包清单表含新包行",
+      "steps": "grep",
+      "assertion": "命中 @zhushanwen/pi-subagents-workflow",
+      "executor": "vitest",
+      "parallelGroup": "DOC"
+    },
+    {
+      "id": "T7.3",
+      "layer": "integration",
+      "scenario": "check-structure 通过",
+      "steps": "bash .githooks/check-structure",
+      "assertion": "exit 0",
+      "executor": "vitest",
+      "dependsOn": [
+        "T7.1",
+        "T7.2"
+      ],
+      "parallelGroup": "DOC"
+    },
+    {
+      "id": "T7.4",
+      "layer": "unit",
+      "scenario": "关键约束段无两个 spawn 旧描述",
+      "steps": "grep",
+      "assertion": "不命中 两个 spawn",
+      "executor": "vitest",
+      "dependsOn": [
+        "T7.1"
+      ],
+      "parallelGroup": "DOC"
+    },
+    {
+      "id": "T8.1",
+      "layer": "unit",
+      "scenario": "含 subagents-workflow 条目",
+      "steps": "jq",
+      "assertion": "extensions[] 含 name=新包",
+      "executor": "vitest",
+      "parallelGroup": "DOC"
+    },
+    {
+      "id": "T8.2",
+      "layer": "unit",
+      "scenario": "coding-workflow dependsOn 迁移到新包",
+      "steps": "jq",
+      "assertion": "含新包(runtime) 不含 pi-workflow",
+      "executor": "vitest",
+      "dependsOn": [
+        "T8.1"
+      ],
+      "parallelGroup": "DOC"
+    },
+    {
+      "id": "T8.3",
+      "layer": "integration",
+      "scenario": "ajv validate 通过",
+      "steps": "npx ajv-cli validate",
+      "assertion": "exit 0",
+      "executor": "vitest",
+      "dependsOn": [
+        "T8.1"
+      ],
+      "parallelGroup": "DOC"
+    },
+    {
+      "id": "T8.4",
+      "layer": "unit",
+      "scenario": "旧两包条目标注 superseded",
+      "steps": "jq",
+      "assertion": "条目含 supersededBy 或注记",
+      "executor": "vitest",
+      "dependsOn": [
+        "T8.1"
+      ],
+      "parallelGroup": "DOC"
+    },
+    {
+      "id": "T8.5",
+      "layer": "integration",
+      "scenario": "AGENTS↔ext-deps 双向一致",
+      "steps": "jq+grep 交叉校验",
+      "assertion": "新包两处都有 旧两包两处都标 deprecated/superseded",
+      "executor": "vitest",
+      "dependsOn": [
+        "T7.2",
+        "T8.1"
+      ],
+      "parallelGroup": "DOC"
+    },
+    {
+      "id": "T9.1",
+      "layer": "unit",
+      "scenario": "SKILL.md 含 workflow() 函数说明",
+      "steps": "grep",
+      "assertion": "命中 workflow( 函数文档段",
+      "executor": "vitest",
+      "parallelGroup": "SKILL"
+    },
+    {
+      "id": "T9.2",
+      "layer": "unit",
+      "scenario": "parallel() 上限改为 6",
+      "steps": "grep",
+      "assertion": "命中 6 不命中 上限 4",
+      "executor": "vitest",
+      "parallelGroup": "SKILL"
+    },
+    {
+      "id": "T9.3",
+      "layer": "unit",
+      "scenario": "含 chain/parallel 基础示例",
+      "steps": "grep",
+      "assertion": "命中 chain + parallel 示例",
+      "executor": "vitest",
+      "dependsOn": [
+        "T9.1"
+      ],
+      "parallelGroup": "SKILL"
+    },
+    {
+      "id": "T9.4",
+      "layer": "integration",
+      "scenario": "skill frontmatter YAML 合法",
+      "steps": "validate-skill-yaml",
+      "assertion": "解析成功 name/description 非空",
+      "executor": "vitest",
+      "dependsOn": [
+        "T9.1"
+      ],
+      "parallelGroup": "SKILL"
+    },
+    {
+      "id": "T11.1",
+      "layer": "unit",
+      "scenario": "coding-execute SKILL.md 含 worktree 编排说明",
+      "steps": "grep",
+      "assertion": "命中 worktree + git worktree add 或 4 phase",
+      "executor": "vitest",
+      "parallelGroup": "SKILL"
+    },
+    {
+      "id": "T11.2",
+      "layer": "unit",
+      "scenario": "内容来自 ADR-029 决策 2",
+      "steps": "grep",
+      "assertion": "命中 ADR-029 回链 + 决策 2",
+      "executor": "vitest",
+      "dependsOn": [
+        "T11.1"
+      ],
+      "parallelGroup": "SKILL"
+    },
+    {
+      "id": "T11.3",
+      "layer": "integration",
+      "scenario": "skill frontmatter YAML 合法",
+      "steps": "validate-skill-yaml",
+      "assertion": "解析成功",
+      "executor": "vitest",
+      "dependsOn": [
+        "T11.1"
+      ],
+      "parallelGroup": "SKILL"
+    },
+    {
+      "id": "T10.1",
+      "layer": "unit",
+      "scenario": "旧两包 package.json 含 deprecated 字段",
+      "steps": "jq",
+      "assertion": "命中 deprecated",
+      "executor": "vitest",
+      "parallelGroup": "DOC"
+    },
+    {
+      "id": "T10.2",
+      "layer": "unit",
+      "scenario": "deprecated 消息含迁移路径",
+      "steps": "jq",
+      "assertion": "含 @zhushanwen/pi-subagents-workflow",
+      "executor": "vitest",
+      "dependsOn": [
+        "T10.1"
+      ],
+      "parallelGroup": "DOC"
+    },
+    {
+      "id": "T10.3",
+      "layer": "unit",
+      "scenario": "CHANGELOG 含迁移说明",
+      "steps": "grep",
+      "assertion": "命中 deprecated + 迁移路径",
+      "executor": "vitest",
+      "dependsOn": [
+        "T10.1"
+      ],
+      "parallelGroup": "DOC"
+    }
+  ],
+  "deliverables": {
+    "issues": "issues.md",
+    "nonFunctional": "non-functional-design.md",
+    "codeArchitecture": "code-architecture.md",
+    "executionPlan": "execution-plan.md"
+  }
+}

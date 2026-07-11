@@ -4,6 +4,7 @@
   "type": "module",
   "main": "index.ts",
   "description": "Spawned-process agent execution runtime for Pi — unified execute entry, isolated state, sync/background modes",
+  "deprecated": "Superseded by @zhushanwen/pi-subagent-workflow (ADR-030). Migrate: pi install npm:@zhushanwen/pi-subagent-workflow",
   "keywords": [
     "pi-package",
     "extension",

@@ -1,0 +1,8 @@
+{
+  "format": "mid-clarify",
+  "objective": "T2: 删sync模式 + 并发池分层 + 通知合并。从合并后的 pi-subagents-workflow 中删除 sync 执行模式（只保留 background），将并发池改为分层配额（顶层+嵌套深度），将 notifier.ts 合并到 pending-notifications 扩展的 EventBus 机制。D-009: 双重记账一致性由本 topic 处理。",
+  "deliverables": {
+    "requirements": "requirements.md（4 目标 + 4 用例 + 12 功能）",
+    "systemArchitecture": "system-architecture.md（12 章节，含分层配额设计 + 通知机制合并 + sync 删除清单）"
+  }
+}

@@ -1,0 +1,319 @@
+{
+  "format": "mid-detail",
+  "objective": "T2: 删sync模式 + 并发池分层 + 通知合并 + 统一 record 管理。从合并后的 pi-subagents-workflow 中删除 sync 执行模式（只保留 background），将并发池改为分层配额（顶层+嵌套深度），将 notifier.ts 合并到 pending-notifications 扩展的 EventBus 机制，统一终态路径 emit 事件。",
+  "deliverables": {
+    "issues": "issues.md（5 issues: #1 sync 删除 / #2 分层配额 / #3 通知合并 / #4 统一 record 管理 / #5 全量测试）",
+    "nonFunctional": "non-functional-design.md（7 维度 × 4 issues = 28 格，8 个 ⚠️ 已缓解，13 条缓解项回灌登记）",
+    "codeArchitecture": "code-architecture.md（7 模块改造 + API 契约 + 时序图 + 20 条测试用例）",
+    "executionPlan": "execution-plan.md（4 Waves: 0=sync+分层配额 / 1=通知合并 / 2=统一 record / 3=全量测试，22 条测试验收清单）"
+  },
+  "waves": [
+    {
+      "id": "Wave 0",
+      "issues": [
+        "#1",
+        "#2"
+      ],
+      "changes": [
+        "删除 subagent-tool.ts wait 参数 schema",
+        "删除 subagent-service.ts resolveMode/sync 分支/PRIORITY_SYNC",
+        "删除 types.ts SyncResponse/ExecutionMode 简化",
+        "改造 concurrency-pool.ts acquire 增加 effectiveMaxConcurrent 参数",
+        "改造 subagent-service.ts acquire 调用为 depth 计算有效配额"
+      ],
+      "dependsOn": []
+    },
+    {
+      "id": "Wave 1",
+      "issues": [
+        "#3"
+      ],
+      "changes": [
+        "删除 notifier.ts",
+        "删除 subagent-service.ts notifier 引用/notifyComplete/toNotifyRecord",
+        "扩展 pending:unregister 事件 payload（result/error/patchFile）",
+        "改造 extensions/pending-notifications/ 消费侧：UnregisterEntryData 扩展 result/error/patchFile + 读取 payload 触发 sendMessage（替代 BgNotifier 职责）"
+      ],
+      "dependsOn": [
+        "Wave 0"
+      ]
+    },
+    {
+      "id": "Wave 2",
+      "issues": [
+        "#4"
+      ],
+      "changes": [
+        "所有终态路径（done/failed/cancelled）emit pending:unregister 事件",
+        "cancelBackground CAS 抢锁后 emit 事件",
+        "dispose() 路径强制终态化时 emit 事件"
+      ],
+      "dependsOn": [
+        "Wave 1"
+      ]
+    },
+    {
+      "id": "Wave 3",
+      "issues": [
+        "#5"
+      ],
+      "changes": [
+        "回归测试：现有 background 测试全绿",
+        "新增测试：分层配额/通知合并/终态路径"
+      ],
+      "dependsOn": [
+        "Wave 0",
+        "Wave 1",
+        "Wave 2"
+      ]
+    }
+  ],
+  "testCases": [
+    {
+      "id": "T0.1",
+      "layer": "unit",
+      "scenario": "subagent tool start 行为不变（background 模式）",
+      "steps": "调用 subagent tool action=start，验证返回 bgResponse",
+      "assertion": "返回 bgResponse，mode=background",
+      "executor": "general-purpose",
+      "dependsOn": [],
+      "parallelGroup": null
+    },
+    {
+      "id": "T0.2",
+      "layer": "unit",
+      "scenario": "删除 sync 模式后，现有 background 测试全绿",
+      "steps": "跑现有 test suite",
+      "assertion": "所有测试 PASS",
+      "executor": "general-purpose",
+      "dependsOn": [],
+      "parallelGroup": null
+    },
+    {
+      "id": "T0.3",
+      "layer": "unit",
+      "scenario": "tool schema 不含 wait 字段",
+      "steps": "读 subagent-tool.ts startParam schema",
+      "assertion": "schema 不含 wait 字段",
+      "executor": "general-purpose",
+      "dependsOn": [],
+      "parallelGroup": null
+    },
+    {
+      "id": "T1.1",
+      "layer": "unit",
+      "scenario": "depth=0 时可用配额 = maxConcurrent",
+      "steps": "acquire(0, 4)，验证 active=1",
+      "assertion": "acquire 成功",
+      "executor": "general-purpose",
+      "dependsOn": [],
+      "parallelGroup": null
+    },
+    {
+      "id": "T1.2",
+      "layer": "unit",
+      "scenario": "depth=N 时可用配额 = max(1, maxConcurrent-N)",
+      "steps": "acquire(2, 4)，验证 effective=2",
+      "assertion": "acquire 成功",
+      "executor": "general-purpose",
+      "dependsOn": [],
+      "parallelGroup": null
+    },
+    {
+      "id": "T1.3",
+      "layer": "unit",
+      "scenario": "depth >= maxConcurrent 时保底 1 槽位",
+      "steps": "acquire(4, 4)，验证 effective=1",
+      "assertion": "acquire 成功",
+      "executor": "general-purpose",
+      "dependsOn": [],
+      "parallelGroup": null
+    },
+    {
+      "id": "T2.1",
+      "layer": "integration",
+      "scenario": "background 完成后 pending:unregister 事件触发",
+      "steps": "执行 background subagent，等待完成",
+      "assertion": "pending:unregister 事件触发，reason=done",
+      "executor": "general-purpose",
+      "dependsOn": [
+        "T0.2"
+      ],
+      "parallelGroup": null
+    },
+    {
+      "id": "T2.2",
+      "layer": "integration",
+      "scenario": "pending:unregister 事件 payload 包含 result/error/patchFile",
+      "steps": "执行 background subagent，检查事件 payload",
+      "assertion": "payload 含 result/error/patchFile 字段",
+      "executor": "general-purpose",
+      "dependsOn": [
+        "T0.2"
+      ],
+      "parallelGroup": null
+    },
+    {
+      "id": "T2.3",
+      "layer": "unit",
+      "scenario": "删除 notifier.ts 后，BgNotifier 相关 import 被清理",
+      "steps": "grep BgNotifier",
+      "assertion": "0 命中",
+      "executor": "general-purpose",
+      "dependsOn": [
+        "T0.2"
+      ],
+      "parallelGroup": null
+    },
+    {
+      "id": "T2.4",
+      "layer": "integration",
+      "scenario": "pending-notifications 消费侧读取 payload 触发 sendMessage",
+      "steps": "mock EventBus emit pending:unregister{result} → 断言 pi.sendMessage 被调用",
+      "assertion": "sendMessage 被调用，content 含 result；error payload 时 content 含 error",
+      "executor": "vitest",
+      "dependsOn": [
+        "T2.2"
+      ],
+      "parallelGroup": "W1"
+    },
+    {
+      "id": "T3.1",
+      "layer": "integration",
+      "scenario": "所有终态路径（done/failed/cancelled）都 emit pending:unregister 事件",
+      "steps": "执行 background subagent 成功/失败/取消，检查事件",
+      "assertion": "3 个终态都触发事件",
+      "executor": "general-purpose",
+      "dependsOn": [
+        "T2.1"
+      ],
+      "parallelGroup": null
+    },
+    {
+      "id": "T3.2",
+      "layer": "integration",
+      "scenario": "异常路径（超时/abort/失败）也 emit 事件",
+      "steps": "触发超时/abort/创建期异常，检查事件",
+      "assertion": "异常路径也触发事件",
+      "executor": "general-purpose",
+      "dependsOn": [
+        "T2.1"
+      ],
+      "parallelGroup": null
+    },
+    {
+      "id": "T3.3",
+      "layer": "integration",
+      "scenario": "dispose() 路径强制终态化时也 emit 事件",
+      "steps": "调用 dispose()，检查事件",
+      "assertion": "dispose 路径触发事件",
+      "executor": "general-purpose",
+      "dependsOn": [
+        "T2.1"
+      ],
+      "parallelGroup": null
+    },
+    {
+      "id": "T-NFR-1",
+      "layer": "unit",
+      "scenario": "分层配额 debug 日志",
+      "steps": "acquire 入口记录 depth/effectiveMaxConcurrent/queueLength",
+      "assertion": "日志输出正确",
+      "executor": "general-purpose",
+      "dependsOn": [],
+      "parallelGroup": null
+    },
+    {
+      "id": "T-NFR-2",
+      "layer": "unit",
+      "scenario": "保底 1 槽位单测",
+      "steps": "depth >= maxConcurrent 场景不饿死",
+      "assertion": "acquire 成功",
+      "executor": "general-purpose",
+      "dependsOn": [],
+      "parallelGroup": null
+    },
+    {
+      "id": "T-NFR-3",
+      "layer": "unit",
+      "scenario": "排队超时 warn 日志",
+      "steps": "队列等待 > 5s 时输出 warn",
+      "assertion": "日志输出正确",
+      "executor": "general-purpose",
+      "dependsOn": [],
+      "parallelGroup": null
+    },
+    {
+      "id": "T-NFR-4",
+      "layer": "integration",
+      "scenario": "emitPendingUnregister payload 扩展",
+      "steps": "检查 payload 含 result/error/patchFile 字段",
+      "assertion": "字段存在",
+      "executor": "general-purpose",
+      "dependsOn": [
+        "T0.2"
+      ],
+      "parallelGroup": null
+    },
+    {
+      "id": "T-NFR-5",
+      "layer": "integration",
+      "scenario": "pending-notifications 容忍额外字段",
+      "steps": "旧消费方忽略新字段不报错",
+      "assertion": "无报错",
+      "executor": "general-purpose",
+      "dependsOn": [
+        "T0.2"
+      ],
+      "parallelGroup": null
+    },
+    {
+      "id": "T-NFR-6",
+      "layer": "integration",
+      "scenario": "终态路径 emit 事件与 completeRecord 同步",
+      "steps": "检查 finalizeRecord 内事件 emit 时机",
+      "assertion": "同步执行",
+      "executor": "general-purpose",
+      "dependsOn": [
+        "T2.1"
+      ],
+      "parallelGroup": null
+    },
+    {
+      "id": "T-NFR-7",
+      "layer": "integration",
+      "scenario": "事件 emit 不走异步回调",
+      "steps": "检查无异步事件回调",
+      "assertion": "同步执行",
+      "executor": "general-purpose",
+      "dependsOn": [
+        "T2.1"
+      ],
+      "parallelGroup": null
+    },
+    {
+      "id": "T-NFR-8",
+      "layer": "integration",
+      "scenario": "dispose() 路径终态化时 emit 事件",
+      "steps": "调用 dispose()，检查事件",
+      "assertion": "事件触发",
+      "executor": "general-purpose",
+      "dependsOn": [
+        "T2.1"
+      ],
+      "parallelGroup": null
+    },
+    {
+      "id": "T-NFR-9",
+      "layer": "unit",
+      "scenario": "finalizeRecord 入口 debug 日志",
+      "steps": "检查日志输出",
+      "assertion": "recordId/status 输出正确",
+      "executor": "general-purpose",
+      "dependsOn": [
+        "T2.1"
+      ],
+      "parallelGroup": null
+    }
+  ]
+}

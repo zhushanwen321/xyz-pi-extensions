@@ -18,6 +18,11 @@ const PERCENT_FACTOR = 100;
 const SECONDS_PER_MINUTE = 60;
 const MS_PER_SECOND = 1000;
 
+// 加权系数（与 @zhushanwen/pi-subagent-workflow Budget.consume 对齐，ADR-030 token 口径统一）
+const INPUT_WEIGHT = 1;
+const CACHE_READ_WEIGHT = 0.02;
+const OUTPUT_WEIGHT = 2;
+
 // ── 类型 ────────────────────────────────────────────
 
 export interface TokenUsage {
@@ -50,7 +55,10 @@ export function accumulateTokens(currentTokensUsed: number, usage: TokenUsage): 
 	const output = usage.output ?? 0;
 	const cacheRead = usage.cacheRead ?? 0;
 	if (input > 0 || output > 0) {
-		return currentTokensUsed + Math.max(input - cacheRead, 0) + output;
+		// 加权口径：input×1 + cacheRead×0.02 + output×2
+		// 与 @zhushanwen/pi-subagent-workflow Budget.consume() 对齐（ADR-030 token 口径统一），
+		// 修复旧公式 max(input-cacheRead,0)+output 在长 session 中 cacheRead>0 时低估预算消耗
+		return currentTokensUsed + input * INPUT_WEIGHT + cacheRead * CACHE_READ_WEIGHT + output * OUTPUT_WEIGHT;
 	}
 	return currentTokensUsed + (usage.totalTokens ?? 0);
 }

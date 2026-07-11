@@ -8,7 +8,23 @@
         {
           "package": "@zhushanwen/pi-structured-output",
           "type": "optional",
-          "reason": "schema 结构化输出，缺失时降级为纯文本"
+          "reason": "superseded_by @zhushanwen/pi-subagent-workflow（T1 合并，deprecated，ADR-030）。条目保留供已安装用户追溯，新安装请用新包。原依赖说明：schema 结构化输出，缺失时降级为纯文本"
+        }
+      ]
+    },
+    {
+      "name": "@zhushanwen/pi-subagent-workflow",
+      "directory": "extensions/subagent-workflow",
+      "dependsOn": [
+        {
+          "package": "@zhushanwen/pi-structured-output",
+          "type": "runtime",
+          "reason": "subagent 执行 + workflow 编排两端均需 structured-output 扩展加载以提供 schema 结构化输出 tool（代码层不 import，仅运行时 tool 名引用）"
+        },
+        {
+          "package": "@zhushanwen/pi-pending-notifications",
+          "type": "runtime",
+          "reason": "T2 通知合并：subagent-workflow 的 subagent-service/lifecycle/error-recovery emit pending:register/pending:unregister 事件，pending-notifications 消费该事件并向用户发送完成通知。缺失时后台操作完成无通知（功能降级，不报错）"
         }
       ]
     },
@@ -60,7 +76,7 @@
       "directory": "extensions/coding-workflow",
       "dependsOn": [
         {
-          "package": "@zhushanwen/pi-workflow",
+          "package": "@zhushanwen/pi-subagent-workflow",
           "type": "runtime",
           "reason": "ReviewGate / TestFixLoopGate 通过 pi.__workflowRun 启动 workflow 脚本；硬依赖，缺失时 gate.run() 直接抛错（无 fallback）"
         },
@@ -114,7 +130,7 @@
         {
           "package": "@zhushanwen/pi-structured-output",
           "type": "runtime",
-          "reason": "schema 契约 enforcement 引用 tool 名（structured-output），运行时需要 extension 已加载，代码层不 import"
+          "reason": "superseded_by @zhushanwen/pi-subagent-workflow（T1 合并，deprecated，ADR-030）。条目保留供已安装用户追溯，新安装请用新包。原依赖说明：schema 契约 enforcement 引用 tool 名（structured-output），运行时需要 extension 已加载，代码层不 import"
         }
       ]
     },

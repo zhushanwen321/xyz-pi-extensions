@@ -170,9 +170,8 @@ describe("executeAgentCall 成功路径", () => {
 
     await executeAgentCall(call, runner, budget, controller.signal, trace);
 
- // D.4: input(100) + cacheWrite(20) 合并 + output(50) + cacheRead(10) + cacheWrite(0)
- // = 100+20 + 50 + 10 + 0 = 180
-    expect(budget.usedTokens).toBe(180);
+ // 加权：input(100)*1 + output(50)*2 + cacheRead(10)*0.02 + cacheWrite(20)*0 = 200.2
+    expect(budget.usedTokens).toBe(200.2);
     expect(budget.usedCost).toBe(0.001);
   });
 

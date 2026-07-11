@@ -1,5 +1,9 @@
 # @zhushanwen/pi-subagents
 
+> **⚠️ DEPRECATED**：本包已被 `@zhushanwen/pi-subagent-workflow` 取代（ADR-030，subagents + workflow 合并为单包）。
+> 迁移：`pi uninstall npm:@zhushanwen/pi-subagents && pi install npm:@zhushanwen/pi-subagent-workflow`
+> 本包不再维护，仅保留供已安装用户追溯。
+
 ## 0.1.3
 
 ### Patch Changes
