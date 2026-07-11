@@ -705,8 +705,10 @@ export class SubagentService {
         bestEffort(err, "removeAliveMarker (cancelBackground)");
       }
     }
-    // pending-notifications：cancel 注销（只记 registry 状态，通知由 BgNotifier 发）
+    // pending-notifications：cancel 注销（只记 registry 状态）
     emitPendingUnregister(this.pi, record.id, "cancelled");
+    // cancel 完成通知（与 kickOffBackground.then 对称——cancel 抢先时 .then 跳过 notify）
+    this.notifyComplete(record);
     return true;
   }
 
