@@ -26,12 +26,14 @@
  * 通信协议（AC-4 契约，逐字保留）：
  * Worker → Main (postMessage):
  * { type: "agent-call", callId: number, opts: AgentCallOpts }
+ * { type: "workflow-call", callId: number, name: string, args: Record<string, unknown> }
  * { type: "return", runId: string, result: unknown }
  * { type: "error", runId: string, error: string }
  * { type: "log", phase: string, message: string }
  *
  * Main → Worker (parentPort.on("message")):
  * { type: "agent-result", callId: number, result: AgentResult, cached: boolean }
+ * { type: "workflow-result", callId: number, result: unknown }
  * { type: "budget-update", budget: unknown }
  * { type: "abort", reason: string }
  */
@@ -118,6 +120,12 @@ export function buildWorkerScript(userScript: string): string {
     '        // parsedOutput: validated data object from structured-output execute().',
     '        // Fallback to content (raw text) when no schema was requested or on error.',
     '        pending.resolve(msg.result.parsedOutput ?? msg.result.content);',
+    '      }',
+    '    } else if (msg.type === "workflow-result") {',
+    '      const pending = _pendingCalls.get(msg.callId);',
+    '      if (pending) {',
+    '        _pendingCalls.delete(msg.callId);',
+    '        pending.resolve(msg.result);',
     '      }',
     '    } else if (msg.type === "abort") {',
     '      const err = new WorkflowAbortedError(msg.reason);',
@@ -239,12 +247,26 @@ export function buildWorkerScript(userScript: string): string {
     '    throw new Error("pipeline() expects pipeline([stage1, ...]) or pipeline([items], stage1, ...)");',
     '  }',
     '',
+    '  // ── workflow global — nested workflow invocation ──',
+    '  async function workflow(name, args) {',
+    '    if (typeof name !== "string" || name.length === 0) {',
+    '      throw new Error("workflow() requires a workflow name string as first argument");',
+    '    }',
+    '    const workflowArgs = (typeof args === "object" && args !== null) ? args : {};',
+    '    const callId = _callIdCounter;',
+    '    _callIdCounter++;',
+    '    parentPort.postMessage({ type: "workflow-call", callId, name, args: workflowArgs });',
+    '    return new Promise((resolve, reject) => {',
+    '      _pendingCalls.set(callId, { resolve, reject });',
+    '    });',
+    '  }',
+    '',
     '  // ── User workflow script ──',
     '  ' + userScript,
     '',
     '  // ── Auto-invoke execute() for module.exports pattern ──',
     '  if (typeof module !== "undefined" && module.exports && typeof module.exports.execute === "function") {',
-    '    return await module.exports.execute({ agent, parallel, pipeline, phase, log, $ARGS, $WORKSPACE, $BUDGET });',
+    '    return await module.exports.execute({ agent, parallel, pipeline, phase, log, workflow, $ARGS, $WORKSPACE, $BUDGET });',
     '  }',
     '})().then((result) => {',
     '  const { parentPort, workerData } = require("node:worker_threads");',

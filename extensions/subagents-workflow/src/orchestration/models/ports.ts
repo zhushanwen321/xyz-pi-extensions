@@ -148,4 +148,18 @@ export interface LifecycleDeps {
     runId: string,
     budgetTimeMs: number,
   ) => ReturnType<typeof setTimeout> | undefined;
+ /**
+ * workflow() 嵌套调用回调（可选）。Worker 脚本内调 workflow(name, args) 时触发。
+ *
+ * 由 Interface 层 makeDeps 注入（闭包捕获 registry + deps）。Engine 层的
+ * error-recovery.handleWorkerMessage 收到 workflow-call 消息后调本回调，
+ * 拿到子 workflow 执行结果后 postMessage(workflow-result) 回 worker。
+ *
+ * 不注入时 workflow() 返回 error result（向后兼容，不影响非嵌套场景）。
+ */
+  onWorkflowCall?: (
+    name: string,
+    args: Record<string, unknown>,
+    parentRun: WorkflowRun,
+  ) => Promise<unknown>;
 }

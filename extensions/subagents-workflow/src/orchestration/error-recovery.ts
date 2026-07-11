@@ -78,7 +78,14 @@ interface ErrorMsg {
   workerLogs?: WorkerLogEntry[];
 }
 
-type WorkerMsg = AgentCallMsg | ReturnMsg | ErrorMsg;
+interface WorkflowCallMsg {
+  type: "workflow-call";
+  callId: number;
+  name: string;
+  args: Record<string, unknown>;
+}
+
+type WorkerMsg = AgentCallMsg | WorkflowCallMsg | ReturnMsg | ErrorMsg;
 
 // ── 内部 helper ──────────────────────────────────────────────
 
@@ -155,6 +162,9 @@ export async function handleWorkerMessage(
   switch (msg.type) {
     case "agent-call":
       dispatchAgentCall(run, msg, deps);
+      return;
+    case "workflow-call":
+      dispatchWorkflowCall(run, msg, deps);
       return;
     case "return":
       await handleReturn(run, msg, deps);
@@ -322,6 +332,46 @@ function dispatchAgentCall(
       if (err instanceof Error && err.name === "AbortError") return;
       const message = err instanceof Error ? err.message : String(err);
       console.error(`[workflow] agent call ${msg.callId} failed: ${message}`);
+    });
+}
+
+/**
+ * 派发 workflow 嵌套调用：调 deps.onWorkflowCall 获取子 workflow 结果，
+ * 异步 postMessage(workflow-result) 回 worker。
+ *
+ * onWorkflowCall 未注入时（向后兼容），返回 error result 让脚本 soft-fail。
+ * 与 dispatchAgentCall 对称：异步触发（不 await），stale 完成守卫（paused/terminal 不发）。
+ */
+function dispatchWorkflowCall(
+  run: WorkflowRun,
+  msg: WorkflowCallMsg,
+  deps: LifecycleDeps,
+): void {
+  const postResult = (result: unknown): void => {
+    if (run.state.status !== "running") return;
+    run.runtime?.worker.postMessage({
+      type: "workflow-result",
+      callId: msg.callId,
+      result,
+    });
+  };
+
+  if (!deps.onWorkflowCall) {
+    postResult({
+      content: "",
+      error: `workflow() not supported: onWorkflowCall not injected`,
+    });
+    return;
+  }
+
+  void deps
+    .onWorkflowCall(msg.name, msg.args, run)
+    .then(postResult)
+    .catch((err: unknown) => {
+      postResult({
+        content: "",
+        error: err instanceof Error ? err.message : String(err),
+      });
     });
 }
 
