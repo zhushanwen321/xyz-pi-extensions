@@ -93,7 +93,7 @@ const [r1, r2, r3] = await parallel([
 ]);
 ```
 
-并发默认上限 4（agent-pool 限流），超出自动排队。元素也可以是返回 Promise 的函数，会被直接调用：
+并发默认上限 6（ConcurrencyPool 限流，`maxConcurrent=6` 来源 ADR-030 决策 3），超出自动排队。元素也可以是返回 Promise 的函数，会被直接调用：
 
 ### `pipeline(...)` — Execute stages sequentially
 
@@ -116,6 +116,41 @@ await pipeline(
   (review, file) => agent({ prompt: `Fix ${file}: ${JSON.stringify(review)}`, description: `fix-${file}` }),
 );
 // stage 函数签名：(prevResult, currentItem) => result；第一个 stage 只收 currentItem
+```
+
+### `workflow(name, args?)` — Call another workflow (nested orchestration)
+
+调用已定义的子 workflow（by name），实现 workflow 嵌套编排（顺序 chain / 并行 parallel / scatter-gather / map-reduce）。被调用的 workflow 必须已通过 `workflow-script save` 或放在 `.pi/workflows/` / `~/.pi/agent/workflows/` 可被发现。
+
+**签名**：`workflow(name: string, args?: object) => Promise<AgentResult>`
+
+**参数**：
+- `name` — 目标 workflow 的名称（`meta.name`，即文件名 stem）
+- `args` — 传给子 workflow 的参数对象，子 workflow 内通过 `$ARGS` 读取
+
+**返回值**：`AgentResult`，与 `agent()` 返回结构同构：
+- `content: string` — 子 workflow 的 return 值（字符串化）
+- `parsedOutput?: unknown` — 子 workflow return 的对象（当 return 是对象时）
+- `usage?: {...}` — token 消耗
+- `error?: string` — 失败原因（成功时无此字段）
+
+**嵌套配额**：`workflow()` 调用走同一 ConcurrencyPool，按 depth 分层分配配额（`max(1, 6 - depth)`，保底 1 槽防饿死）。`parallel()` 内的 `workflow()` 调用共享父 workflow 的配额池，超出自动排队（不报错）。嵌套深度受 `MAX_FORK_DEPTH` 护栏保护（见 ADR-030 决策 3）。
+
+**chain 基础示例**（顺序：每步输出作下步输入）：
+```javascript
+const a = await workflow("extract", { source: inputPath });
+const b = await workflow("transform", { raw: a.content });
+const c = await workflow("load", { normalized: b.content });
+```
+
+**parallel 基础示例**（并行：多个独立子 workflow 同时跑）：
+```javascript
+const results = await parallel(
+  tasks.map((t) => workflow(t, { target }))
+);
+```
+
+> 完整模式模板（chain / parallel / scatter-gather / map-reduce，含 `meta` + `$ARGS` + try-catch 错误处理）见 `extensions/subagents-workflow/examples/`。本段教 API，examples 教模式。
 
 ### Other globals
 
@@ -156,7 +191,7 @@ agent({ prompt: '...', description: 'review-business-logic' });
 ## Constraints
 
 - `agent()` calls **must be deterministic in order** for pause/resume to work correctly. 根因：调用结果按单调递增的 callId（从 0 起、按调用顺序）缓存，pause 时杀 Worker 但保留 callCache，resume 时按 callId 重放。`parallel()` 内的调用顺序不能随机，否则重放会错位命中旧结果。注意：无 script hash 校验，**改脚本后 resume 会用旧结果**，开发期改脚本应重新 run。
-- `parallel()` 并发默认上限 4（超出自动排队）。
+- `parallel()` 并发默认上限 6（ConcurrencyPool，超出自动排队；来源 ADR-030 决策 3）。
 - Throwing an error aborts the workflow (after retries).
 - Use `require()` for Node.js built-ins: `const fs = require('node:fs');`
 

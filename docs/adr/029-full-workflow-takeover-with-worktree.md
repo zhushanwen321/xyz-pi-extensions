@@ -1,6 +1,19 @@
 # ADR-029: 全流程 Workflow 接管 coding-execute（dev+test）+ per-call cwd + worktree 编排
 
-## Status: Proposed
+## Status: Partially superseded by [ADR-030](./030-subagents-workflow-merge.md)
+
+> **Partially superseded 说明（2026-07-11）**：本 ADR 的执行载体（独立 `@zhushanwen/pi-workflow` 包 + SubprocessAgentRunner 独立 spawn 路径）已被 [ADR-030](./030-subagents-workflow-merge.md) 取代——两包合并为 `@zhushanwen/pi-subagents-workflow`，SubprocessAgentRunner 委托 SubagentService.executeAndAwait 形成单执行链。但本 ADR 的**设计决策大多与合并正交，仍有效**，逐决策标注如下：
+>
+> | 决策 | 状态 | 说明 |
+> |------|------|------|
+> | **决策 1**（per-call cwd，两条链独立改） | ✅ **仍有效** | 与合并正交。合并后单包内 subagent tool 的 `cwd` 参数 + workflow agent() 的 `cwd` 透传均保留。见 coding-execute skill「worktree 编排」段的 per-call cwd 注入说明 |
+> | **决策 2**（worktree 生命周期归 workflow 内建，4 phase + `git worktree add/remove`） | ⚠️ **被取代（载体转移）** | worktree 生命周期知识从本 ADR 转移到 `coding-execute` skill 持续可查（避免知识封存在已标 superseded 的 ADR 中）。4 phase 编排结构（worktree-setup → dev waves → test+review → cleanup）+ 原生 `git worktree add/remove` + finally cleanup 设计均保留，详见 coding-execute SKILL.md「worktree 编排」段 |
+> | **决策 3**（workflow 内 agent 渐进式调 cw，修订版） | ✅ **仍有效** | 与合并正交。合并后 workflow 内 agent 仍渐进式调 cw(dev/test)，workspacePath 注入规则不变 |
+> | **决策 4**（test 调度字段 `dependsOn`/`parallelGroup` 进 plan.json） | ✅ **仍有效** | 与合并正交。schema 字段保留，wave 构造算法不变 |
+> | **决策 5**（砸除 pending-env 状态） | ✅ **仍有效** | 与合并正交。test 状态机简化为 pass/user-skipped/fail 三态 |
+> | **决策 6**（store 加 WAL + busy_timeout） | ✅ **仍有效** | 与合并正交。并发写前置条件不变（多 agent 并行调 cw 仍需 WAL） |
+>
+> 原文保留不动供历史追溯。
 
 ## Context
 

@@ -248,6 +248,68 @@ workflow 的 prompt 模板已注入 cw 调用指令。以下为 agent 调 cw 的
   - mid 信声明 + GitValidator 校验 commitHash 可追溯到 dev commit
   - `claimedStatus` 必填（漏传判 failed）
 
+## worktree 编排（workflow 内部，参考）
+
+> 本段从 ADR-029 决策 2（worktree 生命周期归 workflow 内建）+ 决策 1（per-call cwd）转移。
+> ADR-029 标 partially superseded 后，worktree 编排知识在此持续可查。主 agent 读本段仅为
+> 理解 workflow 内部行为——**worktree 生命周期由 workflow 全权管理，主 agent 不得手动建/删 worktree**（见自由度分级）。
+
+### 设计原则：原生 git worktree，不依赖 .bare
+
+workflow 脚本内用**原生 `git worktree add`**（`git worktree add <path> -b <branch> <base>`），
+不依赖 `create-worktree.sh`（后者强依赖 `.bare` bare repo workspace 结构，目标项目未必是此结构）。
+`git worktree add` 是 git 原生命令，任何 git 仓库都支持。清理用 `git worktree remove <path>`。
+
+worktree 根目录约定 `{workspaceRoot}/.cw-wt/`（由 workflow 的 `maxWorktrees` 参数控制并发上限，默认按 plan 的并行组算出）。
+
+### 4 phase 编排生命周期
+
+```
+Phase 0: worktree-setup
+  读 plan.json waves + testCases
+  → 按并行组算出需要的 worktree 数（dev 每 wave 组一个，test 一个，review 一个）
+  → spawn `git worktree add <path> -b <branch> <base>` 建 worktree
+  → 记录路径清单（失败则 throw，已建的留给 cleanup）
+
+Phase 1: dev waves（二维数组调度）
+  for each devWave in devWaves:        // wave 间串行
+    parallel(wave.cases.map(case =>     // wave 内全并行（plan 已确认无依赖/无资源冲突）
+      agent({ cwd: case.worktree, task: "实现 + TDD + commit", schema: {commitHash, ...} })
+    ))
+  → 收集所有 commitHash
+
+Phase 2: test + review（并行，不同 worktree）
+  parallel([
+    ...testWaves.flatMap(wave => wave.cases.map(case =>   // 每 case 1 agent
+      agent({ cwd: testWorktree, task: "跑该 case", schema: {status, actual, ...} })
+    )),
+    agent({ cwd: reviewWorktree, task: "review 维度A" }),  // 2 路 reviewer
+    agent({ cwd: reviewWorktree, task: "review 维度B" }),
+  ])
+  → 收集 test-results + review must_fix
+
+Phase 3: worktree-cleanup（finally 块，必跑）
+  spawn `git worktree remove <每个 worktree>`
+  → 失败不阻断 return（记录 cleanup 失败清单到 return.worktrees.cleanup_failures）
+```
+
+### per-call cwd 注入（决策 1）
+
+每个 agent 调用通过 `agent({ cwd: <worktree-path>, ... })` 注入独立 cwd，实现文件系统级隔离：
+- dev 阶段多 wave 并行 implementer 各自改不同 worktree，防 git index 冲突
+- test/review 各自独立 worktree，隔离副作用
+
+**关键**：agent 调 cw 时必须显式传 `workspacePath=<项目根>`（不是 worktree cwd）。
+workflow 的 prompt 模板已固定注入此参数——若用 worktree cwd，cw 会按 `encodeCwd` 编码出 worktree
+路径，打开错误的 `_cw.json`。主 agent 调 workflow 时传的 `workspaceRoot` 即用于此注入。
+
+### 失败处理
+
+- Phase 0 建 worktree 失败 → throw，workflow abort，return 已建清单
+- Phase 3 cleanup 在 `finally` 块，无论前面成败都跑
+- cleanup 失败（如 worktree 有未提交改动）→ 不 throw，记录到 `return.worktrees.cleanup_failures`，
+  主 agent 据此提示用户手动清理（见 Self-Check 阶段 C「worktrees.cleanup_failures=[]」）
+
 ## Self-Check
 
 **[MANDATORY] 以下全部满足才算执行完成。**
