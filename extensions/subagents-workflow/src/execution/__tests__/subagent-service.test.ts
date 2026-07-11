@@ -521,6 +521,59 @@ describe("SubagentService", () => {
 
       service.dispose();
     });
+
+    // ── T-NFR-8 dispose emit pending:unregister(reason=failed) ──
+    //
+    // [T2 AC-4.3 双重记账一致性] 进程退出时 running record 随 detached promise 丢弃，
+    // finalizeRecord 不会再跑。dispose 中为每个 running record emit pending:unregister，
+    // 让 pending-notifications 清理 registry entry，避免两侧状态不一致。
+    // 此组验证该 emit 路径。
+
+    it("T-NFR-8: dispose 时每个 running record 都 emit pending:unregister(reason=failed)", () => {
+      const { service, pi } = makeReadyServiceWithPi();
+      injectRunningBackground(service, "bg-dispose-1");
+      injectRunningBackground(service, "bg-dispose-2");
+      injectRunningBackground(service, "bg-dispose-3");
+
+      service.dispose();
+
+      // 每个 running record 都 emit 了 pending:unregister(reason=failed)
+      expect(pi.events.emit).toHaveBeenCalledWith(
+        "pending:unregister",
+        expect.objectContaining({ id: "bg-dispose-1", reason: "failed" }),
+      );
+      expect(pi.events.emit).toHaveBeenCalledWith(
+        "pending:unregister",
+        expect.objectContaining({ id: "bg-dispose-2", reason: "failed" }),
+      );
+      expect(pi.events.emit).toHaveBeenCalledWith(
+        "pending:unregister",
+        expect.objectContaining({ id: "bg-dispose-3", reason: "failed" }),
+      );
+    });
+
+    it("T-NFR-8: dispose emit 次数 = running record 数（终态 record 不重复 emit）", () => {
+      const { service, pi } = makeReadyServiceWithPi();
+      // 2 个 running + 1 个终态
+      injectRunningBackground(service, "bg-running-1");
+      injectRunningBackground(service, "bg-running-2");
+      const terminal = injectRunningBackground(service, "bg-done");
+      terminal.status = "done"; // 模拟终态，dispose 不应为其 emit
+
+      service.dispose();
+
+      // 统计 pending:unregister 调用次数
+      const unregisterCalls = pi.events.emit.mock.calls.filter(
+        (call: unknown[]) => call[0] === "pending:unregister",
+      );
+      // 只有 2 个 running record emit，终态的 bg-done 不 emit
+      expect(unregisterCalls).toHaveLength(2);
+      // 确认终态 record 未被 emit
+      expect(pi.events.emit).not.toHaveBeenCalledWith(
+        "pending:unregister",
+        expect.objectContaining({ id: "bg-done" }),
+      );
+    });
   });
 });
 

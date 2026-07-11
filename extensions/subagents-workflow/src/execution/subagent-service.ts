@@ -223,6 +223,16 @@ export class SubagentService {
     // 注意：dispose 是同步返回，主进程可能紧接着 process.exit()，runSpawn 的 finally 清理
     //（identity 补写等）可能来不及跑——这是可接受的退化（session.jsonl 已由子进程写入，
     // 缺 identity entry 只影响 list 重建的可观测性，不丢执行数据）。
+    //
+    // [T2 AC-4.3 双重记账一致性] 进程退出时所有 running record 异常终止（runAndFinalize 的
+    // finalizeRecord 不会再跑——detached promise 随进程退出而丢弃）。此处为每个 running record
+    // emit pending:unregister(reason=failed)，让 pending-notifications 清理 registry entry，
+    // 避免进程退出后两侧（subagent store vs pending registry）状态不一致。
+    // 必须在 abortRunningControllers 之前——此时 record 仍 running，listRunning 能取到。
+    // 只 emit running 的 record（已终态的由其正常路径 emit 过，不重复）。
+    for (const record of this.store.listRunning()) {
+      emitPendingUnregister(this.pi, record.id, "failed");
+    }
     this.store.abortRunningControllers();
     // [C1] orphan 进程兜底：abortRunningControllers 只能 kill background 子进程（有 controller）。
     // sync 子进程的 controller 是 undefined（见 createRecordForMode），主进程退出时会被遗漏成孤儿。

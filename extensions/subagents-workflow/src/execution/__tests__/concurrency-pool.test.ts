@@ -118,4 +118,100 @@ describe("DefaultConcurrencyPool", () => {
     expect(bgAcquired).toBe(false);
     pool.release();
   });
+
+  // ============================================================
+  // 分层配额：effectiveMaxConcurrent 参数控制放行上限 (T-A1~T-A4)
+  // ============================================================
+  //
+  // [背景] T2 Wave 0 给 acquire 增加可选 effectiveMaxConcurrent 参数，让调用方
+  // 传 max(1, maxConcurrent - depth) 实现分层配额（嵌套越深有效并发越小）。
+  // 该参数覆盖实例级 maxConcurrent 的本次调用上限，不改实例状态。
+  // 这组测试锁定该参数的语义。
+
+  describe("分层配额 effectiveMaxConcurrent (T-A1~T-A4)", () => {
+    it("T-A1: effectiveMaxConcurrent 限制本次调用放行数（小于实例级 maxConcurrent）", async () => {
+      // 实例配额 5，但本次调用 effective=2 → 第 3 个应阻塞
+      const pool = new DefaultConcurrencyPool(5);
+      await pool.acquire(0, 2);
+      await pool.acquire(0, 2);
+      expect(pool.active).toBe(2);
+
+      let thirdAcquired = false;
+      const third = pool.acquire(0, 2).then(() => { thirdAcquired = true; });
+      await new Promise((r) => setTimeout(r, 5));
+
+      expect(thirdAcquired).toBe(false);
+      expect(pool.active).toBe(2);
+
+      pool.release();
+      await third;
+      expect(thirdAcquired).toBe(true);
+      pool.release();
+      pool.release();
+    });
+
+    it("T-A2: 同一 pool 实例不同 effectiveMaxConcurrent 控制不同调用放行数", async () => {
+      // 同一 pool（实例级 maxConcurrent=5）
+      const pool = new DefaultConcurrencyPool(5);
+      // 前 3 个用 effective=3，全放行（active 0→1→2→3，每次 < 3）
+      await pool.acquire(0, 3);
+      await pool.acquire(0, 3);
+      await pool.acquire(0, 3);
+      expect(pool.active).toBe(3);
+
+      // 第 4 个用 effective=3 → 阻塞（active 3 >= 3）
+      let blockedAcquired = false;
+      const blocked = pool.acquire(0, 3).then(() => { blockedAcquired = true; });
+      await new Promise((r) => setTimeout(r, 5));
+      expect(blockedAcquired).toBe(false);
+
+      // 换 effective=5 放行（active 3 < 5）
+      let wideAcquired = false;
+      const wide = pool.acquire(0, 5).then(() => { wideAcquired = true; });
+      await new Promise((r) => setTimeout(r, 5));
+      expect(wideAcquired).toBe(true);
+      expect(pool.active).toBe(4);
+
+      // wide release 后 blocked 仍等（active 3 >= 3 不变直到再 release）
+      pool.release(); // wide 释放
+      await new Promise((r) => setTimeout(r, 5));
+      expect(blockedAcquired).toBe(true);
+
+      // 清理
+      pool.release();
+      pool.release();
+      pool.release();
+      pool.release();
+      await Promise.allSettled([blocked, wide]);
+    });
+
+    it("T-A3: effectiveMaxConcurrent=1 只放行 1 个（保底）", async () => {
+      const pool = new DefaultConcurrencyPool(5);
+      await pool.acquire(0, 1);
+      expect(pool.active).toBe(1);
+
+      let secondAcquired = false;
+      const second = pool.acquire(0, 1).then(() => { secondAcquired = true; });
+      await new Promise((r) => setTimeout(r, 5));
+      expect(secondAcquired).toBe(false);
+      expect(pool.active).toBe(1);
+
+      pool.release();
+      await second;
+      expect(secondAcquired).toBe(true);
+      pool.release();
+    });
+
+    it("T-A4: maxConcurrent readonly 属性可读且等于构造值", () => {
+      const pool = new DefaultConcurrencyPool(4);
+      expect(pool.maxConcurrent).toBe(4);
+
+      // clamp 路径也通过该属性暴露
+      const clamped = new DefaultConcurrencyPool(0);
+      expect(clamped.maxConcurrent).toBe(1);
+
+      const negative = new DefaultConcurrencyPool(-3);
+      expect(negative.maxConcurrent).toBe(1);
+    });
+  });
 });
