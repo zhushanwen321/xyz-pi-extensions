@@ -1,15 +1,17 @@
 {
-  "name": "@zhushanwen/pi-subagents",
-  "version": "0.1.3",
+  "name": "@zhushanwen/pi-subagent-workflow",
+  "version": "0.1.0",
   "type": "module",
   "main": "index.ts",
-  "description": "Spawned-process agent execution runtime for Pi — unified execute entry, isolated state, sync/background modes",
-  "deprecated": "Superseded by @zhushanwen/pi-subagent-workflow (ADR-030). Migrate: pi install npm:@zhushanwen/pi-subagent-workflow",
+  "description": "Unified subagent execution and multi-agent workflow orchestration for Pi — spawned-process agent runtime with sync/background modes, stateful workflow management with persistence, state machine, and execution tracing.",
   "keywords": [
     "pi-package",
     "extension",
     "subagent",
-    "agent-runtime"
+    "agent-runtime",
+    "workflow",
+    "orchestration",
+    "multi-agent"
   ],
   "license": "MIT",
   "engines": {
@@ -18,18 +20,23 @@
   "files": [
     "index.ts",
     "agents/",
+    "skills/",
+    "examples/",
     "src/index.ts",
-    "src/types.ts",
-    "src/core/",
-    "src/runtime/",
-    "src/tui/",
-    "src/tools/",
-    "src/commands/",
-    "src/utils/"
+    "src/execution/",
+    "src/orchestration/",
+    "src/interface/",
+    "src/shared/"
   ],
   "pi": {
     "extensions": [
       "./index.ts"
+    ],
+    "skills": [
+      "./skills"
+    ],
+    "agents": [
+      "./agents"
     ]
   },
   "scripts": {
@@ -40,20 +47,15 @@
   "peerDependencies": {
     "@mariozechner/pi-coding-agent": "*",
     "@mariozechner/pi-ai": "*",
+    "@mariozechner/pi-tui": "*",
     "@sinclair/typebox": "*",
-    "@earendil-works/pi-tui": "*"
+    "@zhushanwen/pi-structured-output": "*"
   },
   "peerDependenciesMeta": {
     "@mariozechner/pi-coding-agent": {
       "optional": true
     },
-    "@mariozechner/pi-ai": {
-      "optional": true
-    },
-    "@sinclair/typebox": {
-      "optional": true
-    },
-    "@earendil-works/pi-tui": {
+    "@zhushanwen/pi-structured-output": {
       "optional": true
     }
   },

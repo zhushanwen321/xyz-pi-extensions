@@ -4,7 +4,7 @@
 
 ## Context
 
-ADR-030 将 `pi-subagents` + `pi-workflow` 合并为 `pi-subagents-workflow`。合并前两类资源的发现机制各自独立，存在三方面问题：
+ADR-030 将 `pi-subagents` + `pi-workflow` 合并为 `pi-subagent-workflow`。合并前两类资源的发现机制各自独立，存在三方面问题：
 
 ### 问题 1：扫描路径不一致
 
@@ -69,7 +69,7 @@ ADR-028 引入的 `discovery.json` 是外部宿主写入的可选覆盖文件。
 
 ### 5. 包内 builtin agent 走 manifest
 
-`subagents-workflow` 的 `package.json` 新增 `pi.agents: ["./agents"]`，与 npm 包内发现规则一致。`createPackageBuiltinRegistry()` 调用 `processPackageSync(packageRoot, "agents")` 走 manifest 加载。
+`subagent-workflow` 的 `package.json` 新增 `pi.agents: ["./agents"]`，与 npm 包内发现规则一致。`createPackageBuiltinRegistry()` 调用 `processPackageSync(packageRoot, "agents")` 走 manifest 加载。
 
 ## Consequences
 

@@ -2,7 +2,7 @@
   "name": "@zhushanwen/pi-workflow",
   "version": "1.1.7",
   "description": "Multi-agent workflow orchestration for Pi — stateful workflow management with persistence, state machine, and execution tracing.",
-  "deprecated": "Superseded by @zhushanwen/pi-subagents-workflow (ADR-030). Migrate: pi install npm:@zhushanwen/pi-subagents-workflow",
+  "deprecated": "Superseded by @zhushanwen/pi-subagent-workflow (ADR-030). Migrate: pi install npm:@zhushanwen/pi-subagent-workflow",
   "type": "module",
   "main": "index.ts",
   "pi": {

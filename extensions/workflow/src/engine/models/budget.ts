@@ -1,3 +1,9 @@
+// ⚠️ DEPRECATED COPY — This file is part of the deprecated @zhushanwen/pi-workflow package (ADR-030).
+// The canonical definition lives at:
+//   extensions/subagent-workflow/src/orchestration/models/budget.ts
+// which includes additional methods (e.g. remaining()) not present here.
+// Do not modify this file — update the canonical source instead.
+
 /**
  * Workflow Extension — Budget 值对象
  *

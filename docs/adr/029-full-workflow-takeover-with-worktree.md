@@ -2,7 +2,7 @@
 
 ## Status: Partially superseded by [ADR-030](./030-subagents-workflow-merge.md)
 
-> **Partially superseded 说明（2026-07-11）**：本 ADR 的执行载体（独立 `@zhushanwen/pi-workflow` 包 + SubprocessAgentRunner 独立 spawn 路径）已被 [ADR-030](./030-subagents-workflow-merge.md) 取代——两包合并为 `@zhushanwen/pi-subagents-workflow`，SubprocessAgentRunner 委托 SubagentService.executeAndAwait 形成单执行链。但本 ADR 的**设计决策大多与合并正交，仍有效**，逐决策标注如下：
+> **Partially superseded 说明（2026-07-11）**：本 ADR 的执行载体（独立 `@zhushanwen/pi-workflow` 包 + SubprocessAgentRunner 独立 spawn 路径）已被 [ADR-030](./030-subagents-workflow-merge.md) 取代——两包合并为 `@zhushanwen/pi-subagent-workflow`，SubprocessAgentRunner 委托 SubagentService.executeAndAwait 形成单执行链。但本 ADR 的**设计决策大多与合并正交，仍有效**，逐决策标注如下：
 >
 > | 决策 | 状态 | 说明 |
 > |------|------|------|
