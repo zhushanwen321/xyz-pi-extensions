@@ -157,7 +157,7 @@ export async function runWorkflow(
     spec,
     {
       status: "paused",
-      budget: new Budget({
+      budget: spec.budgetRef ?? new Budget({
         maxTokens: spec.budgetTokens,
         maxTimeMs: spec.budgetTimeMs,
       }),

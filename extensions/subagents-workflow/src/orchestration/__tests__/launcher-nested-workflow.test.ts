@@ -10,6 +10,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import { Budget } from "../models/budget.ts";
+import type { RunSpec } from "../models/run-spec.ts";
 import type { LauncherDeps } from "../launcher.ts";
 import type { LintResult } from "../script-lint.ts";
 import type { WorkflowRun } from "../models/workflow-run.ts";
@@ -203,23 +204,31 @@ describe("executeNestedWorkflow", () => {
     expect(runWorkflow).toHaveBeenCalledTimes(1);
   });
 
-  it("syncs child budget back to parent", async () => {
+  it("shares parent budget reference with child run (no sync-back)", async () => {
     const parentBudget = new Budget({ maxTokens: 10000 });
     parentBudget.usedTokens = 100;
     const parent = makeParentRun({ budget: parentBudget });
     const childRun = makeDoneChildRun({
       reason: "completed",
       scriptResult: "ok",
-      usedTokens: 500,
-      usedCost: 0.2,
     });
     const deps = makeDeps({ script: makeScript(), childRun });
-    setupRunWorkflow(childRun);
+
+    // 捕获传给 runWorkflow 的 spec——验证 budgetRef 共享父 Budget 引用
+    let capturedSpec: RunSpec | undefined;
+    vi.mocked(runWorkflow).mockImplementation(async (spec, d) => {
+      capturedSpec = spec;
+      d.runs.set(MOCK_RUN_ID, childRun);
+      return MOCK_RUN_ID;
+    });
 
     await executeNestedWorkflow("child-wf", {}, parent, deps);
 
-    expect(parent.state.budget.usedTokens).toBe(600);
-    expect(parent.state.budget.usedCost).toBeCloseTo(0.2);
+    // 子 run 直接复用父 Budget 引用（budgetRef），而非独立 Budget + sync-back
+    expect(capturedSpec?.budgetRef).toBe(parentBudget);
+    expect(capturedSpec?.budgetTokens).toBeUndefined();
+    // 无 sync-back：parent budget 不被 launcher 直接修改（mock 未真实 consume）
+    expect(parent.state.budget.usedTokens).toBe(100);
   });
 
   it("returns error result when child workflow fails", async () => {

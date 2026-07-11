@@ -248,16 +248,16 @@ async function safeAbort(
  * 1. 循环检测——name 已在 parentWorkflowChain 中则拒绝（防 A→B→A 死循环）
  * 2. signal 继承——子 run 响应父 run abort（parentController → childController）
  * 3. registry.get + lint——失败返回 error result（不抛错，让脚本 soft-fail）
- * 4. 构建 RunSpec（budgetTokens 继承父剩余预算 + parentWorkflowChain 延长）+ runWorkflow
+ * 4. 构建 RunSpec（共享父 Budget 引用 + parentWorkflowChain 延长）+ runWorkflow
  * 5. pollRunToResult 轮询至 done（复用 runAndWait 的轮询逻辑）
- * 6. budget 同步（子 usedTokens/usedCost 累加回父）+ 结果转换
+ * 6. 结果转换（budget 已通过共享引用实时同步）
  *
  * 不走 runAndWait：runAndWait 内部构建 RunSpec 不支持 parentWorkflowChain 与 budget
- * 继承，故直接构建 spec + runWorkflow + pollRunToResult。
+ * 共享引用，故直接构建 spec + runWorkflow + pollRunToResult。
  *
  * @param name 子 workflow 脚本名（registry.get 查找）
  * @param args 调用参数（子 worker 内 $ARGS 访问）
- * @param parentRun 发起嵌套调用的父 WorkflowRun（budget 继承 + 循环链源）
+ * @param parentRun 发起嵌套调用的父 WorkflowRun（budget 共享 + 循环链源）
  * @param deps LauncherDeps（与 runAndWait 同一组依赖 + registry）
  * @returns { content, parsedOutput?, error? }——dispatchWorkflowCall 原样 postMessage 回 worker
  */
@@ -309,15 +309,13 @@ export async function executeNestedWorkflow(
     };
   }
 
- // Step 4: 构建 RunSpec（budget 继承 + 循环链）+ 启动子 workflow
- // budget 继承：子 run 的 budgetTokens = 父 run 剩余预算（parentRun.state.budget.remaining()）。
- // 子 run 独立 Budget 实例，执行后把 usedTokens/usedCost 累加回 parentRun（近似同步，
- // TODO: 后续可改为子 run 共享父 Budget 引用，避免超支窗口）。
-  const parentRemaining = parentRun.state.budget.remaining();
+ // Step 4: 构建 RunSpec（共享父 Budget + 循环链）+ 启动子 workflow
+ // budget 共享（F-7 方案 B）：子 run 直接复用父 Budget 引用（budgetRef），consume 实时
+ // 累加到父 Budget，消除并行嵌套下的超支窗口，无需 Step 6 的 sync-back。
   const spec: RunSpec = {
     scriptSource: script.toExecutable(),
     args,
-    budgetTokens: parentRemaining !== undefined && parentRemaining > 0 ? parentRemaining : undefined,
+    budgetRef: parentRun.state.budget,
     scriptName: script.name,
     scriptPath: script.path,
     description: script.meta.description,
@@ -334,15 +332,7 @@ export async function executeNestedWorkflow(
     "Aborted by parent signal",
   );
 
- // Step 6: budget 同步 + 结果转换
-  const childRun = deps.runs.get(runId);
-  if (childRun) {
- // budget 同步：子 run 消耗累加回父 run（近似）
- // TODO: 后续可改为子 run 共享父 Budget 引用，避免超支窗口
-    parentRun.state.budget.usedTokens += childRun.state.budget.usedTokens;
-    parentRun.state.budget.usedCost += childRun.state.budget.usedCost;
-  }
-
+ // Step 6: 结果转换（budget 已通过共享 budgetRef 实时同步，无需 sync-back）
   if (result.reason === "completed") {
     const scriptResult = result.scriptResult;
     return {

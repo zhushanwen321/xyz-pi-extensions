@@ -30,6 +30,7 @@ import { handleWorkerMessage } from "../error-recovery.ts";
 import { executeNestedWorkflow, type LauncherDeps } from "../launcher.ts";
 import { runWorkflow } from "../lifecycle.ts";
 import { Budget } from "../models/budget.ts";
+import type { RunSpec } from "../models/run-spec.ts";
 import type { LifecycleDeps, WorkerHandlers } from "../models/ports.ts";
 import type { WorkflowRun } from "../models/workflow-run.ts";
 import type { WorkflowScript } from "../models/workflow-script.ts";
@@ -283,7 +284,7 @@ describe("workflow() nesting end-to-end", () => {
     expect(sent.result.content).toBe("");
   });
 
-  it("end-to-end: budget synced from child to parent", async () => {
+  it("end-to-end: child shares parent budget reference (no sync-back)", async () => {
     const postMessage = vi.fn();
     const parentBudget = new Budget({ maxTokens: 10000 });
     parentBudget.usedTokens = 100;
@@ -291,10 +292,16 @@ describe("workflow() nesting end-to-end", () => {
     const childRun = makeDoneChildRun({
       reason: "completed",
       scriptResult: "ok",
-      usedTokens: 500,
     });
     const deps = makeDeps({ script: makeScript(), childRun });
-    setupRunWorkflow(childRun);
+
+    // 捕获传给 runWorkflow 的 spec——验证 budgetRef 共享父 Budget 引用
+    let capturedSpec: RunSpec | undefined;
+    vi.mocked(runWorkflow).mockImplementation(async (spec, d) => {
+      capturedSpec = spec;
+      d.runs.set(MOCK_RUN_ID, childRun);
+      return MOCK_RUN_ID;
+    });
     wireOnWorkflowCall(deps);
 
     await handleWorkerMessage(
@@ -305,7 +312,8 @@ describe("workflow() nesting end-to-end", () => {
     );
     await flushMicrotasks();
 
-    // 子 consumed 500 累加回父（100 + 500 = 600）
-    expect(parent.state.budget.usedTokens).toBe(600);
+    // 子 run 直接复用父 Budget 引用（budgetRef），无需 sync-back
+    expect(capturedSpec?.budgetRef).toBe(parentBudget);
+    expect(parent.state.budget.usedTokens).toBe(100);
   });
 });

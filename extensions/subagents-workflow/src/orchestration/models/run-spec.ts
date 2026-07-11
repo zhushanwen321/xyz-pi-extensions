@@ -13,6 +13,8 @@
  * 参考：domain-models.md §2。
  */
 
+import type { Budget } from "./budget.ts";
+
 /**
  * RunSpec——一次 workflow run 的不可变输入规格。
  *
@@ -28,6 +30,14 @@ export interface RunSpec {
   readonly budgetTokens?: number;
  /** 时间预算上限（ms，wall-clock，由 lifecycle.scheduleTimeBudget 调度）。 */
   readonly budgetTimeMs?: number;
+ /**
+ * 父 Budget 共享引用（嵌套 workflow() 时由 executeNestedWorkflow 传入）。
+ *
+ * 设置时 lifecycle.runWorkflow 直接复用此 Budget 实例，而非 new 一个独立 Budget——
+ * 子 run 的 consume 直接反映到父 Budget，消除并行嵌套下的超支窗口（F-7 方案 B）。
+ * 顶层 run 无此字段（budgetTokens 走独立 Budget 构造）。
+ */
+  readonly budgetRef?: Budget;
  /** 脚本名（meta.name 或文件名 stem）。 */
   readonly scriptName: string;
  /** 脚本文件绝对路径（用于诊断/日志）。 */
