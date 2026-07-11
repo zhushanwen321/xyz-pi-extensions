@@ -541,19 +541,6 @@ export interface SubagentsGlobalConfig {
   maxConcurrent: number;
 }
 
-/**
- * 资源发现契约（<agentDir>/subagents/discovery.json）。
- * 宿主（如 xyz-agent GUI）启动 pi 前写入，subagents 在 session_start 与 resources_discover 时读取。
- * 文件缺失/字段缺失时各数组视为空，走默认行为（零破坏）。详见 ADR-025。
- */
-export interface DiscoveryConfig {
-  version: number;
-  /** skill 目录列表（靠前覆盖靠后）。空数组 = 不额外注入，走默认。 */
-  skillDirs: string[];
-  /** agent .md 目录列表（靠前覆盖靠后）。空数组 = 走默认 getAgentDir()。 */
-  agentDirs: string[];
-}
-
 // ============================================================
 // 只读快照（TUI 消费，永不 mutate）
 // ============================================================

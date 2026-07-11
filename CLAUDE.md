@@ -20,7 +20,7 @@ xyz-pi-extensions/
 │   ├── statusline/          → @zhushanwen/pi-statusline
 │   ├── structured-output/   → @zhushanwen/pi-structured-output
 │   ├── unified-hooks/       → @zhushanwen/pi-unified-hooks
-│   ├── subagents-workflow/ → @zhushanwen/pi-subagents-workflow (合并 subagents + workflow，单包统一执行链 + workflow() 嵌套编排 + 分层配额；ADR-030)
+│   ├── subagents-workflow/ → @zhushanwen/pi-subagents-workflow (合并 subagents + workflow，单包统一执行链 + workflow() 嵌套编排 + 分层配额；ADR-030；含统一资源发现模块 src/shared/resource-discovery.ts，agent .md 与 workflow .js 共享扫描逻辑 + manifest 校验，ADR-031)
 │   ├── workflow/            → @zhushanwen/pi-workflow (⚠️ deprecated, superseded by pi-subagents-workflow, ADR-030)
 │   ├── model-switch/        → @zhushanwen/pi-model-switch
 │   ├── turn-timing/         → @zhushanwen/pi-turn-timing

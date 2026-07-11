@@ -1,11 +1,21 @@
-// src/core/agent-registry.ts
+// src/execution/agent-registry.ts
 //
-// agent .md 文件发现与解析。hot-reload：每次调用重扫（mtime 缓存跳过未变文件）。
+// agent .md 文件发现与解析。
+//
+// 发现逻辑统一走 shared/resource-discovery（ADR-031），与 workflow 共享同一套
+// 扫描源前缀 + manifest 校验。hot-reload：每次调用重扫（mtime 缓存跳过未变文件）。
+//
+// builtin agent（包内 agents/*.md）走 pi.agents manifest（与 npm 包内发现规则一致）。
 
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { fileURLToPath } from "node:url";
 
+import {
+  type DiscoveredResource,
+  discoverResourcesSync,
+  type ScanConfig,
+} from "../shared/resource-discovery.ts";
 import type { AgentConfig } from "./model-resolver.ts";
 
 /** 内置 agent（代码硬编码，如 default worker）。 */
@@ -17,37 +27,37 @@ export interface BuiltinAgentRegistry {
 /**
  * 包内自带 agents（与 src/ 同级的 agents/ 目录）。
  *
+ * 走 pi.agents manifest（package.json 的 pi.agents 字段），与 npm 包内发现规则一致。
+ * manifest 缺失时 fallback 扫约定目录 agents/。
+ *
  * [HISTORICAL] 此前 discoverAll 从未被调用，agentRegistry 永远为空——包内
- * agents/*.md（worker/reviewer/scout 等）pi install 后开箱不可用，所有 agent
- * 调用都拿不到 agentConfig（无 systemPrompt）。修复：构造时扫描包内 agents/
- * 作为 builtin（优先级最低，被用户 agentDir 同名文件覆盖）。
+ * agents/*.md（worker/reviewer/scout 等）pi install 后开箱不可用。修复：构造时扫描
+ * 包内 agents/ 作为 builtin（优先级最低，被用户同名文件覆盖）。
  */
 export function createPackageBuiltinRegistry(): BuiltinAgentRegistry {
-  const agentsDir = path.join(
+  const packageRoot = path.resolve(
     path.dirname(fileURLToPath(import.meta.url)),
     "..",
     "..",
-    "agents",
   );
   const cache = new Map<string, AgentConfig>();
   try {
-    const entries = fs.readdirSync(agentsDir);
-    for (const entry of entries) {
-      if (!entry.endsWith(".md") || entry.startsWith("_")) continue;
-      const filePath = path.join(agentsDir, entry);
+    const config = discoverPackageAgentsSync(packageRoot);
+    for (const resource of config) {
+      if (!resource.available) continue;
       try {
-        const raw = fs.readFileSync(filePath, "utf-8");
-        const config = parseAgentFrontmatter(filePath, raw);
-        if (config) cache.set(config.name, config);
+        const raw = fs.readFileSync(resource.path, "utf-8");
+        const agentConfig = parseAgentFrontmatter(resource.path, raw);
+        if (agentConfig) cache.set(agentConfig.name, agentConfig);
       } catch (err) {
         // 单个 builtin agent 文件损坏不影响其他——降级跳过该文件。
-        void err; // 显式确认忽略：单个文件损坏不阻断其余 builtin 加载
-        console.warn(`[subagents] skip malformed builtin agent: ${entry}`, err);
+        void err;
+        console.warn(`[subagents] skip malformed builtin agent: ${resource.path}`, err);
       }
     }
   } catch (err) {
-    // agents/ 目录不存在（打包遗漏）→ 空 builtin，不崩。降级返回空集，不阻断 session。
-    void err; // 显式确认忽略：目录缺失是合法降级场景（打包遗漏等）
+    // agents/ 目录不存在（打包遗漏）→ 空 builtin，不崩。
+    void err;
     console.warn("[subagents] builtin agents/ directory unreadable, falling back to empty set:", err);
   }
   return {
@@ -128,12 +138,22 @@ function extractYamlField(yaml: string, key: string): string | undefined {
 // ============================================================
 
 /**
- * agent 注册表。发现多个 agentDirs 下 *.md + 内置 agent。
+ * 发现配置：用于统一资源发现的扫描参数。
+ */
+export interface AgentDiscoveryConfig {
+  /** 项目根目录（findWorkspaceRoot 推导结果） */
+  workspaceRoot: string;
+  /** agent 配置目录（getAgentDir() 结果） */
+  agentDir: string;
+}
+
+/**
+ * agent 注册表。通过统一资源发现（shared/resource-discovery）扫描所有源。
  * hot-reload：每次 discoverAll 重扫，mtime 未变的文件跳过 read+parse。
  *
- * 多目录优先级：agentDirs 数组顺序即优先级，靠前覆盖靠后。
- * 实现上逆序扫描（先扫低优先级目录，后扫高优先级目录覆盖同名）。
- * 详见 ADR-028。
+ * 优先级（低→高）：user .pi/agent → user .agents → npm global → npm dev →
+ * project .pi → project .agents。builtin（包内）优先级最低。
+ * 详见 ADR-031。
  */
 export class AgentRegistry {
   private readonly cache = new Map<string, AgentConfig>();
@@ -142,16 +162,30 @@ export class AgentRegistry {
   /** 本轮扫描到的路径集（清理已删除文件的缓存）。 */
   private currentScanPaths = new Set<string>();
 
-  constructor(private readonly agentDirs: string[]) {}
+  constructor(private readonly discoveryConfig: AgentDiscoveryConfig) {}
 
-  /** 扫描所有 agentDirs 下 *.md + 合并 builtin（hot-reload，每次重扫）。 */
+  /** 扫描所有源 + 合并 builtin（hot-reload，每次重扫）。 */
   discoverAll(builtin: BuiltinAgentRegistry): void {
     this.cache.clear();
     this.currentScanPaths = new Set();
 
-    // 逆序扫描：靠前目录（高优先级）后写，覆盖靠后目录（低优先级）的同名 agent
-    for (let i = this.agentDirs.length - 1; i >= 0; i--) {
-      this.scanDir(this.agentDirs[i]!);
+    const scanConfig: ScanConfig = {
+      kind: "agents",
+      workspaceRoot: this.discoveryConfig.workspaceRoot,
+      agentDir: this.discoveryConfig.agentDir,
+    };
+    const resources = discoverResourcesSync(scanConfig);
+
+    for (const resource of resources) {
+      if (!resource.available) continue;
+      this.currentScanPaths.add(resource.path);
+      try {
+        const config = this.loadWithMtimeCache(resource.path);
+        if (config) this.cache.set(config.name, config);
+      } catch (_err) {
+        // 有意吞掉：文件不可读/解析失败 → 跳过（不阻断其他 agent 发现）
+        void _err;
+      }
     }
 
     // builtin 优先级最低（先写入，被文件 agent 覆盖）
@@ -188,28 +222,6 @@ export class AgentRegistry {
 
   // ── 内部 ──────────────────────────────────────────────────
 
-  /** 扫描单个目录下的 .md 文件（mtime 缓存加速）。 */
-  private scanDir(dir: string): void {
-    let entries: string[];
-    try {
-      entries = fs.readdirSync(dir);
-    } catch {
-      return; // 目录不存在 / 不可读
-    }
-    for (const entry of entries) {
-      if (!entry.endsWith(".md") || entry.startsWith("_")) continue;
-      const filePath = path.join(dir, entry);
-      this.currentScanPaths.add(filePath);
-      try {
-        const config = this.loadWithMtimeCache(filePath);
-        if (config) this.cache.set(config.name, config);
-      } catch (_err) {
-        // 有意吞掉：文件不可读/解析失败 → 跳过（不阻断其他 agent 发现）
-        void _err;
-      }
-    }
-  }
-
   /** 带 mtime 缓存的单文件加载。mtime 未变复用缓存，否则 read+parse。 */
   private loadWithMtimeCache(filePath: string): AgentConfig | undefined {
     const stat = fs.statSync(filePath);
@@ -223,4 +235,18 @@ export class AgentRegistry {
     this.fileCache.set(filePath, { mtimeMs, config });
     return config;
   }
+}
+
+// ============================================================
+// 包内 agent 发现（builtin 用，走 pi.agents manifest）
+// ============================================================
+
+import { processPackageSync } from "../shared/resource-discovery.ts";
+
+/**
+ * 发现包内 agent 文件（走 pi.agents manifest 或约定目录 agents/）。
+ * builtin 专用——不参与优先级合并，优先级最低。
+ */
+function discoverPackageAgentsSync(packageRoot: string): DiscoveredResource[] {
+  return processPackageSync(packageRoot, "agents");
 }

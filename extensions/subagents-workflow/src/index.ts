@@ -23,7 +23,6 @@ import { getAgentDir } from "@mariozechner/pi-coding-agent";
 import type { AgentRegistry } from "./execution/agent-registry.ts";
 import { bestEffort } from "./execution/best-effort.ts";
 // ═══ execution/ 层（subagents 核心 + 运行时） ═══
-import { DiscoveryConfigLoader } from "./execution/discovery-config.ts";
 import {
   getModelConfigService,
   ModelConfigService,
@@ -84,12 +83,11 @@ export default function subagentsWorkflowExtension(pi: ExtensionAPI): void {
     return cachedMainSessionFile;
   }
 
-  // discovery.json 契约加载器（进程级单例，跨 session 复用 mtime 缓存）。
-  const discoveryLoader = new DiscoveryConfigLoader(getAgentDir());
-
+  // resources_discover：不再注入额外 skill 目录（ADR-031 废弃 discovery.json）。
+  // pi 核心 auto-discovery 已覆盖 .agents/skills 等标准目录，子 session 的
+  // --skill 由 agent({skill}) 调用方显式传入，无需 extension 额外补充。
   pi.on("resources_discover", (_event: ResourcesDiscoverEvent, _ctx: ExtensionContext): ResourcesDiscoverResult => {
-    const discovery = discoveryLoader.load();
-    return { skillPaths: discovery.skillDirs.length > 0 ? [...discovery.skillDirs] : undefined };
+    return {};
   });
 
   // ════════════════════════════════════════════════════════════
@@ -201,7 +199,7 @@ export default function subagentsWorkflowExtension(pi: ExtensionAPI): void {
     // ── subagents 域：双 Service 装配 ──
     const existingService = getSubagentService();
     const existingModelService = getModelConfigService();
-    const modelService = existingModelService ?? new ModelConfigService({ agentDir, discoveryLoader });
+    const modelService = existingModelService ?? new ModelConfigService({ agentDir, cwd });
     const service = existingService ?? new SubagentService({ cwd, modelService, getMainSessionFile: getCachedMainSessionFile });
 
     modelService.initModel({
@@ -245,10 +243,9 @@ export default function subagentsWorkflowExtension(pi: ExtensionAPI): void {
     });
     const runs = new Map<string, WorkflowRun>();
 
-    // F-4/D-003: 复用 modelService 的 AgentRegistry（discovery.json 契约 + 包内 builtin），
-    // 取代旧 orchestration/agent-discovery.ts 的 7 路径自爬。新 AgentRegistry 仅扫 flat
-    // 目录（无 nested extensions/*/agents、node_modules 迭代），发现路径由 discovery.json
-    // （Pi resources_discover，ADR-028）声明——与 subagents 域共用同一份发现结果。
+    // F-4/D-003: 复用 modelService 的 AgentRegistry（统一资源发现 + 包内 builtin），
+    // 取代旧 orchestration/agent-discovery.ts 的 7 路径自爬。agent 发现走
+    // shared/resource-discovery（ADR-031），与 subagents 域共用同一份发现结果。
     const agentRegistry = modelService.getAgentRegistry();
 
     try {

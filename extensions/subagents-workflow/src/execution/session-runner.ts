@@ -123,7 +123,7 @@ export interface SessionRunnerContext {
   cwd: string;
   /** agent 配置目录（由 Pi 核心 getAgentDir() 决定，默认 ~/.pi/agent）。 */
   agentDir: string;
-  /** 额外 skill 目录（从 discovery.json 读，靠前覆盖靠后）。供子进程 --skill 注入。 */
+  /** 额外 skill 目录（ADR-031 废弃 discovery.json 后固定为空数组）。供子进程 --skill 注入。 */
   skillDirs: string[];
   /** 主 agent cwd（fork sessionDir 编码用）。fork 未开启时等于 cwd。 */
   mainCwd: string;
@@ -492,8 +492,8 @@ export async function runSpawn(
   applySchemaEnvToChildEnv(childEnv, opts.schemaEnv);
 
   // i. 组装 args + spawn
-  // [M3 恢复] skillPaths: 主 session 的 skillDirs + 调用方传入的 skillPath（与旧 in-process run 一致）。
-  // skillDirs 由 SubagentService.buildSessionRunnerContext 从 discovery.json 读入。
+  // [M3 恢复] skillPaths: 主 session 的 skillDirs + 调用方传入的 skillPath。
+  // ADR-031 后 skillDirs 固定为空，仅 opts.skillPath 生效（agent({skill}) 解析）。
   const skillPaths = [...ctx.skillDirs, opts.skillPath].filter(
     (p): p is string => typeof p === "string" && p.length > 0,
   );

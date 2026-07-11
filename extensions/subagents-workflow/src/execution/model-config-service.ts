@@ -6,7 +6,11 @@
 // 上游：SubagentService.execute 内部调 resolveModel。
 // session_start 时经 initModel 注入 modelRegistry。
 
+import { findWorkspaceRoot } from "../shared/resource-discovery.ts";
 import { AgentRegistry, createPackageBuiltinRegistry } from "./agent-registry.ts";
+import {
+  loadGlobalConfig,
+} from "./config.ts";
 import {
   type AgentConfig,
   type ModelInfo,
@@ -15,10 +19,6 @@ import {
   resolveModel,
 } from "./model-resolver.ts";
 import type { SubagentsGlobalConfig } from "./types.ts";
-import {
-  loadGlobalConfig,
-} from "./config.ts";
-import { DiscoveryConfigLoader } from "./discovery-config.ts";
 
 // ============================================================
 // 类型
@@ -27,12 +27,8 @@ import { DiscoveryConfigLoader } from "./discovery-config.ts";
 /** Service 构造参数（进程级，跨 session 不变）。 */
 export interface ModelConfigServiceInit {
   agentDir: string;
-  /**
-   * 资源发现契约加载器（宿主声明的多 skill/agent 目录）。
-   * undefined 时仅用 agentDir 单目录（默认行为，零破坏）。
-   * 详见 ADR-028。
-   */
-  discoveryLoader?: DiscoveryConfigLoader;
+  /** 项目根目录（ctx.cwd，用于推导 workspaceRoot 扫描 project 级资源）。 */
+  cwd: string;
 }
 
 /** session_start 注入参数（session 级，每次重建）。 */
@@ -73,8 +69,7 @@ export class ModelConfigService {
   private globalConfig: SubagentsGlobalConfig;
   private readonly agentRegistry: AgentRegistry;
   private readonly agentRegistryDir: string;
-  /** discovery 加载器（resources_discover 时重新读，喂主 agent skill）。 */
-  private readonly discoveryLoader: DiscoveryConfigLoader | undefined;
+  private readonly workspaceRoot: string;
   private modelRegistry: ModelRegistryLike | null = null;
   private _sessionId: string | undefined;
   /** 主 agent 当前 model 缓存（session_start 注入，model_select 刷新）。 */
@@ -85,24 +80,14 @@ export class ModelConfigService {
 
   constructor(init: ModelConfigServiceInit) {
     this.agentRegistryDir = init.agentDir;
-    this.discoveryLoader = init.discoveryLoader;
+    this.workspaceRoot = findWorkspaceRoot(init.cwd);
     this.globalConfig = loadGlobalConfig(init.agentDir);
-    // agentDirs：discovery 声明的目录（靠前覆盖靠后），空则回退默认 agentDir 单目录
-    const agentDirs = this.resolveAgentDirs();
-    this.agentRegistry = new AgentRegistry(agentDirs);
+    // 统一资源发现（ADR-031）：扫描源由 workspaceRoot + agentDir 推导
+    this.agentRegistry = new AgentRegistry({
+      workspaceRoot: this.workspaceRoot,
+      agentDir: this.agentRegistryDir,
+    });
     this.agentRegistry.discoverAll(this.builtinRegistry);
-  }
-
-  /**
-   * 解析 agent 发现目录列表。
-   * discovery.json 的 agentDirs 非空时用之（靠前覆盖靠后），否则回退 [agentDir] 默认。
-   */
-  private resolveAgentDirs(): string[] {
-    const discovery = this.discoveryLoader?.load();
-    if (discovery && discovery.agentDirs.length > 0) {
-      return [...discovery.agentDirs];
-    }
-    return [this.agentRegistryDir];
   }
 
   // ── 生命周期（index.ts 调）──────────────────────────────
@@ -188,15 +173,6 @@ export class ModelConfigService {
    */
   getAgentRegistry(): AgentRegistry {
     return this.agentRegistry;
-  }
-
-  /**
-   * discovery.json 声明的 skill 目录（供 SubagentService 注入子 session）。
-   * 每次调用重新读 loader（mtime 缓存），支持宿主运行时修改 discovery.json 后下次生效。
-   */
-  getDiscoverySkillDirs(): string[] {
-    const discovery = this.discoveryLoader?.load();
-    return discovery ? [...discovery.skillDirs] : [];
   }
 
   /** modelRegistry（SubagentService 构造 factoryCtx 时读）。已注入保证非 null。 */
