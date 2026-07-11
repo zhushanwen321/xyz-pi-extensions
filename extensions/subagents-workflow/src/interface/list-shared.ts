@@ -27,8 +27,6 @@ export interface ViewState {
   filterText: string;
   detailMode: boolean;
   disposed: boolean;
-  /** sync 取消提示（runtime 无法主动 abort sync，提示用户按对话流 Esc）。 */
-  syncCancelHint: boolean;
 }
 
 /** 详情翻屏上下文（processKey 算步长用）。 */

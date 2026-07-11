@@ -208,7 +208,7 @@ function buildCompactLines(d: SubagentToolResult, theme: ThemeLike): string[] {
       width,
     )];
   }
-  // ── start 分支：background（sync 已删除）──
+  // ── start 分支：background ──
   if ("bgResponse" in d) {
     return [truncLine(
       `${theme.fg("accent", "●")} ${theme.fg("dim", "background: ")}${theme.fg("accent", d.subagentId ?? "?")}`

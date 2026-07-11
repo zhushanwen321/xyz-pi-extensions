@@ -196,9 +196,9 @@ export async function cancelHandler(
   // step 1: id 不存在（findRecord 只查内存 running record，不从 session.jsonl 重建）
   const rec = service.findRecord(id);
   if (!rec) throw new Error(`No subagent record with id "${id}"`);
-  // step 2: mode 非 background（sync record controller 为 undefined，不可 cancel）
+  // step 2: controller 检查（controller 为 undefined 表示 record 已终态或未启动）
   if (rec.mode !== "background") {
-    throw new Error("Cannot cancel sync subagent (only background can be cancelled)");
+    throw new Error(`Cannot cancel subagent ${id} (unsupported mode: ${rec.mode})`);
   }
   // step 3: service.cancel boolean（list-view 契约不变）；false = 已终态（CAS 抢锁失败）。
   // 注意：不嵌入 rec.status——findRecord 快照可能已过期（TOCTOU：cancel 期间 detached

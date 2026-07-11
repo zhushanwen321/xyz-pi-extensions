@@ -562,11 +562,7 @@ export class SubagentsListComponent implements Component {
       content.push(truncLine(t.fg("accent", `▸ ${record.currentActivity.label}`), width));
     }
 
-    // syncCancelHint
-    if (this.state.syncCancelHint) {
-      content.push("");
-      content.push(truncLine(t.fg("warning", "Cannot stop a sync subagent here — press Esc in the chat to abort"), width));
-    }
+
 
     content.push("");
     content.push(truncLine(t.fg("accent", t.bold("── Output ──")), width));

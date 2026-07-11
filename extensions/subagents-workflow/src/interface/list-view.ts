@@ -25,8 +25,7 @@
 //   1. G-017 防叠加：模块级 activeView 单例，进入前 close()，factory 内 setActiveView
 //   2. 导航只用方向键 matchesKey("up"|"down")，禁 j/k（避 filter 冲突）
 //   3. overlay 退出 wrappedDone：幂等→标记→unsubscribe→clearAnimTimer→clearActiveView→done
-//   4. sync record 不调 service.cancel（会污染状态），UI 层 syncCancelHint 提示
-//   5. 不调 theme.bg（背景由 Pi overlay 容器施加），只 fg/bold
+//   4. 不调 theme.bg（背景由 Pi overlay 容器施加），只 fg/bold
 //   6. 所有行经 truncLine（ANSI 安全）
 //   7. 边框不调 renderShell:"self"（守 default-shell / 无残影契约）
 //   8. 不用 Pi 的 overlay margin（那是物理留白会透出底内容）——改 margin:0 全屏覆盖
@@ -129,7 +128,7 @@ export async function createSubagentsView(
         filterText: "",
         detailMode: false,
         disposed: false,
-        syncCancelHint: false,
+
       };
 
       // 订阅 store 变化 → invalidate + requestRender（store 驱动重渲）。
@@ -233,7 +232,6 @@ export async function createSubagentsView(
 //   ║  阶段 2（detail 焦点，detailMode=true）：左侧锚定，滚右侧详情       ║
 //   ║    Esc 返回阶段 1 / ↑↓ PgUp/PgDn Home End 滚右侧 eventLog          ║
 //   ║    x 停止：background → service.cancel(id)（真正 abort）         ║
-//   ║             sync → 仅 syncCancelHint（runtime 无法主动 abort sync） ║
 //   ╚══════════════════════════════════════════════════════════════════╝
  *
  * 返回 KeyResult：changed 表示状态变更需重绘；exit 表示调用方应关闭 overlay。
@@ -256,7 +254,6 @@ export const processKey: KeyHandler = (
     if (matchesKey(data, "escape")) {
       state.detailMode = false;
       state.scrollOffset = 0;
-      state.syncCancelHint = false;
       return { changed: true, exit: false };
     }
     if (matchesKey(data, "up")) {
@@ -289,7 +286,7 @@ export const processKey: KeyHandler = (
     }
     // x：停止当前 record
     if (data === "x" && selected) {
-      const changed = handleCancel(selected, service, state, notify);
+      const changed = handleCancel(selected, service, notify);
       return { changed, exit: false };
     }
     return { changed: false, exit: false };
@@ -321,7 +318,6 @@ export const processKey: KeyHandler = (
       // 会把置顶的 task 滚出视口顶——task 是「它在干嘛」的唯一线索（streaming 尤甚），
       // 必须可见。event log 在下方，向下滚可看历史。
       state.scrollOffset = 0;
-      state.syncCancelHint = false;
       return { changed: true, exit: false };
     }
     return { changed: false, exit: false };
@@ -355,29 +351,22 @@ function detailScrollMax(detailCtx: DetailKeyContext | undefined): number {
   return Math.max(0, content - viewH);
 }
 
-/** 处理取消按键（x）。background 真正 abort；sync 仅提示。返回是否变化。 */
+/** 处理取消按键（x）。background 真正 abort。返回是否变化。 */
 function handleCancel(
   record: SubagentRecord,
   service: SubagentService | null,
-  state: ViewState,
   notify: NotifyFn | undefined,
 ): boolean {
   if (record.status !== "running") {
     notify?.(`Cannot stop: record is ${record.status}`, "warning");
     return false;
   }
-  if (record.mode === "background") {
-    if (!service) {
-      notify?.("Runtime not ready, cannot stop", "error");
-      return false;
-    }
-    const ok = service.cancel(record.id);
-    notify?.(ok ? `Requested stop for ${record.id}` : `Stop failed (record may have ended)`, ok ? "info" : "warning");
-    return true;
+  if (!service) {
+    notify?.("Runtime not ready, cannot stop", "error");
+    return false;
   }
-  // sync：runtime 无法主动 abort（signal 来自 Pi tool 框架），仅提示
-  state.syncCancelHint = true;
-  notify?.("Press Esc in the chat to abort a sync subagent", "info");
+  const ok = service.cancel(record.id);
+  notify?.(ok ? `Requested stop for ${record.id}` : `Stop failed (record may have ended)`, ok ? "info" : "warning");
   return true;
 }
 
