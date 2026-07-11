@@ -23,11 +23,11 @@ import type { SubagentsGlobalConfig } from "./types.ts";
  */
 const DEFAULT_CONFIG: SubagentsGlobalConfig = {
   version: 1,
-  maxConcurrent: 4,
+  maxConcurrent: 6,
 };
 
 /** 默认 maxConcurrent（DEFAULT_CONFIG 的镜像，sanitize 用）。 */
-const DEFAULT_MAX_CONCURRENT = 4;
+const DEFAULT_MAX_CONCURRENT = 6;
 
 // ============================================================
 // 路径

@@ -96,9 +96,8 @@ export interface SubagentServiceSessionInit {
   sessionId: string;
 }
 
-/** background 优先级（低，让步）；sync 优先级（高，抢占）。 */
+/** background 优先级（保留 priority 排序机制，单一值）。 */
 const PRIORITY_BACKGROUND = 1000;
-const PRIORITY_SYNC = 0;
 
 /** [MF#5] sessionId 短哈希前缀（6 hex）。两个并发 Pi 进程在同一 repo fork 时，seq 各自从 0
  *  自增 → recordId=run-1 / branch=pi-sub-run-1 冲突 → 第二个 git worktree add -b 失败。
@@ -260,14 +259,8 @@ export class SubagentService {
   }
 
   /**
-   * 统一执行入口。sync/background 共用，mode 由 opts.wait + agentConfig.defaultBackground 判定。
-   * 内部完成：mode 判定 → 确认（经回调）→ 模型解析 → 执行 → 收尾。
-   *
-   * mode 判定规则（内化在 Service，不暴露给 tool 层）：
-   *   wait === false → background（用户显式要求异步）
-   *   wait === true → sync（用户显式要求同步）
-   *   wait === undefined + agentConfig.defaultBackground === true → background
-   *   否则 → sync
+   * 统一执行入口。mode 固定 background（sync 已删除）。
+   * 内部完成：模型解析 → 执行 → 收尾。
    *
    * @param opts.ctxModel  主 agent 当前模型（模型解析第三层兼底）。undefined 时仅依赖 override/agentConfig。
    */
@@ -301,8 +294,8 @@ export class SubagentService {
       );
     }
 
-    // mode 判定（业务规则归 Service，tool 层只传 wait 意图）
-    const mode = this.resolveMode(opts);
+    // mode 固定 background（sync 模式已删除）
+    const mode: ExecutionMode = "background";
     const ctx = this.buildSessionRunnerContext(opts.cwd);
 
     // ── 1. IDENTITY 解析（确认 → agentConfig → resolveModel）──
@@ -328,38 +321,18 @@ export class SubagentService {
       } catch (err) {
         // create 失败→不进入 run，finalizeFailed 统一收尾（含 emitPendingUnregister failed）
         const _result = await this.finalizeFailed(record, err);
-        return this.buildEarlyFailedHandle(record, mode);
+        return this.buildEarlyFailedHandle(record);
       }
     }
 
-    // ── 3. MODE 分叉：signal/priority（仅此 2 处即时差异）──
-    const signal = mode === "background"
-      ? record.controller!.signal
-      : opts.signal;
-    const priority = mode === "background" ? PRIORITY_BACKGROUND : PRIORITY_SYNC;
+    // ── 3. MODE 固定 background：signal/controller、priority 固定 ──
+    const signal = record.controller!.signal;
+    const priority = PRIORITY_BACKGROUND;
 
-    // ── 4-7. sync 直接 await；background 包 detached 立即返回 id ──
-    if (mode === "sync") {
-      // [长期方案] 嵌套 sync（subagent 内部再发起 subagent）不回流 onUpdate。
-      // 根因：递归 sync 时，内层 subagent 的 SubagentResultComponent 也启动 setInterval 驱动
-      // spinner，与外层 block 的 setInterval 在 Pi 嵌套 tool_execution 渲染管线下互相干扰，
-      // 导致 statusLine 帧堆叠残影（普通单层 sync 不残影已证 spinner 机制本身无问题）。
-      // 解法：嵌套层 onUpdate=undefined → runAndFinalize 的 onEvent=undefined → execute 期间不推
-      // partial renderResult → 内层 component 直到完成才创建（done 态）→ maybeToggleSpinner
-      // 检测非 running 不启动 setInterval。顶层回归单 setInterval，不堆叠。内层 block 仅显示
-      // renderCall 静态标题 + 完成结果（内层进度对顶层用户价值低，Ctrl+O 仍可看实时详情）。
-      // nestingDepth 在 execute 入口由 execCtxAls 推导（L2 内调 L3 时 parentNesting 非空 → ≥1）。
-      const nestedSyncOnUpdate = nestingDepth > 0 ? undefined : opts.onUpdate;
-      await this.runAndFinalize(record, { ...opts, onUpdate: nestedSyncOnUpdate, worktree: worktreeHandle }, ctx, identity, signal, priority);
-      return { mode: "sync", record: snapshot(record), details: project(record) };
-    }
-
-    // background：立即返回 subagentId + sessionFile（窗口期可能 undefined）+ details（status=running）。
-    // 步骤 4-6 在 detached promise 里跑。
-    // B1：background 不回流 onUpdate（与 sync 嵌套抑制同理——任何嵌套 subagent 的 onUpdate 都须
-    // undefined，防 SubagentResultComponent spinner setInterval 堆叠）。此外 detached 运行对 tool
-    // 层不可见，完成由 notify 驱动新 turn；转发 onUpdate 还会被 liftSync 误标 syncResponse(mode:"sync")
-    // → spinner setInterval 泄漏。sync 嵌套抑制见上方 nestedSyncOnUpdate。
+    // ── 4-7. background 包 detached 立即返回 id ──
+    // background 不回流 onUpdate（任何嵌套 subagent 的 onUpdate 都须 undefined，防
+    // SubagentResultComponent spinner setInterval 堆叠）。detached 运行对 tool 层不可见，
+    // 完成由 notify 驱动新 turn。
     const bgDetails = project(record);
     this.kickOffBackground(record, { ...opts, onUpdate: undefined, worktree: worktreeHandle }, ctx, identity, signal, priority);
     return { mode: "background", subagentId: record.id, sessionFile: record.sessionFile, details: bgDetails };
@@ -461,17 +434,7 @@ export class SubagentService {
     return this.store.collectRecords(limit, statusFilter, this.sessionId ?? undefined);
   }
 
-  // ── 执行内部：mode 判定 + 身份解析 + record 创建 ──────────
-
-  /** mode 业务规则：wait 显式 > agentConfig.defaultBackground > sync 兜底。 */
-  private resolveMode(opts: ExecuteOptions): ExecutionMode {
-    if (opts.wait === false) return "background";
-    if (opts.wait === true) return "sync";
-    // wait === undefined：看 agent 的 defaultBackground
-    const agentConfig = this.modelService.getAgentConfig(opts.agent);
-    if (agentConfig?.defaultBackground === true) return "background";
-    return "sync";
-  }
+  // ── 执行内部：身份解析 + record 创建 ──────────
 
   /** 步骤 1：身份解析。agentConfig → resolveModel（三层：override → agentConfig → 主 agent model）。 */
   private async resolveIdentity(opts: ExecuteOptions): Promise<ResolvedIdentity> {
@@ -527,16 +490,10 @@ export class SubagentService {
   }
 
   /** [MF#R4] worktree 前置失败的 early-return handle。
-   *  按 mode 分支返回 ExecutionHandle 的正确判别变体——不能统一返回 sync 形状：
-   *  background 时 record 已被 finalizeFailed 收尾为 failed、detached promise 从未启动，
-   *  若返回 sync 形状（缺 subagentId/sessionFile），下游 startHandler 读 handle.subagentId
-   *  得 undefined → 用户见"已启动"实则已失败且无法 cancel。 */
-  private buildEarlyFailedHandle(record: ExecutionRecord, mode: ExecutionMode): ExecutionHandle {
+   *  record 已被 finalizeFailed 收尾为 failed、detached promise 从未启动。 */
+  private buildEarlyFailedHandle(record: ExecutionRecord): ExecutionHandle {
     const details = project(record);
-    if (mode === "background") {
-      return { mode: "background", subagentId: record.id, sessionFile: record.sessionFile, details };
-    }
-    return { mode: "sync", record: snapshot(record), details };
+    return { mode: "background", subagentId: record.id, sessionFile: record.sessionFile, details };
   }
 
   // ── 执行内部：run + finalize（sync/bg 共用）──────────────
@@ -551,13 +508,13 @@ export class SubagentService {
     priority: number,
     rawOnEvent?: (event: AgentEvent) => void,
   ): Promise<AgentResult> {
-    // 仅 background 进并发池限流。sync 不进池，原因：
-    // ① sync 由主 agent sequential executionMode 天然串行，无需限流；
-    // ② sync 嵌套持有槽位会死锁——顶层 + 每层 sync 各占 1 槽，嵌套深度达 maxConcurrent
-    //   时子层 acquire 永久排队、父层永等子层、release 永不触发（实测 maxConcurrent=4 → L5 卡死）。
-    // sync 嵌套深度由 MAX_FORK_DEPTH (session-context-resolver.ts) 兜底，不靠池限。
+    // 仅 background 进并发池限流，分层配额：每层嵌套 depth 让有效配额 -1（下限 1）。
+    // 顶层 depth=0 拿满配额；嵌套越深有效并发越小，防子 agent fan-out 压垮主 agent 的 pool。
     const pooled = record.mode === "background";
-    if (pooled) await this.pool.acquire(priority);
+    if (pooled) {
+      const effectiveMaxConcurrent = Math.max(1, this.pool.maxConcurrent - record.depth);
+      await this.pool.acquire(priority, effectiveMaxConcurrent);
+    }
     // onEvent 包装：AgentEvent → onUpdate(project(record)) 回流调用方
     const onEvent = rawOnEvent
       ?? (opts.onUpdate

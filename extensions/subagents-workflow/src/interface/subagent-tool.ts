@@ -32,7 +32,6 @@ import { adapter, cancelHandler, listHandler, startHandler } from "./subagent-ac
 interface StartParam {
   task: string;
   agent?: string;
-  wait?: boolean;
   model?: string;
   thinkingLevel?: string;
   skillPath?: string;
@@ -95,9 +94,6 @@ const SubagentParams = Type.Object({
     }),
     agent: Type.Optional(Type.String({
       description: 'Agent name (system prompt + tools). If omitted, defaults to "general-purpose" — a generic agent that inherits the main agent\'s model and project context. Available: general-purpose (default fallback), worker, researcher, scout, planner, reviewer, oracle, context-builder. Custom agents configurable.',
-    })),
-    wait: Type.Optional(Type.Boolean({
-      description: "Execution mode. true (default) = sync: blocks until done, returns result. false = background: returns a subagentId immediately; on completion a message auto-injects that triggers a new turn (no need to poll). Use false for parallel fan-out (multiple start actions with wait:false in one message run concurrently, default maxConcurrent=4) or long tasks.",
     })),
     model: Type.Optional(Type.String({
       description: 'Model override in "provider/modelId" format. Resolution order (top wins): (1) this param, (2) agent .md frontmatter model, (3) the main agent\'s current model (zero-config default). An explicit model (param or frontmatter) that is missing or unauthorized THROWS — there is no silent fallback to the main model. Omit this param to inherit the main model.',
@@ -178,17 +174,15 @@ export function registerSubagentTool(pi: ExtensionAPI): void {
     label: "Subagent",
     description: `Delegate a task to a specialized subagent via an explicit action.
 
-CRITICAL — this tool is registered with executionMode "sequential": multiple \`subagent\` calls in the SAME message run one-after-another, NOT in parallel. The first must finish before the next starts. To get real concurrency, use background mode (start with wait:false) — background calls return immediately and the underlying tasks run concurrently in the pool (default maxConcurrent=4; extras queue).
+CRITICAL — this tool is registered with executionMode "sequential": multiple \`subagent\` calls in the SAME message run one-after-another, NOT in parallel. The first must finish before the next starts. To get real concurrency, all start actions run in background mode — background calls return immediately and the underlying tasks run concurrently in the pool (default maxConcurrent=6; extras queue).
 
 ## Actions
 
-- action:"start" — run a subagent. Pass startParam: { task, agent?, wait?, ... }. Ignores listParam/cancelParam.
-  - sync (wait:true, default): blocks until the subagent finishes, returns its result. Use when the next step needs the result.
-  - background (wait:false): returns a subagentId immediately; the subagent runs detached and keeps running even if you stop. On completion a message is auto-injected that triggers a new turn so you can process the result.
+- action:"start" — run a subagent. Pass startParam: { task, agent?, ... }. The subagent always runs in background: it returns a subagentId immediately, runs detached, and keeps running even if you stop. On completion a message is auto-injected that triggers a new turn so you can process the result.
 - action:"list" — list subagents. Pass listParam: { includeFinished?: boolean, limit?: number }. Default: running only, limit 20. Each item includes a sessionFile path — read it with the \`read\` tool for full detail (the jsonl is append-only, flushed in real time). Ignores startParam/cancelParam.
-- action:"cancel" — cancel a background subagent. Pass cancelParam: { subagentId }. Only background subagents can be cancelled; sync subagents are cancelled via Esc in the chat. Ignores startParam/listParam.
+- action:"cancel" — cancel a background subagent. Pass cancelParam: { subagentId }. Only background subagents can be cancelled. Ignores startParam/listParam.
 
-## After launching background — do NOT wait
+## After launching — do NOT wait
 
 Completion auto-notifies you (a message is injected that wakes your next turn). So:
 - DO NOT sleep, busy-wait, or poll in a loop after launching. There is no poll action — use action:"list" only when you concretely need the current state.
@@ -197,16 +191,14 @@ Completion auto-notifies you (a message is injected that wakes your next turn). 
 
 ## Calling patterns
 
-- single — one sync subagent for one task (the common case).
-- chain — dependent steps where B needs A's output: sync calls across turns.
-- parallel / fan-out — N independent tasks concurrently: send N \`subagent\` calls with action:"start" + wait:false in the SAME message. Each returns a subagentId at once; tasks run concurrently. Then do other work, or just stop.
-- background — one long-running task you don't want to block on: action:"start" + wait:false, then move on. Cancel later with action:"cancel" if the direction is wrong.
+- single — one subagent for one task (the common case).
+- chain — dependent steps where B needs A's output: send the next start only after A's completion notification.
+- parallel / fan-out — N independent tasks concurrently: send N \`subagent\` calls with action:"start" in the SAME message. Each returns a subagentId at once; tasks run concurrently. Then do other work, or just stop.
+- background — one long-running task you don't want to block on: action:"start", then move on. Cancel later with action:"cancel" if the direction is wrong.
 
 ## Anti-patterns
 
-- Multiple sync (wait:true) calls in one message expecting parallelism → they serialize; a slow first call delays the rest and long chains may get interrupted.
 - Launching background, then sleeping/polling instead of working or stopping.
-- Using background for a result you need right now → use sync.
 
 ## Nested spawning
 
@@ -264,8 +256,7 @@ const subagentRenderResult: SubagentRenderResultCb = (result, options, theme, ct
  *   ║  service = getSubagentService() —— 未初始化 throw                  ║
  *   ║                                                                    ║
  *   ║  switch(params.action):                                           ║
- *   ║    "start"  → startHandler(service, params.startParam, signal,    ║
- *   ║                onUpdate) → 领域对象                                 ║
+ *   ║    "start"  → startHandler(service, params.startParam, signal) → 领域对象  ║
  *   ║    "list"   → listHandler(service, params.listParam) → 领域对象    ║
  *   ║    "cancel" → cancelHandler(service, params.cancelParam) → 领域对象║
  *   ║                                                                    ║
@@ -280,19 +271,17 @@ const executeSubagent: SubagentExecuteCb = async (
   _toolCallId,
   params,
   signal,
-  onUpdate,
+  _onUpdate,
   _ctx,
 ) => {
-  // B1：onUpdate 仅在 sync 模式有意义。background execute 立即返回，
-  // detached 运行不向 tool 层回流（完成由 notify 驱动新 turn）。
-  // service.execute 内部对 background 路径同样不安装 onEvent（见 subagent-service），
-  // 双保险防 liftSync 把 bg 误标成 syncResponse → spinner 泄漏。
+  // background 模式：execute 立即返回，detached 运行不向 tool 层回流 onUpdate
+  //（完成由 notify 驱动新 turn）。onUpdate 参数保留以兼容 SDK 回调签名，但不消费。
   const service = getSubagentService();
   if (!service) throw new Error("subagents runtime not initialized");
 
   switch (params.action) {
     case "start":
-      return adapter({ action: "start", domain: await startHandler(service, params.startParam, signal, onUpdate, _ctx?.model) });
+      return adapter({ action: "start", domain: await startHandler(service, params.startParam, signal, _ctx?.model) });
     case "list":
       return adapter({ action: "list", domain: listHandler(service, params.listParam) });
     case "cancel":

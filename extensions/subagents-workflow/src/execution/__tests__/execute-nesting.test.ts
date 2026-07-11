@@ -3,10 +3,10 @@
 // D-030~D-033 嵌套 / 并发池 / 节流回归锁。独立于 execute-integration.test.ts。
 //
 // 用例：
-//   D-032  sync 不进并发池（防嵌套死锁）；background 仍进池
+//   D-032  background 进并发池（分层配额：max(1, maxConcurrent - depth)）
 //   D-033  execute 入口通用嵌套护栏（execCtxAls 计 fork+非 fork 嵌套，深度>MAX 拒）
-//   嵌套抑制 nestingDepth>0 的 sync onUpdate 被置 undefined（防 spinner 堆叠）
-//   节流清理 sync finalize 后 throttleState 无残留（clearThrottle 生效）
+//   嵌套抑制 background onUpdate 恒 undefined（防 spinner 堆叠）
+//   节流清理 background finalize 后 throttleState 无残留（clearThrottle 生效）
 //
 // ── mock 策略 ──
 //
@@ -244,29 +244,10 @@ describe("嵌套护栏 / 并发池 / 节流（D-030~D-033 回归锁）", () => {
   });
 
   // ============================================================
-  // D-032: sync 不进并发池
+  // D-032: background execute 进并发池（分层配额）
   // ============================================================
 
-  it("[D-032] sync execute 不调 pool.acquire（不进并发池）", async () => {
-    const { service } = setup();
-
-    const pool = Reflect.get(service, "pool") as { acquire: ReturnType<typeof vi.fn>; release: ReturnType<typeof vi.fn> };
-    const acquireSpy = vi.spyOn(pool, "acquire");
-
-    // 不 await 立即——需先等 spawn 拿到 child 控制器才能驱动完成。
-    const execPromise = service.execute({ task: "sync no pool", wait: true, ctxModel });
-    await waitForSpawn();
-    await driveChildToCompletion(lastSpawnedChild(), [
-      { type: "turn_end" },
-      { type: "message_end", message: { usage: { input: 1 } } },
-    ]);
-    await execPromise;
-
-    // 回退为 always-pooled 会死锁（maxConcurrent=4 → L5 卡死），此断言锁住 D-032
-    expect(acquireSpy).not.toHaveBeenCalled();
-  });
-
-  it("[D-032] background execute 调 pool.acquire（仍进池限流）", async () => {
+  it("[D-032] background execute 调 pool.acquire（进池限流）", async () => {
     const { service } = setup();
 
     const pool = Reflect.get(service, "pool") as { acquire: ReturnType<typeof vi.fn>; release: ReturnType<typeof vi.fn> };
@@ -322,7 +303,7 @@ describe("嵌套护栏 / 并发池 / 节流（D-030~D-033 回归锁）", () => {
     ]);
     const result = await execPromise;
 
-    expect(result.mode).toBe("sync");
+    expect(result.mode).toBe("background");
   });
 
   // ============================================================

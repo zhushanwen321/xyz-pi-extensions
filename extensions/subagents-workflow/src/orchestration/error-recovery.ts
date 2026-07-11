@@ -208,7 +208,7 @@ function dispatchAgentCall(
   const liveRecord = createRecord(String(msg.callId), {
     agent: agentName,
     model: msg.opts.model ?? "default",
-    mode: "sync",
+    mode: "background",
     task: msg.opts.prompt,
     startedAt: Date.now(),
   });

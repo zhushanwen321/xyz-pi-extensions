@@ -22,20 +22,14 @@ import { Container, Text } from "@earendil-works/pi-tui";
 import type { AgentToolResult, Theme } from "@mariozechner/pi-coding-agent";
 
 import type {
-  ExecutionStatus,
   ListResponse,
   SubagentToolResult,
-  SyncResponse,
 } from "../execution/types.ts";
 import {
   extractAgentName,
   firstLine,
-  formatDisplayItem,
   formatElapsedSeconds,
-  formatEventLine,
-  formatTokens,
   sanitizeLabel,
-  spinnerGlyph,
   statusGlyph,
   type ThemeLike,
   truncLine,
@@ -50,9 +44,6 @@ const STREAM_PREFIX = "  ⎿ ";
 
 /** footer 用的纯空格缩进（与 STREAM_PREFIX 等宽 4 列，但不带 ⎿）。 */
 const FOOTER_PREFIX = "    ";
-
-/** 压缩视图滚动区最多展示的 eventLog 条数。 */
-const COMPACT_SCROLL_LINES = 3;
 
 /**
  * 获取终端宽度（参照 nicobailon getTermWidth）。
@@ -217,7 +208,7 @@ function buildCompactLines(d: SubagentToolResult, theme: ThemeLike): string[] {
       width,
     )];
   }
-  // ── start 分支：sync / bg ──
+  // ── start 分支：background（sync 已删除）──
   if ("bgResponse" in d) {
     return [truncLine(
       `${theme.fg("accent", "●")} ${theme.fg("dim", "background: ")}${theme.fg("accent", d.subagentId ?? "?")}`
@@ -225,29 +216,7 @@ function buildCompactLines(d: SubagentToolResult, theme: ThemeLike): string[] {
       width,
     )];
   }
-  if (!("syncResponse" in d)) return [truncLine(theme.fg("warning", "(subagent: no sync response)"), width)];
-  const sync = d.syncResponse;
-
-  // [STEP3] 对齐 nicobailon collapsed 布局 + 数据源：
-  //   首行 = icon + agent；
-  //   中间 = displayItems 滚动区（从 turns[] 派生，formatDisplayItem 格式化，
-  //          与 nicobailon 的 `→ formatToolCall` 完全一致）；
-  //   底部 = usage 独立行。
-  // 实验目的：验证空行是否由数据源（eventLog vs displayItems）引起。
-  const lines: string[] = [];
-  lines.push(truncLine(buildHeaderLine(sync, theme), width));
-
-  const recentItems = sync.displayItems.slice(-COMPACT_SCROLL_LINES);
-  for (const item of recentItems) {
-    lines.push(truncLine(`${theme.fg("dim", STREAM_PREFIX)}${formatDisplayItem(item, theme)}`, width));
-  }
-
-  // 底部：usage 独立行（各字段 >0 才显示，全零则省略整行）。
-  const usageStr = buildStats(sync, theme);
-  if (usageStr) {
-    lines.push(truncLine(usageStr, width));
-  }
-  return lines;
+  return [truncLine(theme.fg("warning", "(subagent: no response)"), width)];
 }
 
 /**
@@ -275,21 +244,7 @@ function buildExpandedLines(d: SubagentToolResult, theme: ThemeLike): string[] {
     ));
     return lines;
   }
-  if (!("syncResponse" in d)) return [truncLine(theme.fg("warning", "(subagent: no sync response)"), width)];
-  const sync = d.syncResponse;
-
-  // sync expanded：完整 eventLog（从 turns[] 派生，离散语义事件）+ 交付物。
-  lines.push(truncLine(buildStatusLineFromSync(sync, theme), width));
-  lines.push("");
-  for (const entry of sync.eventLog) {
-    lines.push(truncLine(`${theme.fg("dim", STREAM_PREFIX)}${formatEventLine(entry, theme)}`, width));
-  }
-  const delivery = buildDeliveryLineFromSync(sync, theme);
-  if (delivery) {
-    lines.push("");
-    lines.push(truncLine(`${theme.fg("dim", STREAM_PREFIX)}${delivery}`, width));
-  }
-  return lines;
+  return [truncLine(theme.fg("warning", "(subagent: no response)"), width)];
 }
 
 // ============================================================
@@ -300,7 +255,7 @@ function buildExpandedLines(d: SubagentToolResult, theme: ThemeLike): string[] {
 function isDetailsStructurallyComplete(d: SubagentToolResult): boolean {
   switch (d.action) {
     case "start":
-      return "syncResponse" in d || "bgResponse" in d;
+      return "bgResponse" in d;
     case "list":
       return "listResponse" in d;
     case "cancel":
@@ -335,80 +290,6 @@ function getStringText(item: unknown): string | undefined {
 }
 
 /**
- * [STEP2] 构建 header 行（对齐 nicobailon collapsed 首行）：icon + agent。
- * 不含 stats（stats 移到末尾独立行）。running 态用 spinner 作 icon。
- */
-function buildHeaderLine(
-  s: { status: ExecutionStatus; turns: number; totalTokens: number; elapsedSeconds: number; agent: string },
-  theme: ThemeLike,
-): string {
-  const glyph = statusGlyph(s.status);
-  const seed = s.turns + s.totalTokens + s.elapsedSeconds;
-  const icon = glyph.icon ?? spinnerGlyph(seed);
-  return `${theme.fg(glyph.color, icon)} ${theme.fg("toolTitle", theme.bold(s.agent))}`;
-}
-
-/**
- * 构建 sync 状态行（从 SyncResponse 取字段，删 backgroundId 分支）。
- *
- * [DEPRECATED-STEP2] 被 buildHeaderLine + buildStats 拆分取代。
- * 保留供 expanded / 其他调用点使用，待确认无引用后删除。
- */
-function buildStatusLineFromSync(
-  s: {
-    status: ExecutionStatus;
-    turns: number;
-    totalTokens: number;
-    elapsedSeconds: number;
-  },
-  theme: ThemeLike,
-): string {
-  const glyph = statusGlyph(s.status);
-  // seed-based spinner（参照 nicobailon runningGlyph）：用 progress 字段派生帧，
-  // 不用 Date.now() + setInterval。onUpdate 驱动重绘时 seed 变化 → 自动换帧。
-  const seed = s.turns + s.totalTokens + s.elapsedSeconds;
-  const icon = glyph.icon ?? spinnerGlyph(seed);
-  const glyphStr = theme.fg(glyph.color, icon);
-
-  const statsStr = buildStats(s, theme);
-  const statsPrefix = statsStr ? ` ${theme.fg("dim", "·")} ${statsStr}` : "";
-
-  return `${glyphStr}${statsPrefix}`;
-}
-
-/**
- * 构建 stats 字符串：`N turns · Nk · Ns`（零值隐藏，全零返回 ""）。
- * 各字段 dim 色，用 `·` 分隔（spec 分隔符语义：同级并列字段）。
- */
-function buildStats(d: { turns: number; totalTokens: number; elapsedSeconds: number }, theme: ThemeLike): string {
-  const parts: string[] = [];
-  if (d.turns > 0) parts.push(`${d.turns} turns`);
-  if (d.totalTokens > 0) parts.push(formatTokens(d.totalTokens));
-  if (d.elapsedSeconds > 0) parts.push(formatElapsedSeconds(d.elapsedSeconds));
-  if (parts.length === 0) return "";
-  return parts.map((p) => theme.fg("dim", p)).join(` ${theme.fg("dim", "·")} `);
-}
-
-/**
- * 构建 terminal 态交付物行内容（不含 STREAM_PREFIX，由调用方加）。
- *   done      → result 首行（normal 色）
- *   failed    → `Error: {error 首行}`（error 色）
- *   cancelled → `Cancelled`（dim）
- */
-function buildDeliveryLineFromSync(s: SyncResponse, theme: ThemeLike): string | undefined {
-  switch (s.status) {
-    case "done":
-      return firstLineSanitized(s.result) || undefined;
-    case "failed":
-      return `${theme.fg("error", "Error:")}: ${firstLineSanitized(s.error)}`;
-    case "cancelled":
-      return theme.fg("dim", "Cancelled");
-    default:
-      return undefined;
-  }
-}
-
-/**
  * 取文本首个非空行（多行压成首行展示），并 sanitize。
  * 用于 done/failed 的交付物预览。
  * 共享 firstLine（./format.ts）取首行，本 wrapper 叠加 sanitizeLabel。
@@ -432,7 +313,7 @@ function renderListCompact(resp: ListResponse, theme: ThemeLike, width: number):
   for (const it of resp.items) {
     const glyph = statusGlyph(it.status);
     const icon = glyph.icon ?? "●";
-    const mode = it.mode === "background" ? "bg" : "sync";
+    const mode = "bg";
     const line = `${theme.fg(glyph.color, icon)} ${theme.fg("accent", it.agent)}`
       + ` ${theme.fg("dim", `· ${mode} · ${it.status} · ${formatElapsedSeconds(it.duration)}`)}`;
     lines.push(truncLine(`${STREAM_PREFIX}${line}`, width));

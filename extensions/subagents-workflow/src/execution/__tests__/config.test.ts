@@ -37,21 +37,21 @@ describe("loadGlobalConfig", () => {
   it("returns default config when file does not exist", () => {
     const cfg = loadGlobalConfig(tmpDir);
     expect(cfg.version).toBe(1);
-    expect(cfg.maxConcurrent).toBe(4);
+    expect(cfg.maxConcurrent).toBe(6);
   });
 
   it("returns default config when JSON is corrupt", () => {
     writeConfig(tmpDir, "{not valid json");
     const cfg = loadGlobalConfig(tmpDir);
     expect(cfg.version).toBe(1);
-    expect(cfg.maxConcurrent).toBe(4);
+    expect(cfg.maxConcurrent).toBe(6);
   });
 
   it("deep-merges with defaults: missing fields fall back to defaults", () => {
     writeConfig(tmpDir, JSON.stringify({ version: 1 }));
     const cfg = loadGlobalConfig(tmpDir);
     expect(cfg.version).toBe(1);
-    expect(cfg.maxConcurrent).toBe(4);
+    expect(cfg.maxConcurrent).toBe(6);
   });
 
   it("loads valid config with maxConcurrent override", () => {
@@ -88,19 +88,19 @@ describe("loadGlobalConfig", () => {
 describe("sanitizeMaxConcurrent (via loadGlobalConfig)", () => {
   it("rejects non-number maxConcurrent → default", () => {
     writeConfig(tmpDir, JSON.stringify({ maxConcurrent: "eight" }));
-    expect(loadGlobalConfig(tmpDir).maxConcurrent).toBe(4);
+    expect(loadGlobalConfig(tmpDir).maxConcurrent).toBe(6);
   });
 
   it("rejects non-integer maxConcurrent → default", () => {
     writeConfig(tmpDir, JSON.stringify({ maxConcurrent: 4.5 }));
-    expect(loadGlobalConfig(tmpDir).maxConcurrent).toBe(4);
+    expect(loadGlobalConfig(tmpDir).maxConcurrent).toBe(6);
   });
 
   it("rejects zero/negative maxConcurrent → default", () => {
     writeConfig(tmpDir, JSON.stringify({ maxConcurrent: 0 }));
-    expect(loadGlobalConfig(tmpDir).maxConcurrent).toBe(4);
+    expect(loadGlobalConfig(tmpDir).maxConcurrent).toBe(6);
     writeConfig(tmpDir, JSON.stringify({ maxConcurrent: -1 }));
-    expect(loadGlobalConfig(tmpDir).maxConcurrent).toBe(4);
+    expect(loadGlobalConfig(tmpDir).maxConcurrent).toBe(6);
   });
 
   it("accepts positive integer", () => {

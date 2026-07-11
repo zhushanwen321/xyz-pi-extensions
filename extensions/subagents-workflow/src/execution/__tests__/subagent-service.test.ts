@@ -415,8 +415,7 @@ describe("SubagentService", () => {
   //   - register emit：execute 内 createRecordForMode 之后立即触发，在 worktreeManager.create
   //     之前。用 worktree:true+fork:true 让 worktreeManager.create 在测试环境（agentDir 非 git
   //     repo → git status 抛错）失败，既触发 register emit，又顺路走 finalizeFailed →
-  //     unregister(failed)。sync/wait=true 与 background/wait=false 两条 mode 各测一遍，
-  //     覆盖场景 1/2 的 register 部分与场景 3 的 unregister(failed)。
+  //     unregister(failed)。（T2 Wave 0 后只有 background 模式。）
   //   - unregister(cancelled)：cancelBackground 路径。手动注入 running background record 后
   //     调公共 cancel(id) API，无需 runSpawn（覆盖场景 4）。
   //
@@ -475,36 +474,6 @@ describe("SubagentService", () => {
     }
 
     const ctxModel: ModelInfo = { id: "ctx-model", name: "Ctx", provider: "p", reasoning: false };
-
-    it("sync execute + worktree 创建失败 → register + unregister(reason=failed) 被 emit", async () => {
-      const { service, pi } = makeReadyServiceWithPi();
-
-      const handle = await service.execute({
-        task: "wt fail sync",
-        worktree: true,
-        fork: true,
-        wait: true,
-        ctxModel,
-      });
-
-      // worktreeManager.create 在 agentDir（非 git repo）抛错 → buildEarlyFailedHandle 返回 sync 形状
-      expect(handle.mode).toBe("sync");
-
-      // register emit：execute 内 createRecordForMode 之后立即触发（sync → id 前缀 run-）
-      expect(pi.events.emit).toHaveBeenCalledWith(
-        "pending:register",
-        expect.objectContaining({
-          type: "subagent",
-          id: expect.stringMatching(/^run-/),
-          name: "general-purpose",
-        }),
-      );
-      // unregister(failed) emit：finalizeFailed → finalizeRecord 末尾触发
-      expect(pi.events.emit).toHaveBeenCalledWith(
-        "pending:unregister",
-        expect.objectContaining({ reason: "failed" }),
-      );
-    });
 
     it("background execute + worktree 创建失败 → register(bg-id) + unregister(failed) 被 emit", async () => {
       const { service, pi } = makeReadyServiceWithPi();

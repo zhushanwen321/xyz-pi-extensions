@@ -412,7 +412,7 @@ export class SubagentsListComponent implements Component {
       const glyph = statusGlyph(r.status);
       const icon = glyph.icon ?? spinFrame;
       const iconStr = t.fg(glyph.color, icon);
-      const modeTag = r.mode === "background" ? "bg" : "sync";
+      const modeTag = "bg";
       const dur = formatElapsedSeconds(elapsedSec(r));
       // 短编号(dim)置于行首——列表一眼看到「第几个」, 不必进详情.
       const sid = t.fg("dim", shortId(r.id));

@@ -19,9 +19,7 @@ import type {
   ListResponse,
   SubagentListItem,
   SubagentRecord,
-  SubagentToolDetails,
   SubagentToolResult,
-  SyncResponse,
 } from "../execution/types.ts";
 
 // ============================================================
@@ -60,10 +58,13 @@ export interface StartHandlerInput {
   cwd?: string;
 }
 
-/** start 领域对象（adapter 包成 syncResponse 或 bgResponse）。 */
-export type StartHandlerResult =
-  | { kind: "sync"; subagentId: string; sessionFile: string | undefined; response: SyncResponse }
-  | { kind: "bg"; subagentId: string; sessionFile: string | undefined; response: BgResponse };
+/** start 领域对象（adapter 包成 bgResponse）。 */
+export type StartHandlerResult = {
+  kind: "bg";
+  subagentId: string;
+  sessionFile: string | undefined;
+  response: BgResponse;
+};
 
 export interface ListHandlerInput {
   includeFinished?: boolean;
@@ -111,28 +112,6 @@ function recordToListItem(r: SubagentRecord): SubagentListItem {
   };
 }
 
-/**
- * 把内层 SubagentToolDetails（sync 路径）包成外层 SubagentToolResult（onUpdate 回流用）。
- *
- * SyncResponse 是 SubagentToolDetails 的子类型（mode 收窄为字面量 "sync"）。
- * 调用方保证此函数只在 sync 路径调用——details.mode 运行时必为 "sync"。
- * 字段无搬运（结构兼容，直接透传）。
- */
-function liftSync(details: SubagentToolDetails): SubagentToolResult {
-  // 运行时守卫：确保 mode === "sync"
-  if (details.mode !== "sync") {
-    throw new Error(`liftSync called with mode="${details.mode}", expected "sync"`);
-  }
-  return {
-    action: "start",
-    // streaming 期 subagentId 未知，终态由 adapter 填；此处给 null 保持类型合法。
-    subagentId: null,
-    sessionFile: details.sessionFile ?? null,
-    // details 已由 sync 路径产出（mode==="sync"），结构兼容 SyncResponse。
-    syncResponse: details as SyncResponse,
-  };
-}
-
 // ============================================================
 // start handler
 // ============================================================
@@ -141,7 +120,6 @@ export async function startHandler(
   service: SubagentService,
   input: StartHandlerInput | undefined,
   signal: AbortSignal | undefined,
-  onUpdate?: (partialResult: AgentToolResult<SubagentToolResult>) => void,
   ctxModel?: ModelInfo,
 ): Promise<StartHandlerResult> {
   if (!input) throw new Error("startParam is required for action:'start'");
@@ -165,38 +143,19 @@ export async function startHandler(
     cwd: input.cwd,
     ctxModel,
     signal,
-    onUpdate: onUpdate
-      // sync streaming 回流：把 project 产出的内层 SubagentToolDetails 包成 SubagentToolResult
-      // （与 renderResult 同源）。background 不回流（execute return 后无 onUpdate）。
-      ? (details) => {
-          onUpdate({
-            content: [{ type: "text", text: details.result ?? "" }],
-            details: liftSync(details),
-          });
-        }
-      : undefined,
+    // background 不回流 onUpdate：detached 运行，完成由 notify 驱动新 turn。
+    onUpdate: undefined,
   });
 
-  if (handle.mode === "background") {
-    return {
-      kind: "bg",
-      subagentId: handle.subagentId,
-      sessionFile: handle.sessionFile,
-      response: {
-        status: "running",
-        mode: "background",
-        message: BG_MESSAGE,
-      },
-    };
-  }
-
-  // sync 完成：record 已 settled，details 含 mode/sessionFile/elapsedSeconds。
-  // SyncResponse 是 SubagentToolDetails 的子类型（mode==="sync"）；sync 路径产出保证。
   return {
-    kind: "sync",
-    subagentId: handle.record.id,
-    sessionFile: handle.details.sessionFile,
-    response: handle.details as SyncResponse,
+    kind: "bg",
+    subagentId: handle.subagentId,
+    sessionFile: handle.sessionFile,
+    response: {
+      status: "running",
+      mode: "background",
+      message: BG_MESSAGE,
+    },
   };
 }
 
@@ -273,9 +232,7 @@ export function adapter(input: AdapterInput): AgentToolResult<SubagentToolResult
   let result: SubagentToolResult;
   if (action === "start") {
     const d = input.domain;
-    result = d.kind === "sync"
-      ? { action, subagentId: d.subagentId, sessionFile: d.sessionFile ?? null, syncResponse: d.response }
-      : { action, subagentId: d.subagentId, sessionFile: d.sessionFile ?? null, bgResponse: d.response };
+    result = { action, subagentId: d.subagentId, sessionFile: d.sessionFile ?? null, bgResponse: d.response };
   } else if (action === "list") {
     result = { action, subagentId: null, sessionFile: null, listResponse: input.domain.response };
   } else {

@@ -30,11 +30,11 @@ export const DEFAULT_AGENT_NAME = "general-purpose";
 // 执行状态机
 // ============================================================
 
-/** 唯一执行状态。所有路径（sync/bg/poll）共用。crashed 为进程崩溃终态（重建推断）。 */
+/** 唯一执行状态。所有路径共用。crashed 为进程崩溃终态（重建推断）。 */
 export type ExecutionStatus = "running" | "done" | "failed" | "cancelled" | "crashed";
 
-/** 执行模式。sync = 调用方 await；background = 调用方立即拿 handle 返回。 */
-export type ExecutionMode = "sync" | "background";
+/** 执行模式。background = 调用方立即拿 handle 返回，子 agent 在 detached promise 里跑。 */
+export type ExecutionMode = "background";
 
 // ============================================================
 // Agent 事件流（Core → Record 的唯一更新驱动）
@@ -424,14 +424,15 @@ export interface ExecuteOptions {
 
 /**
  * execute 返回值。
- *   sync:    { mode:"sync", record, details } —— 调用方 await，record 已 settled。
- *            record 是只读快照（持久化用），details 是 TUI 渲染投影（含 elapsedSeconds/currentActivity/mode/sessionFile）。
  *   background: { mode:"background", subagentId, sessionFile, details } —— 立即返回。
  *            subagentId 供后续 cancel/list 用；sessionFile 窗口期可能 undefined。
  */
-export type ExecutionHandle =
-  | { mode: "sync"; record: RecordSnapshot; details: SubagentToolDetails }
-  | { mode: "background"; subagentId: string; sessionFile: string | undefined; details: SubagentToolDetails };
+export type ExecutionHandle = {
+  mode: "background";
+  subagentId: string;
+  sessionFile: string | undefined;
+  details: SubagentToolDetails;
+};
 
 // ============================================================
 // tool action 出参（外层分组，adapter 产出）
@@ -449,18 +450,6 @@ export interface SubagentListItem {
   totalTokens: number;
   /** session jsonl 文件名（窗口期内可能 undefined）。 */
   sessionFile?: string;
-}
-
-/**
- * sync 执行的内层响应（挂在 SubagentToolResult.syncResponse）。
- *
- * 与 SubagentToolDetails 字段完全一致——liftSync 现为恒等投影（字段零搬运）。
- * 与 SubagentToolDetails 的唯一区别：mode 收窄为字面量 "sync"（sync 路径投影时
- * 必为 "sync"），让 TS 在 adapter 层静态保证 syncResponse 只能来自 sync 路径。
- * 结构兼容 SubagentToolDetails（mode 是其子类型），故 liftSync 可直接 return。
- */
-export interface SyncResponse extends SubagentToolDetails {
-  mode: "sync";
 }
 
 /** background 启动的内层响应（挂在 SubagentToolResult.bgResponse）。 */
@@ -485,22 +474,14 @@ export interface CancelResponse {
 
 /**
  * Tool 外层出参（renderResult + LLM content JSON 同源）。
- * adapter 唯一产出：领域对象（sync/bg/list/cancel 四选一）+ action/subagentId/sessionFile。
+ * adapter 唯一产出：领域对象（bg/list/cancel 三选一）+ action/subagentId/sessionFile。
  *
- *   - sync 完成 → syncResponse（最外层 subagentId/sessionFile 有值）
  *   - background 启动 → bgResponse（subagentId 有值；sessionFile 窗口期可能 undefined）
  *   - list → listResponse（最外层 subagentId/sessionFile 为 null，sessionFile 在各 item 内）
  *   - cancel → cancelResponse（subagentId 有值；sessionFile 无意义，可为 null）
  */
-/**
- * tool 出参（discriminated union）。action 作为主鉴别字段；
- * action:"start" 分 sync/bg 两个成员（靠 syncResponse / bgResponse 字段区分）。
- * 防止 action↔response 错配（如 {action:"start", listResponse}）——TS 编译期拒绝。
- * sync 成员 subagentId 可 null（streaming 期未知，终态由 adapter 填）。
- */
 export type SubagentToolResult =
-  | { action: "start"; subagentId: string | null; sessionFile: string | null; syncResponse: SyncResponse }
-  | { action: "start"; subagentId: string | null; sessionFile: string | null; bgResponse: BgResponse }
+  | { action: "start"; subagentId: string; sessionFile: string | null; bgResponse: BgResponse }
   | { action: "list"; subagentId: null; sessionFile: null; listResponse: ListResponse }
   | { action: "cancel"; subagentId: string; sessionFile: null; cancelResponse: CancelResponse };
 
