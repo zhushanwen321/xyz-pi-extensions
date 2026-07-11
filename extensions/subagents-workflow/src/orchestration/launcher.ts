@@ -95,6 +95,58 @@ function toResult(run: WorkflowRun): WorkflowRunResult {
   };
 }
 
+// ── pollRunToResult（runAndWait + executeNestedWorkflow 共用轮询） ────
+
+/**
+ * 轮询 run 至 done 终态并返回 WorkflowRunResult。
+ *
+ * runAndWait 与 executeNestedWorkflow 共用的轮询逻辑（D-12 后去重）：
+ * - signal.aborted → 先查 run 是否已 done（避免二次 safeAbort 写不同 error 造成
+ *   非确定性），否则 safeAbort(aborted) + 返回 aborted 结果
+ * - run 丢失 → failed 结果
+ * - run done → toResult
+ * - deadline 到 → 先查 done，否则 safeAbort(time_limited) + 返回 timeout 结果
+ *
+ * @param abortReason signal abort 时写入 run.state.error 的原因串。runAndWait 传
+ * "Aborted by signal"；executeNestedWorkflow 传 "Aborted by parent signal"。
+ */
+async function pollRunToResult(
+  runId: string,
+  deps: LauncherDeps,
+  signal: AbortSignal | undefined,
+  timeoutMs: number,
+  abortReason: string,
+): Promise<WorkflowRunResult> {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    if (signal?.aborted) {
+      const runBeforeAbort = deps.runs.get(runId);
+      if (runBeforeAbort?.state.status === "done") return toResult(runBeforeAbort);
+      await safeAbort(runId, deps, abortReason, "aborted");
+      const run = deps.runs.get(runId);
+      return run
+        ? toResult(run)
+        : { status: "done", reason: "aborted", error: abortReason, runId };
+    }
+    const run = deps.runs.get(runId);
+    if (!run) return { status: "done", reason: "failed", error: "Run not found", runId };
+    if (run.state.status === "done") return toResult(run);
+    await pollInterval();
+  }
+  const runBeforeTimeout = deps.runs.get(runId);
+  if (runBeforeTimeout?.state.status === "done") return toResult(runBeforeTimeout);
+  await safeAbort(runId, deps, `Workflow timed out after ${timeoutMs}ms`, "time_limited");
+  const finalRun = deps.runs.get(runId);
+  return finalRun
+    ? toResult(finalRun)
+    : {
+        status: "done",
+        reason: "time_limited",
+        error: `Workflow timed out after ${timeoutMs}ms`,
+        runId,
+      };
+}
+
 // ── runAndWait ───────────────────────────────────────────────
 
 /**
@@ -147,7 +199,7 @@ export async function runAndWait(
   }
 
  // 3. 构建 RunSpec
- // 不设 budgetTimeMs：runAndWait 自身用轮询 deadline（下方 while 循环 + safeAbort）
+ // 不设 budgetTimeMs：runAndWait 自身用轮询 deadline（pollRunToResult 内 while + safeAbort）
  // 实施 timeout，并产出「Workflow timed out after Xms」的具体错误信息。spec 级
  // 时间预算（lifecycle.scheduleTimeBudget）服务于 fire-and-forget 的交互式 run
  // （tool-workflow actionRun），若在此也设会与轮询 deadline 同时触发产生竞态。
@@ -160,56 +212,11 @@ export async function runAndWait(
     description: script.meta.description,
   };
 
- // 4. 启动 workflow
-  const runId = await runWorkflow(spec, deps, signal);
-  const deadline = Date.now() + timeoutMs;
-
- // 5. 轮询至 done
+ // 4. 启动 workflow + 5. 轮询至 done（含 6. timeout → abortRun，C.7）
  // pending-notification 的 register/unregister 由 runWorkflow（启动注册）+
- // transition("done") 路径（完成注销）统一处理，runAndWait 不再重复 emit
-  while (Date.now() < deadline) {
- // signal abort 检查
-    if (signal?.aborted) {
- // runWorkflow 的 signal listener 可能已先触发 abortRun
- // （reason="External signal aborted"）。检查 run 是否已 done —— 若已 done，
- // 直接返回（避免二次 safeAbort 写不同的 error message 造成非确定性）。
-      const runBeforeAbort = deps.runs.get(runId);
-      if (runBeforeAbort?.state.status === "done") {
-        return toResult(runBeforeAbort);
-      }
-      await safeAbort(runId, deps, "Aborted by signal", "aborted");
-      const run = deps.runs.get(runId);
-      return run
-        ? toResult(run)
-        : { status: "done", reason: "aborted", error: "Aborted by signal", runId };
-    }
-
-    const run = deps.runs.get(runId);
-    if (!run) {
-      return { status: "done", reason: "failed", error: "Run not found", runId };
-    }
-    if (run.state.status === "done") {
-      return toResult(run);
-    }
-    await pollInterval();
-  }
-
- // 6. timeout → abortRun（C.7：转 done,time_limited）
- // 超时前 run 可能已被 signal/其他路径 abort 到 done —— 检查避免覆盖。
-  const runBeforeTimeout = deps.runs.get(runId);
-  if (runBeforeTimeout?.state.status === "done") {
-    return toResult(runBeforeTimeout);
-  }
-  await safeAbort(runId, deps, `Workflow timed out after ${timeoutMs}ms`, "time_limited");
-  const finalRun = deps.runs.get(runId);
-  return finalRun
-    ? toResult(finalRun)
-    : {
-        status: "done",
-        reason: "time_limited",
-        error: `Workflow timed out after ${timeoutMs}ms`,
-        runId,
-      };
+ // transition("done") 路径（完成注销）统一处理，runAndWait 不再重复 emit。
+  const runId = await runWorkflow(spec, deps, signal);
+  return pollRunToResult(runId, deps, signal, timeoutMs, "Aborted by signal");
 }
 
 /**
@@ -227,4 +234,130 @@ async function safeAbort(
  // run 可能已终态或不存在——忽略，调用方据 toResult 判断
     void err;
   }
+}
+
+// ── executeNestedWorkflow（workflow() 嵌套调用实现） ────────
+
+/**
+ * workflow() 嵌套调用的 Engine 实现。
+ *
+ * Worker 脚本内调 workflow(name, args) 时，error-recovery.dispatchWorkflowCall 路由
+ * 到 deps.onWorkflowCall，后者（Interface 层 makeDeps 注入）委托本函数。
+ *
+ * 流程（6 步）：
+ * 1. 循环检测——name 已在 parentWorkflowChain 中则拒绝（防 A→B→A 死循环）
+ * 2. signal 继承——子 run 响应父 run abort（parentController → childController）
+ * 3. registry.get + lint——失败返回 error result（不抛错，让脚本 soft-fail）
+ * 4. 构建 RunSpec（budgetTokens 继承父剩余预算 + parentWorkflowChain 延长）+ runWorkflow
+ * 5. pollRunToResult 轮询至 done（复用 runAndWait 的轮询逻辑）
+ * 6. budget 同步（子 usedTokens/usedCost 累加回父）+ 结果转换
+ *
+ * 不走 runAndWait：runAndWait 内部构建 RunSpec 不支持 parentWorkflowChain 与 budget
+ * 继承，故直接构建 spec + runWorkflow + pollRunToResult。
+ *
+ * @param name 子 workflow 脚本名（registry.get 查找）
+ * @param args 调用参数（子 worker 内 $ARGS 访问）
+ * @param parentRun 发起嵌套调用的父 WorkflowRun（budget 继承 + 循环链源）
+ * @param deps LauncherDeps（与 runAndWait 同一组依赖 + registry）
+ * @returns { content, parsedOutput?, error? }——dispatchWorkflowCall 原样 postMessage 回 worker
+ */
+export async function executeNestedWorkflow(
+  name: string,
+  args: Record<string, unknown>,
+  parentRun: WorkflowRun,
+  deps: LauncherDeps,
+): Promise<{ content: string; parsedOutput?: unknown; error?: string }> {
+ // Step 1: 循环检测——parentWorkflowChain 不存在时为 []（顶层 run）
+  const chain = [
+    ...(parentRun.spec.parentWorkflowChain ?? []),
+    parentRun.spec.scriptName,
+  ];
+  if (chain.includes(name)) {
+    return {
+      content: "",
+      error: `Circular workflow call detected: ${[...chain, name].join(" → ")}`,
+    };
+  }
+
+ // Step 2: signal 继承——子 run 响应父 run abort
+  const childController = new AbortController();
+  const parentSignal = parentRun.runtime?.controller.signal;
+  if (parentSignal) {
+    if (parentSignal.aborted) {
+      childController.abort();
+    } else {
+      parentSignal.addEventListener("abort", () => childController.abort(), {
+        once: true,
+      });
+    }
+  }
+
+ // Step 3: registry 查找 + lint（失败返回 error result，不抛错）
+  const script = await deps.registry.get(name);
+  if (!script) {
+    return { content: "", error: `Workflow '${name}' not found` };
+  }
+  const lintResult = script.validate();
+  if (!lintResult.valid) {
+    const errors = lintResult.findings
+      .filter((f) => f.severity === "error")
+      .map((f) => `L${f.line}: ${f.message}`)
+      .join("; ");
+    return {
+      content: "",
+      error: `Workflow script '${name}' has lint errors: ${errors}`,
+    };
+  }
+
+ // Step 4: 构建 RunSpec（budget 继承 + 循环链）+ 启动子 workflow
+ // budget 继承：子 run 的 budgetTokens = 父 run 剩余预算（parentRun.state.budget.remaining()）。
+ // 子 run 独立 Budget 实例，执行后把 usedTokens/usedCost 累加回 parentRun（近似同步，
+ // TODO: 后续可改为子 run 共享父 Budget 引用，避免超支窗口）。
+  const parentRemaining = parentRun.state.budget.remaining();
+  const spec: RunSpec = {
+    scriptSource: script.toExecutable(),
+    args,
+    budgetTokens: parentRemaining !== undefined && parentRemaining > 0 ? parentRemaining : undefined,
+    scriptName: script.name,
+    scriptPath: script.path,
+    description: script.meta.description,
+    parentWorkflowChain: chain,
+  };
+  const runId = await runWorkflow(spec, deps, childController.signal);
+
+ // Step 5: 轮询至 done（复用 runAndWait 的轮询逻辑）
+  const result = await pollRunToResult(
+    runId,
+    deps,
+    childController.signal,
+    DEFAULT_RUNANDWAIT_TIMEOUT_MS,
+    "Aborted by parent signal",
+  );
+
+ // Step 6: budget 同步 + 结果转换
+  const childRun = deps.runs.get(runId);
+  if (childRun) {
+ // budget 同步：子 run 消耗累加回父 run（近似）
+ // TODO: 后续可改为子 run 共享父 Budget 引用，避免超支窗口
+    parentRun.state.budget.usedTokens += childRun.state.budget.usedTokens;
+    parentRun.state.budget.usedCost += childRun.state.budget.usedCost;
+  }
+
+  if (result.reason === "completed") {
+    const scriptResult = result.scriptResult;
+    return {
+      content:
+        typeof scriptResult === "string"
+          ? scriptResult
+          : JSON.stringify(scriptResult ?? ""),
+      parsedOutput:
+        typeof scriptResult === "object" && scriptResult !== null
+          ? scriptResult
+          : undefined,
+    };
+  }
+  return {
+    content: "",
+    error: result.error ?? `Workflow '${name}' ended: ${result.reason}`,
+  };
 }

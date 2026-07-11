@@ -119,6 +119,17 @@ export class Budget {
   }
 
  /**
+ * 剩余 token 预算。maxTokens 未设或 ≤0 时返回 undefined（视为不限制）。
+ *
+ * 嵌套 workflow() 调用时由 executeNestedWorkflow 消费：子 run 的 budgetTokens
+ * 继承父 run 的剩余预算，实现父子预算隔离下的总量约束。
+ */
+  remaining(): number | undefined {
+    if (this.maxTokens === undefined || this.maxTokens <= 0) return undefined;
+    return Math.max(0, this.maxTokens - this.usedTokens);
+  }
+
+ /**
  * 是否达到 token 预算的给定比例阈值（如 0.9 = 90% 预警）。
  *
  * 纯查询，无状态——调用方负责去重（旧 _budgetWarningSent 语义由 lifecycle 层用

@@ -38,7 +38,7 @@ import { WorktreeManager } from "./execution/worktree-manager.ts";
 
 // ═══ orchestration/ 层（workflow engine + infra） ═══
 import type { LauncherDeps } from "./orchestration/launcher.ts";
-import { runAndWait, type WorkflowRunResult } from "./orchestration/launcher.ts";
+import { runAndWait, executeNestedWorkflow, type WorkflowRunResult } from "./orchestration/launcher.ts";
 import { pauseRun, scheduleTimeBudget } from "./orchestration/lifecycle.ts";
 import type { WorkflowRun } from "./orchestration/models/workflow-run.ts";
 import { AgentRegistry } from "./orchestration/agent-discovery.ts";
@@ -170,6 +170,8 @@ export default function subagentsWorkflowExtension(pi: ExtensionAPI): void {
       eventBus: pi.events,
       scheduleTimeBudget: (runId: string, budgetTimeMs: number) =>
         scheduleTimeBudget(runId, deps, budgetTimeMs),
+      onWorkflowCall: (name: string, args: Record<string, unknown>, parentRun: WorkflowRun) =>
+        executeNestedWorkflow(name, args, parentRun, deps),
       log,
     };
     return deps;
@@ -395,6 +397,9 @@ export default function subagentsWorkflowExtension(pi: ExtensionAPI): void {
     },
     get scheduleTimeBudget() {
       return getDeps().scheduleTimeBudget;
+    },
+    get onWorkflowCall() {
+      return getDeps().onWorkflowCall;
     },
     get log() {
       return getDeps().log;

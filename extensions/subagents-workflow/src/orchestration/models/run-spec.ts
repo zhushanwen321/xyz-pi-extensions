@@ -34,4 +34,11 @@ export interface RunSpec {
   readonly scriptPath: string;
  /** 人类可读描述（meta.description）。 */
   readonly description?: string;
+ /**
+ * 父 workflow 调用链（嵌套 workflow() 时自动填充，循环检测用）。
+ *
+ * 顶层 run 无此字段。子 run 的 chain = [...parentChain, parentScriptName]。
+ * executeNestedWorkflow 检查目标 name 是否已在 chain 中，防止 A→B→A 死循环。
+ */
+  readonly parentWorkflowChain?: readonly string[];
 }
