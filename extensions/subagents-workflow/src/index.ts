@@ -20,9 +20,10 @@ import * as path from "node:path";
 import type { ExtensionAPI, ExtensionContext, ResourcesDiscoverEvent, ResourcesDiscoverResult, SessionShutdownEvent, SessionStartEvent } from "@mariozechner/pi-coding-agent";
 import { getAgentDir } from "@mariozechner/pi-coding-agent";
 
+import type { AgentRegistry } from "./execution/agent-registry.ts";
+import { bestEffort } from "./execution/best-effort.ts";
 // ═══ execution/ 层（subagents 核心 + 运行时） ═══
 import { DiscoveryConfigLoader } from "./execution/discovery-config.ts";
-import { bestEffort } from "./execution/best-effort.ts";
 import {
   getModelConfigService,
   ModelConfigService,
@@ -34,28 +35,25 @@ import {
   setSubagentService,
   SubagentService,
 } from "./execution/subagent-service.ts";
-import { WorktreeManager } from "./execution/worktree-manager.ts";
-
-// ═══ orchestration/ 层（workflow engine + infra） ═══
-import type { LauncherDeps } from "./orchestration/launcher.ts";
-import { runAndWait, executeNestedWorkflow, type WorkflowRunResult } from "./orchestration/launcher.ts";
-import { pauseRun, scheduleTimeBudget } from "./orchestration/lifecycle.ts";
-import type { WorkflowRun } from "./orchestration/models/workflow-run.ts";
-import type { AgentRegistry } from "./execution/agent-registry.ts";
-import { cleanupAllTempFiles as cleanupAllFiles } from "./orchestration/agent-opts-resolver.ts";
-import { JsonlRunStore } from "./orchestration/jsonl-run-store.ts";
 import { SubprocessAgentRunner } from "./execution/subprocess-agent-runner.ts";
-import { WorkerHostImpl } from "./orchestration/worker-host.ts";
-import { WorkflowScriptRegistryImpl } from "./orchestration/workflow-script-registry-impl.ts";
-
-// ═══ interface/ 层（tools/commands/tui 合并） ═══
-import { registerSubagentsCommand } from "./interface/subagents.ts";
-import { registerSubagentTool } from "./interface/subagent-tool.ts";
+import { WorktreeManager } from "./execution/worktree-manager.ts";
 import { renderBgNotifyMessage } from "./interface/bg-notify-render.ts";
 import { registerWorkflowsCommand } from "./interface/commands.ts";
 import { notifyDone } from "./interface/helpers.ts";
+import { registerSubagentTool } from "./interface/subagent-tool.ts";
+// ═══ interface/ 层（tools/commands/tui 合并） ═══
+import { registerSubagentsCommand } from "./interface/subagents.ts";
 import { registerWorkflowTool } from "./interface/tool-workflow.ts";
 import { registerWorkflowScriptTool } from "./interface/tool-workflow-script.ts";
+import { cleanupAllTempFiles as cleanupAllFiles } from "./orchestration/agent-opts-resolver.ts";
+import { JsonlRunStore } from "./orchestration/jsonl-run-store.ts";
+// ═══ orchestration/ 层（workflow engine + infra） ═══
+import type { LauncherDeps } from "./orchestration/launcher.ts";
+import { executeNestedWorkflow, runAndWait, type WorkflowRunResult } from "./orchestration/launcher.ts";
+import { pauseRun, scheduleTimeBudget } from "./orchestration/lifecycle.ts";
+import type { WorkflowRun } from "./orchestration/models/workflow-run.ts";
+import { WorkerHostImpl } from "./orchestration/worker-host.ts";
+import { WorkflowScriptRegistryImpl } from "./orchestration/workflow-script-registry-impl.ts";
 
 // ── pi.__workflowRun 类型扩展（D-8 签名） ─────────────────
 
@@ -120,6 +118,8 @@ export default function subagentsWorkflowExtension(pi: ExtensionAPI): void {
       sessionDir: string;
       /** D-008 per-session SAR（需要 ctxModel + subagentService） */
       runner: SubprocessAgentRunner;
+      /** session 上下文（notifyDone 需要 GuiContext） */
+      ctx?: ExtensionContext;
     }
   >();
 
@@ -149,21 +149,24 @@ export default function subagentsWorkflowExtension(pi: ExtensionAPI): void {
     return fs.existsSync(sessionScopedDir) ? sessionScopedDir : defaultDir;
   }
 
-  function makeDeps(state: {
-    store: JsonlRunStore;
-    runs: Map<string, WorkflowRun>;
-    activeTempFiles: Set<string>;
-    agentRegistry: AgentRegistry;
-    sessionDir: string;
-    runner: SubprocessAgentRunner;
-  }) {
+  function makeDeps(
+    state: {
+      store: JsonlRunStore;
+      runs: Map<string, WorkflowRun>;
+      activeTempFiles: Set<string>;
+      agentRegistry: AgentRegistry;
+      sessionDir: string;
+      runner: SubprocessAgentRunner;
+    },
+    sessionCtx?: ExtensionContext,
+  ) {
     const deps: LauncherDeps = {
       store: state.store,
       workerHost,
       runner: state.runner,
       runs: state.runs,
       registry,
-      onRunDone: (run: WorkflowRun) => notifyDone(pi, run.runId, run, notifiedRunIds),
+      onRunDone: (run: WorkflowRun) => notifyDone(pi, run.runId, run, notifiedRunIds, sessionCtx),
       agentRegistry: state.agentRegistry,
       sessionDir: state.sessionDir,
       activeTempFiles: state.activeTempFiles,
@@ -281,6 +284,7 @@ export default function subagentsWorkflowExtension(pi: ExtensionAPI): void {
       agentRegistry,
       sessionDir,
       runner,
+      ctx,
     });
   });
 
@@ -306,7 +310,7 @@ export default function subagentsWorkflowExtension(pi: ExtensionAPI): void {
       for (const run of state.runs.values()) {
         if (run.state.status === "running") {
           try {
-            await pauseRun(run.runId, makeDeps(state));
+            await pauseRun(run.runId, makeDeps(state, ctx));
           } catch (err) {
             bestEffort(err, "pauseRun (session_tree handler)");
           }
@@ -328,7 +332,7 @@ export default function subagentsWorkflowExtension(pi: ExtensionAPI): void {
     if (state) {
       const running = Array.from(state.runs.values()).filter((r) => r.state.status === "running");
       await Promise.allSettled(
-        running.map((run) => pauseRun(run.runId, makeDeps(state))),
+        running.map((run) => pauseRun(run.runId, makeDeps(state, _ctx))),
       );
       cleanupAllFiles(state.activeTempFiles);
     }
@@ -356,7 +360,7 @@ export default function subagentsWorkflowExtension(pi: ExtensionAPI): void {
     return runAndWait(
       workflowName,
       workflowArgs,
-      makeDeps(state),
+      makeDeps(state, state.ctx),
       workflowSignal,
       workflowTimeoutMs,
     );
@@ -368,7 +372,7 @@ export default function subagentsWorkflowExtension(pi: ExtensionAPI): void {
   const getDeps = () => {
     const state = sessionState.get(lsRef.lastSessionId);
     if (!state) throw new Error("Session not initialized");
-    return makeDeps(state);
+    return makeDeps(state, state.ctx);
   };
 
   const lazyDeps: LauncherDeps = {

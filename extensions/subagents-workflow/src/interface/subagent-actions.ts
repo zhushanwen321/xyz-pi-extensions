@@ -21,6 +21,12 @@ import type {
   SubagentRecord,
   SubagentToolResult,
 } from "../execution/types.ts";
+import {
+  guiComponent,
+  type GuiContext,
+  guiResult,
+  isGuiCapable,
+} from "./gui-adapter.ts";
 
 // ============================================================
 // 常量
@@ -227,7 +233,10 @@ type AdapterInput =
   | { action: "list"; domain: ListHandlerResult }
   | { action: "cancel"; domain: CancelHandlerResult };
 
-export function adapter(input: AdapterInput): AgentToolResult<SubagentToolResult> {
+export function adapter(
+  input: AdapterInput,
+  ctx?: GuiContext,
+): AgentToolResult<SubagentToolResult> {
   const { action } = input;
   let result: SubagentToolResult;
   if (action === "start") {
@@ -241,8 +250,47 @@ export function adapter(input: AdapterInput): AgentToolResult<SubagentToolResult
 
   // content JSON：LLM 看的结构化结果（schema 模式 parsedOutput 作为嵌套 JSON 值可接受）。
   const text = JSON.stringify(result);
+
+  // GUI 协议：RPC 模式下附加结构化渲染数据
+  const details: Record<string, unknown> = { ...result };
+  if (ctx && isGuiCapable(ctx)) {
+    details.__gui__ = guiResult(buildGuiComponent(action, input, result));
+  }
+
   return {
     content: [{ type: "text", text }],
-    details: result,
+    details: details as unknown as SubagentToolResult,
   };
+}
+
+/** 按 action 构造对应的 GuiComponent。 */
+function buildGuiComponent(
+  action: string,
+  input: AdapterInput,
+  _result: SubagentToolResult,
+) {
+  if (action === "start") {
+    return guiComponent("subagent-trace", {
+      agent: "subagent",
+      status: "running" as const,
+    });
+  }
+  if (action === "list") {
+    const listResp = input.domain as ListHandlerResult;
+    return guiComponent("task-list", {
+      title: `Subagents (${listResp.response.running} running)`,
+      items: listResp.response.items.map((it) => ({
+        label: `${it.agent} · ${it.subagentId}`,
+        status: it.status === "running" ? "in_progress" as const
+          : it.status === "done" ? "completed" as const
+          : it.status === "failed" ? "failed" as const
+          : "pending" as const,
+      })),
+      summary: `${listResp.response.running}/${listResp.response.items.length} running`,
+    });
+  }
+  // cancel
+  return guiComponent("stats-line", {
+    items: [{ label: "cancelled", value: (input.domain as CancelHandlerResult).subagentId, severity: "warn" }],
+  });
 }

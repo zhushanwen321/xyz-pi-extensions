@@ -29,6 +29,12 @@ import { abortRun, pauseRun, resumeRun, runWorkflow } from "../orchestration/lif
 import type { WorkflowRun } from "../orchestration/models/workflow-run.ts";
 import { retryNode, skipNode } from "../orchestration/node-ops.ts";
 import {
+  guiComponent,
+  type GuiContext,
+  guiResult,
+  isGuiCapable,
+} from "./gui-adapter.ts";
+import {
   acquireReentryGuard,
   REENTRY_BUSY_MESSAGE,
   type ReentryGuardRef,
@@ -105,6 +111,48 @@ export interface ToolResult {
   isError?: boolean;
 }
 
+// ── GUI 协议 helpers ───────────────────────────────────────
+
+/** 为 details 附加 __gui__（RPC 模式下）。 */
+function withGui<T extends WorkflowToolDetails | undefined>(
+  details: T,
+  ctx?: GuiContext,
+): Record<string, unknown> {
+  const out: Record<string, unknown> = details ? { ...details } : {};
+  if (ctx && isGuiCapable(ctx) && details) {
+    out.__gui__ = guiResult(buildWorkflowGui(details));
+  }
+  return out;
+}
+
+/** 按 WorkflowToolDetails 构造对应的 GuiComponent。 */
+function buildWorkflowGui(details: WorkflowToolDetails) {
+  if (details.action === "run") {
+    return guiComponent("workflow-runs", {
+      runs: [{ runId: details.runId, name: details.name, status: details.status }],
+    });
+  }
+  if (details.action === "status") {
+    return guiComponent("workflow-runs", {
+      runs: details.runs.map((r) => ({
+        runId: r.runId,
+        name: r.name,
+        status: r.status,
+        reason: r.reason,
+        error: r.error,
+      })),
+    });
+  }
+  // pause/resume/abort/retry-node/skip-node
+  return guiComponent("stats-line", {
+    items: [{
+      label: details.action,
+      value: details.runId.slice(0, 8),
+      severity: "ok" as const,
+    }],
+  });
+}
+
 // ── Tool registration ────────────────────────────────────────
 
 /**
@@ -155,24 +203,37 @@ export function registerWorkflowTool(
         return textResult(REENTRY_BUSY_MESSAGE, true);
       }
       try {
+        let result: ToolResult;
         switch (params.action) {
           case "run":
-            return await actionRun(params, deps, signal);
+            result = await actionRun(params, deps, signal);
+            break;
           case "status":
-            return actionStatus(deps);
+            result = actionStatus(deps);
+            break;
           case "pause":
-            return await actionLifecycle("pause", params, deps);
+            result = await actionLifecycle("pause", params, deps);
+            break;
           case "resume":
-            return await actionLifecycle("resume", params, deps);
+            result = await actionLifecycle("resume", params, deps);
+            break;
           case "abort":
-            return await actionLifecycle("abort", params, deps);
+            result = await actionLifecycle("abort", params, deps);
+            break;
           case "retry-node":
-            return await actionRetryNode(params, deps);
+            result = await actionRetryNode(params, deps);
+            break;
           case "skip-node":
-            return await actionSkipNode(params, deps);
+            result = await actionSkipNode(params, deps);
+            break;
           default:
             return textResult(`Unknown action: ${String(params.action)}`, true);
         }
+        // GUI 协议：RPC 模式下附加 __gui__ 到 details
+        return {
+          ...result,
+          details: withGui(result.details, _ctx as GuiContext) as unknown as WorkflowToolDetails,
+        };
       } finally {
         releaseReentryGuard(reentryRef);
       }

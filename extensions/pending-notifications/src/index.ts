@@ -183,16 +183,21 @@ export default function pendingNotificationsExtension(pi: ExtensionAPI): void {
 				result: parsed.result,
 				error: parsed.error,
 				patchFile: parsed.patchFile,
-			});
+			}, isRpcMode);
 		}
 
 		debugLog("debug", "listener: pending:unregister appended", { id: parsed.id });
 	}));
 
+	// RPC 模式标志（session_start 捕获，传给 sendSubagentNotify 构造 __gui__）
+	let isRpcMode = false;
+
 	// ── session_start：从持久化 entries 重建 registry ────────
 	pi.on("session_start", (_event, ctx: ExtensionContext) => {
 		registry = createRegistry();
 		currentSessionId = ctx.sessionManager.getSessionId();
+		// RPC 模式下 hasUI 为 false（无 TUI 渲染入口）
+		isRpcMode = !ctx.hasUI;
 
 		const entries = ctx.sessionManager.getEntries();
 		const now = Date.now();
@@ -379,11 +384,34 @@ function buildNotifyContent(record: NotifyRecord): string {
  * 唤醒父 agent 处理结果（followUp 不打断 streaming、不锁滚动）；空闲时立即 prompt 新 turn。
  * details 作为 bg-notify-render 的渲染数据源（与原 BgNotifier 输出一致）。
  */
-function sendSubagentNotify(pi: ExtensionAPI, record: NotifyRecord): void {
+/**
+ * 注入 subagent 完成通知。
+ *
+ * @param isRpcMode 是否为 RPC 模式（从 session_start 的 ctx.mode 捕获）。
+ * RPC 模式下附加 __gui__ 结构化渲染数据，供 xyz-agent GUI 渲染。
+ */
+function sendSubagentNotify(pi: ExtensionAPI, record: NotifyRecord, isRpcMode?: boolean): void {
+	const details: Record<string, unknown> = { ...record };
+
+	// GUI 协议：RPC 模式下附加 __gui__ 结构化渲染数据
+	if (isRpcMode) {
+		details.__gui__ = {
+			v: 1,
+			component: {
+				type: "subagent-trace",
+				props: {
+					agent: record.agent,
+					status: record.status === "done" ? "done" : record.status === "failed" ? "failed" : "cancelled",
+					result: record.result,
+				},
+			},
+		};
+	}
+
 	pi.sendMessage({
 		customType: NOTIFY_CUSTOM_TYPE,
 		content: buildNotifyContent(record),
 		display: true,
-		details: record,
+		details,
 	}, { triggerTurn: true, deliverAs: "followUp" });
 }

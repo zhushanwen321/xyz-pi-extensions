@@ -11,33 +11,22 @@
 import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
 
 import type { WorkflowRun } from "../orchestration/models/workflow-run.ts";
+import {
+  guiComponent,
+  type GuiContext,
+  guiResult,
+  isGuiCapable,
+} from "./gui-adapter.ts";
 
 // ── 常量 ─────────────────────────────────────────────────────
 
 const JSON_INDENT = 2;
 const MAX_RESULT_LENGTH = 8000;
-const TASK_SHORT_LENGTH = 150;
-const CONTENT_TRUNC_LENGTH = 500;
-const RUNID_CMD_SHORT = 8;
-
-// ── notifyDone（D-12 NotificationService 降级） ─────────────
-
-/**
- * 将 trace 节点状态映射到 task-list item status。
- */
-function statusToItemStatus(
-  s: string,
-): "pending" | "in_progress" | "completed" | "failed" | "cancelled" {
-  if (s === "completed") return "completed";
-  if (s === "failed") return "failed";
-  if (s === "running") return "in_progress";
-  return "pending";
-}
 
 /**
  * workflow 到达 done 终态时发送完成通知。
  *
- * 通过 pi.sendMessage 注入结果消息（含 _render descriptor 供 GUI 渲染 task-list），
+ * 通过 pi.sendMessage 注入结果消息（含 __gui__ 结构化渲染数据），
  * triggerTurn:true 唤醒 parent agent 处理结果。
  *
  * **去重**：notifiedRunIds Set 由调用方（factory/extension instance）持有，
@@ -53,6 +42,7 @@ export function notifyDone(
   runId: string,
   run: WorkflowRun,
   notifiedRunIds: Set<string>,
+  ctx?: GuiContext,
 ): void {
   if (notifiedRunIds.has(runId)) return;
   notifiedRunIds.add(runId);
@@ -86,30 +76,34 @@ export function notifyDone(
 
  // deliverAs:"steer" + triggerTurn:true —— workflow 完成作为 steering 消息注入
  // 并立即唤醒 parent agent 处理结果（与 subagent 的 followUp+triggerTurn 对称）
+  const details: Record<string, unknown> = {
+    runId,
+    name,
+    status: run.state.status,
+    reason: run.state.reason,
+    traceLength: traceNodes.length,
+  };
+
+  // GUI 协议：RPC 模式下附加结构化渲染数据
+  if (ctx && isGuiCapable(ctx)) {
+    details.__gui__ = guiResult(
+      guiComponent("workflow-runs", {
+        runs: [{
+          runId,
+          name,
+          status: run.state.status,
+          reason: run.state.reason,
+        }],
+      }),
+    );
+  }
+
   pi.sendMessage(
     {
       customType: "workflow-result",
       content,
       display: true,
-      details: {
-        runId,
-        name,
-        status: run.state.status,
-        reason: run.state.reason,
-        traceLength: traceNodes.length,
-        _render: {
-          type: "task-list" as const,
-          data: {
-            title: `Workflow: ${name} (${runId.slice(0, RUNID_CMD_SHORT)}...)`,
-            items: traceNodes.map((node) => ({
-              label: `[${node.stepIndex}] ${node.agent}: ${node.task.slice(0, TASK_SHORT_LENGTH)}`,
-              status: statusToItemStatus(node.status),
-              detail: node.result?.content?.slice(0, CONTENT_TRUNC_LENGTH),
-            })),
-            summary: `${status} | ${traceNodes.length} agent calls`,
-          },
-        },
-      },
+      details,
     },
     { triggerTurn: true, deliverAs: "steer" },
   );
