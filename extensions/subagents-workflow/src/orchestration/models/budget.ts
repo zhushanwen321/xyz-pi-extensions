@@ -78,12 +78,15 @@ export class Budget {
  * 详见上方权重常量的口径说明。
  */
   consume(usage: AgentUsage): void {
+    // NaN 守卫——非有限值当 0 处理，防 usedTokens 变 NaN 导致 isExceeded() 永远 false（预算限制失效）
+    const numOrZero = (v: number | undefined): number =>
+      typeof v === "number" && Number.isFinite(v) ? v : 0;
     this.usedTokens +=
-      usage.input * INPUT_WEIGHT +
-      usage.output * OUTPUT_WEIGHT +
-      usage.cacheRead * CACHE_READ_WEIGHT +
-      usage.cacheWrite * CACHE_WRITE_WEIGHT;
-    this.usedCost += usage.cost;
+      numOrZero(usage.input) * INPUT_WEIGHT +
+      numOrZero(usage.output) * OUTPUT_WEIGHT +
+      numOrZero(usage.cacheRead) * CACHE_READ_WEIGHT +
+      numOrZero(usage.cacheWrite) * CACHE_WRITE_WEIGHT;
+    this.usedCost += numOrZero(usage.cost);
   }
 
  /** 累加调用计数（每次 agent dispatch 后调用）。 */

@@ -246,7 +246,7 @@ bash .githooks/check-structure
 
 - 扩展在 Pi 进程内执行，**不是独立进程**
 - 同一进程可能有多个 session。模块级 `let` 变量会被所有 session 共享，必须用闭包或 session_start 重建
-- 扩展不能依赖 fs 之外的 Node.js 原生模块（网络、child_process 等由 Pi 核心控制）。已知例外：`@zhushanwen/pi-subagents-workflow` 合并后走单执行链——SubprocessAgentRunner 委托 SubagentService.executeAndAwait（进程内 `createAgentSession()`），`session-runner.runSpawn` 是唯一的 Pi 子进程 spawn 点（ADR-030 决策 2）；另在 `execFileSync("git", ...)` 等只读子进程调用上使用 child_process。旧包 `pi-workflow`/`pi-subagents` 的双 spawn 路径已 superseded（ADR-030）
+- 扩展不能依赖 fs 之外的 Node.js 原生模块（网络、child_process 等由 Pi 核心控制）。已知例外：`@zhushanwen/pi-subagents-workflow` 合并后走单执行链——SubprocessAgentRunner 委托 SubagentService.executeAndAwait（`executeAndAwait` → `runSpawn` → `spawn("pi", ["--mode","json"])` 子进程，进程隔离），`session-runner.runSpawn` 是唯一的 Pi 子进程 spawn 点（ADR-030 决策 2）；另在 `execFileSync("git", ...)` 等只读子进程调用上使用 child_process。旧包 `pi-workflow`/`pi-subagents` 的双 spawn 路径已 superseded（ADR-030）；旧包 `pi-subagents` 曾用的进程内 `createAgentSession()` 路径在合并时被有意回退为 spawn（进程隔离优先，见 ADR-025 Status 更新）
 
 ### 资源自包含
 

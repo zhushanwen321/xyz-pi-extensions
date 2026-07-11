@@ -1,6 +1,8 @@
 # ADR-025: Agent 执行引擎从子进程改为进程内
 
-## Status: Accepted（决策已采纳；`@zhushanwen/pi-subagents` 已落地进程内 `createAgentSession`，但 `@zhushanwen/pi-workflow` 仍为 spawn 子进程，迁移尚未实施）
+## Status: Partially superseded by ADR-030（决策方向正确，但 merged 包 `@zhushanwen/pi-subagents-workflow` 未采用进程内 `createAgentSession`）
+
+> **更新（ADR-030 合并后）**：本 ADR 的「进程内 `createAgentSession()`」决策在旧包 `@zhushanwen/pi-subagents` 中曾落地，但合并后的新包 `@zhushanwen/pi-subagents-workflow` 在 T1 执行链统一时**有意回退为 spawn 子进程**（进程隔离优先：避免一个 agent 的 OOM/crash 影响主进程）。新包唯一 spawn 点是 `session-runner.runSpawn`，`createAgentSession` 在新包 src/ 零调用。决策的「单执行链」精神在 ADR-030 决策 2 中继承，但具体执行机制（in-process vs spawn）已偏离。
 
 ## Context
 
