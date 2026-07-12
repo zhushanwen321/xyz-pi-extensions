@@ -3,13 +3,13 @@
  */
 
 import { StringEnum } from "@earendil-works/pi-ai";
-import type { ExtensionAPI, ExtensionContext, Theme } from "@mariozechner/pi-coding-agent";
 import { Text } from "@earendil-works/pi-tui";
+import type { ExtensionAPI, ExtensionContext, Theme } from "@mariozechner/pi-coding-agent";
 import { type Static, Type } from "typebox";
 
 import {
 	addTodos,
-	buildRender,
+	buildGui,
 	formatTodoLine,
 	type Todo,
 	type TodoDetails,
@@ -207,14 +207,19 @@ function executeTodoAction(
 
 	refreshDisplay(ctx);
 
+	const details: TodoDetails = {
+		action: params.action as TodoDetails["action"],
+		todos: [...state.todos],
+		nextId: state.nextId,
+	};
+	// RPC 模式（xyz-agent GUI）附加 __gui__，前端按 list-tree 渲染。
+	// TUI/print/json 模式走原生文本渲染（resultText 已在 content 中）。
+	if (ctx.mode === "rpc") {
+		details.__gui__ = buildGui(state.todos);
+	}
 	return {
 		content: [{ type: "text" as const, text: resultText }],
-		details: {
-			action: params.action as TodoDetails["action"],
-			todos: [...state.todos],
-			nextId: state.nextId,
-			_render: buildRender(state.todos),
-		} as TodoDetails,
+		details,
 	};
 }
 

@@ -123,7 +123,7 @@ handleReminder(state)                                  ← 最后，不短路
 todo **不调用 `appendEntry`**（全 src 零调用），复用 Pi 框架自动记录的 toolResult entry：
 
 ```
-tool execute 返回 {content, details:{todos, nextId, _render}}
+tool execute 返回 {content, details:{todos, nextId, __gui__?(RPC 模式)}}
         │
         ▼  Pi 框架自动序列化为 toolResult entry 落盘
 

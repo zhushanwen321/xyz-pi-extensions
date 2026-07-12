@@ -3,7 +3,6 @@ import { describe, expect, it } from "vitest";
 
 import {
 	addTodos,
-	buildRender,
 	formatTodoLine,
 	migrateTodo,
 	type Todo,
@@ -266,27 +265,6 @@ describe("formatTodoLine", () => {
 	it("should format cancelled todo", () => {
 		const todo: Todo = { id: 4, text: "task D", status: "cancelled" };
 		expect(formatTodoLine(todo)).toBe("[-] #4: task D");
-	});
-});
-
-// ── buildRender ─────────────────────────────────────
-
-describe("buildRender", () => {
-	it("should calculate summary correctly", () => {
-		const todos: Todo[] = [
-			{ id: 1, text: "a", status: "completed" },
-			{ id: 2, text: "b", status: "pending" },
-			{ id: 3, text: "c", status: "in_progress" },
-		];
-		const render = buildRender(todos);
-		expect(render).toBeDefined();
-		expect(render!.summary).toBe("1/3 completed");
-		expect(render!.data.items).toHaveLength(3);
-	});
-
-	it("should handle empty list", () => {
-		const render = buildRender([]);
-		expect(render!.summary).toBe("0/0 completed");
 	});
 });
 
