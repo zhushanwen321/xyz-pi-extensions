@@ -6,6 +6,8 @@ import factory from "../index";
 import { mockTui, stubTheme } from "./fixtures";
 
 // ── Types for the registered tool ───────────────────────
+type TestMode = "tui" | "rpc" | "json" | "print";
+
 interface RegisteredTool {
 	name: string;
 	label: string;
@@ -16,6 +18,7 @@ interface RegisteredTool {
 		signal: AbortSignal | undefined,
 		onUpdate: unknown,
 		ctx: {
+			mode: TestMode;
 			hasUI: boolean;
 			signal?: AbortSignal;
 			ui: {
@@ -23,6 +26,11 @@ interface RegisteredTool {
 					factory: (...args: unknown[]) => unknown,
 					options?: { overlay?: boolean },
 				): Promise<T>;
+				select?: (
+					title: string,
+					options: string[],
+					opts?: { signal?: AbortSignal },
+				) => Promise<string | undefined>;
 			};
 		},
 	) => Promise<Record<string, unknown>>;
@@ -57,16 +65,40 @@ const getTool = (overrides: Partial<MockPi> = {}): RegisteredTool => {
 	return pi.tool;
 };
 
+// 真 headless ctx：mode='print'（无 dialog 能力，hasUI=false），ui 上无 select。
+// isGuiCapable(ctx)=false（mode≠'rpc'）→ 不走 RPC 分支 → custom 也不可用 → catch 走禁用。
+const makeHeadlessCtx = () => ({
+	mode: "print" as const,
+	hasUI: false,
+	signal: undefined as AbortSignal | undefined,
+	ui: {},
+});
+
 // ── Mock ctx builder ────────────────────────────────────
+// mode 区分三场景：'tui'（默认，走 custom）/ 'rpc'（走 select）/ 'print'（headless）。
+// Pi 的 hasUI：TUI 和 RPC 都为 true（dialog-capable），print/json 为 false。
+// RPC 模式才挂 select（与真实 Pi 一致：TUI 模式的 ctx.ui 不一定有 select）。
 const makeCtx = (
 	overrides: Partial<{
-		hasUI: boolean;
+		mode: TestMode;
 		customResult: unknown;
 		customThrows: Error | null;
+		selectResult: string | undefined;
+		selectThrows: Error | null;
 	}> = {},
 ) => {
-	const { hasUI = true, customResult = null, customThrows = null } = overrides;
+	const {
+		mode = "tui",
+		customResult = null,
+		customThrows = null,
+		selectResult = undefined,
+		selectThrows = null,
+	} = overrides;
+	const hasUI = mode === "tui" || mode === "rpc";
+	// RPC 模式才挂 select（与真实 Pi 一致：TUI 模式的 ctx.ui 不一定有 select）
+	const hasSelect = mode === "rpc";
 	return {
+		mode,
 		hasUI,
 		signal: undefined as AbortSignal | undefined,
 		ui: {
@@ -74,6 +106,18 @@ const makeCtx = (
 				if (customThrows) throw customThrows;
 				return customResult as T;
 			},
+			...(hasSelect
+				? {
+						select: async (
+							_title: string,
+							_options: string[],
+							_opts?: { signal?: AbortSignal },
+						): Promise<string | undefined> => {
+							if (selectThrows) throw selectThrows;
+							return selectResult;
+						},
+					}
+				: {}),
 		},
 	};
 };
@@ -156,45 +200,32 @@ describe("execute — validation (FR-2 / AC-8 / AC-13)", () => {
 });
 
 // ── I-5 ~ I-7: Headless（FR-8 / AC-7）──────────────────
+// 真 headless：hasUI=false 且 ui 上无 select（print 模式），askUserInteract 抛错 → 禁用工具。
 describe("execute — headless (FR-8 / AC-7)", () => {
-	it("I-5: hasUI=false → isError with interactive-session message", async () => {
+	it("I-5: headless (no select) → isError with disabled message", async () => {
 		const tool = getTool();
-		const result = await tool.execute("id", validSingle, undefined, undefined, makeCtx({ hasUI: false }));
+		const result = await tool.execute("id", validSingle, undefined, undefined, makeHeadlessCtx());
 		expect(result.isError).toBe(true);
-		expect(result.content[0].text).toContain("interactive");
+		expect(result.content[0].text).toContain("disabled");
 	});
 
-	it("I-6: hasUI=false disables ask_user tool via setActiveTools", async () => {
-		const tool = getTool();
-		await tool.execute("id", validSingle, undefined, undefined, makeCtx({ hasUI: false }));
-		// The mock setActiveTools stores into activeTools; getAllTools returns ask_user + other_tool.
-		// We verify by checking the pi mock captured a filtered list.
-		// Re-run with a pi that records the call.
+	it("I-6: headless disables ask_user tool via setActiveTools", async () => {
 		let captured: string[] | null = null;
-		const pi = {
-			registerTool() {},
-			getAllTools: () => [{ name: "ask_user" }, { name: "other" }],
-			setActiveTools: (names: string[]) => {
-				captured = names;
-			},
-		};
-		factory(pi as never);
-		// Re-extract tool — factory already registered, but registerTool is no-op above.
-		// Use the getTool approach with override instead:
 		const tool2 = getTool({
 			getAllTools: () => [{ name: "ask_user" }, { name: "other" }],
 			setActiveTools: (names: string[]) => {
 				captured = names;
 			},
 		});
-		await tool2.execute("id", validSingle, undefined, undefined, makeCtx({ hasUI: false }));
+		await tool2.execute("id", validSingle, undefined, undefined, makeHeadlessCtx());
 		expect(captured).not.toContain("ask_user");
 		expect(captured).toContain("other");
 	});
 
-	it("I-7: hasUI=false details.cancelled = true", async () => {
+	it("I-7: headless details.cancelled = true", async () => {
 		const tool = getTool();
-		const result = await tool.execute("id", validSingle, undefined, undefined, makeCtx({ hasUI: false }));
+		const result = await tool.execute("id", validSingle, undefined, undefined, makeHeadlessCtx());
+		// headless 走 step 2 提前返回：cancelled Result（禁用工具，不进交互分支）
 		expect(result.details.cancelled).toBe(true);
 	});
 });
@@ -221,6 +252,7 @@ describe("execute — signal abort (FR-10 / AC-14)", () => {
 		// 此前 mock 直接返回 customResult、从不调用 factory，该 abort 监听器是 dead path。
 		// 现在中断后监听器调用 done(null)，custom 解析为 null → cancelled。
 		const ctx = {
+			mode: "tui" as const,
 			hasUI: true,
 			signal: controller.signal,
 			ui: {
@@ -486,6 +518,7 @@ describe("execute — inline render (FR-3)", () => {
 		const tool = getTool();
 		let customArgCount = -1;
 		const ctx = {
+			mode: "tui" as const,
 			hasUI: true,
 			signal: undefined as AbortSignal | undefined,
 			ui: {
@@ -498,5 +531,144 @@ describe("execute — inline render (FR-3)", () => {
 		await tool.execute("id", validSingle, undefined, undefined, ctx);
 		// FR-3: execute 调用 ui.custom 只传 factory（1 个参数），不传 overlay options
 		expect(customArgCount).toBe(1);
+	});
+});
+
+// ── RPC 模式（xyz-agent GUI 富交互协议）──────────────────
+// hasUI=false + ui.select 存在 → 走 askUserInteract（select 通道 + ASK_USER_MARKER）。
+// select 的返回值是前端 JSON.stringify 的 AskUserAnswers，index.ts 做格式转换。
+describe("execute — RPC mode (askUserInteract via select channel)", () => {
+	it("R-1: single-select answer → converted to Result.answers (key=question)", async () => {
+		const tool = getTool();
+		// 协议 answers：key=header（单问题无 header → question 全文），value=选中 label
+		const protoAnswers = JSON.stringify({ "Which DB?": "Postgres" });
+		const result = await tool.execute(
+			"id",
+			validSingle,
+			undefined,
+			undefined,
+			makeCtx({ mode: "rpc", selectResult: protoAnswers }),
+		);
+		expect(result.details.cancelled).toBe(false);
+		expect(result.details.answers["Which DB?"]).toBe("Postgres");
+		expect(result.content[0].text).toContain("Postgres");
+	});
+
+	it("R-2: multi-select answer (JSON array) → comma-joined labels", async () => {
+		const tool = getTool();
+		const multi = {
+			questions: [
+				{
+					question: "Which tools?",
+					header: "Tools",
+					options: [{ label: "A" }, { label: "B" }, { label: "C" }],
+					multiSelect: true,
+				},
+			],
+		};
+		// 协议多选：value = JSON.stringify(["A","C"])
+		const protoAnswers = JSON.stringify({ Tools: JSON.stringify(["A", "C"]) });
+		const result = await tool.execute(
+			"id",
+			multi,
+			undefined,
+			undefined,
+			makeCtx({ mode: "rpc", selectResult: protoAnswers }),
+		);
+		expect(result.details.answers["Which tools?"]).toBe("A, C");
+	});
+
+	it("R-3: Other free text → appended to answer parts", async () => {
+		const tool = getTool();
+		// 单选 Postgres + Other "Custom DB"
+		const protoAnswers = JSON.stringify({
+			"Which DB?": "Postgres",
+			"Which DB?__other": "Custom DB",
+		});
+		const result = await tool.execute(
+			"id",
+			validSingle,
+			undefined,
+			undefined,
+			makeCtx({ mode: "rpc", selectResult: protoAnswers }),
+		);
+		// TUI 语义：parts = [selected, other].join(", ")
+		expect(result.details.answers["Which DB?"]).toBe("Postgres, Custom DB");
+	});
+
+	it("R-4: comment → inlined with ' — ' separator", async () => {
+		const tool = getTool();
+		const withComment = {
+			questions: [
+				{
+					question: "Which DB?",
+					options: [{ label: "Postgres" }, { label: "SQLite" }],
+					allowComment: true,
+				},
+			],
+		};
+		const protoAnswers = JSON.stringify({
+			"Which DB?": "Postgres",
+			"Which DB?__comment": "prod constraint",
+		});
+		const result = await tool.execute(
+			"id",
+			withComment,
+			undefined,
+			undefined,
+			makeCtx({ mode: "rpc", selectResult: protoAnswers }),
+		);
+		expect(result.details.answers["Which DB?"]).toBe("Postgres — prod constraint");
+	});
+
+	it("R-5: user cancel (select returns undefined) → cancelled details", async () => {
+		const tool = getTool();
+		const result = await tool.execute(
+			"id",
+			validSingle,
+			undefined,
+			undefined,
+			makeCtx({ mode: "rpc", selectResult: undefined }),
+		);
+		expect(result.content[0].text).toContain("User cancelled");
+		expect(result.details.cancelled).toBe(true);
+	});
+
+	it("R-6: select throws → isError + disabled (not retriable)", async () => {
+		const tool = getTool();
+		const result = await tool.execute(
+			"id",
+			validSingle,
+			undefined,
+			undefined,
+			makeCtx({ mode: "rpc", selectThrows: new Error("channel broken") }),
+		);
+		expect(result.isError).toBe(true);
+		expect(result.content[0].text).toContain("disabled");
+		expect(result.details.error).toBe("channel broken");
+	});
+
+	it("R-7: header used as answers key when provided", async () => {
+		const tool = getTool();
+		const multiQ = {
+			questions: [
+				{
+					question: "Which database?",
+					header: "DB",
+					options: [{ label: "Postgres" }, { label: "MySQL" }],
+				},
+			],
+		};
+		// 协议 answers key = header（"DB"），但 Result.answers key = question 全文
+		const protoAnswers = JSON.stringify({ DB: "Postgres" });
+		const result = await tool.execute(
+			"id",
+			multiQ,
+			undefined,
+			undefined,
+			makeCtx({ mode: "rpc", selectResult: protoAnswers }),
+		);
+		// 转换后 key 必须是 question 全文（与 TUI 版 buildResult 一致）
+		expect(result.details.answers["Which database?"]).toBe("Postgres");
 	});
 });

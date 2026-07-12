@@ -12,6 +12,9 @@ declare module "@mariozechner/pi-coding-agent" {
 	//       so CI catches the ExtensionHandler `(event, ctx)` two-param signature.
 	export type ExtensionFactory = (pi: ExtensionAPI) => void | Promise<void>;
 
+	/** Pi run mode. Use "tui" to guard terminal-only UI such as custom components. */
+	export type ExtensionMode = "tui" | "rpc" | "json" | "print";
+
 	export interface ExtensionContext {
 		cwd: string;
 		sessionManager: ReadonlySessionManager;
@@ -21,6 +24,9 @@ declare module "@mariozechner/pi-coding-agent" {
 			hasConfiguredAuth(model: unknown): boolean;
 		};
 		getContextUsage(): ContextUsage | undefined;
+		/** Current run mode. Use "tui" to guard terminal-only UI such as custom components. */
+		mode: ExtensionMode;
+		/** Whether dialog-capable UI is available (true in TUI and RPC modes) */
 		hasUI: boolean;
 		ui: {
 			notify(msg: string, type?: string): void;
