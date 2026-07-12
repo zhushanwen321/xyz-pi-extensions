@@ -7,6 +7,8 @@
 //   - Runtime 编排 Core，产出 Details/Record 给 TUI
 //   - TUI 只读 Record/Details 快照，永不持有可变引用
 
+import type { GuiRenderResult } from "@xyz-agent/extension-protocol";
+
 import type { ModelInfo, ModelRegistryLike } from "./model-resolver.ts";
 
 // ============================================================
@@ -487,9 +489,9 @@ export interface CancelResponse {
  *   - cancel → cancelResponse（subagentId 有值；sessionFile 无意义，可为 null）
  */
 export type SubagentToolResult =
-  | { action: "start"; subagentId: string; sessionFile: string | null; slug: string; bgResponse: BgResponse }
-  | { action: "list"; subagentId: null; sessionFile: null; listResponse: ListResponse }
-  | { action: "cancel"; subagentId: string; sessionFile: null; cancelResponse: CancelResponse };
+  | { action: "start"; subagentId: string; sessionFile: string | null; slug: string; bgResponse: BgResponse; __gui__?: GuiRenderResult }
+  | { action: "list"; subagentId: null; sessionFile: null; listResponse: ListResponse; __gui__?: GuiRenderResult }
+  | { action: "cancel"; subagentId: string; sessionFile: null; cancelResponse: CancelResponse; __gui__?: GuiRenderResult };
 
 // ============================================================
 // TUI list 视图的合并 record（4 源 merge 后的形状）

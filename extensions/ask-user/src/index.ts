@@ -107,8 +107,20 @@ function protoAnswersToResult(
 		const comment = getAskUserComment(answers, iq);
 
 		const parts: string[] = [];
-		if (Array.isArray(selected)) parts.push(...selected);
-		else if (selected) parts.push(selected);
+		if (Array.isArray(selected)) {
+			// 多选按 question.options 中的定义顺序排序（S#3），
+			// 与 TUI 版 submit-view.ts 的 selectedIndices.sort() 语义一致，
+			// 确保 RPC 和 TUI 产出相同文本（"A, C" 而非前端回传顺序的 "C, A"）。
+			const orderMap = new Map(q.options.map((o: Option, idx: number) => [o.label, idx]));
+			const unknownOrder = q.options.length;
+			parts.push(...[...selected].sort((a, b) => {
+				const ai = orderMap.get(a) ?? unknownOrder;
+				const bi = orderMap.get(b) ?? unknownOrder;
+				return ai - bi;
+			}));
+		} else if (selected) {
+			parts.push(selected);
+		}
 		if (other) parts.push(other);
 		if (parts.length === 0) continue;
 

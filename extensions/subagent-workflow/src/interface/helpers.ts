@@ -14,6 +14,7 @@ import type { WorkflowRun } from "../orchestration/models/workflow-run.ts";
 import {
   guiComponent,
   type GuiContext,
+  type GuiRenderResult,
   guiResult,
   isGuiCapable,
 } from "@xyz-agent/extension-protocol";
@@ -23,6 +24,24 @@ import { mapRunIcon, mapRunStatus } from "./gui-mappers.ts";
 
 const JSON_INDENT = 2;
 const MAX_RESULT_LENGTH = 8000;
+
+/** runId 前 8 字符用于显示（与 buildWorkflowGui 的 label 格式一致）。 */
+const RUN_ID_DISPLAY_LENGTH = 8;
+
+/**
+ * notifyDone 的 details 结构（通过 pi.sendMessage 透传给前端）。
+ *
+ * 抽取为显式接口替代裸 Record<string, unknown>，明确 __gui__ 契约，
+ * 便于其他 notify 路径复用（S#7）。
+ */
+export interface WorkflowNotifyDetails {
+  runId: string;
+  name: string;
+  status: string;
+  reason: string | undefined;
+  traceLength: number;
+  __gui__?: GuiRenderResult;
+}
 
 /**
  * workflow 到达 done 终态时发送完成通知。
@@ -77,7 +96,7 @@ export function notifyDone(
 
  // deliverAs:"steer" + triggerTurn:true —— workflow 完成作为 steering 消息注入
  // 并立即唤醒 parent agent 处理结果（与 subagent 的 followUp+triggerTurn 对称）
-  const details: Record<string, unknown> = {
+  const details: WorkflowNotifyDetails = {
     runId,
     name,
     status: run.state.status,
@@ -89,10 +108,13 @@ export function notifyDone(
   if (ctx && isGuiCapable(ctx)) {
     const reason = run.state.reason;
     const statusStr = `${run.state.status}${reason ? ` (${reason})` : ""}`;
+    // label 对齐 buildWorkflowGui 的格式：name + slug + runId 前 8 字符（I#3）
+    const slug = run.spec.slug;
+    const label = `${name} ${slug ?? ""} ${runId.slice(0, RUN_ID_DISPLAY_LENGTH)}`.trim();
     details.__gui__ = guiResult(
       guiComponent("list-tree", {
         items: [{
-          label: `${name} ${runId.slice(0, 8)}`,
+          label,
           status: mapRunStatus(statusStr),
           icon: mapRunIcon(statusStr),
         }],

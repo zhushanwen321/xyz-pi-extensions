@@ -31,6 +31,7 @@ import { retryNode, skipNode } from "../orchestration/node-ops.ts";
 import {
   guiComponent,
   type GuiContext,
+  type GuiRenderResult,
   guiResult,
   isGuiCapable,
 } from "@xyz-agent/extension-protocol";
@@ -127,10 +128,10 @@ interface RunSummary {
  * without unsafe casts.
  */
 export type WorkflowToolDetails =
-  | { action: "run"; runId: string; status: "running" | "not_found"; name: string; slug?: string }
-  | { action: "status"; runs: RunSummary[] }
-  | { action: "pause" | "resume" | "abort"; runId: string; status: string; reason?: string }
-  | { action: "retry-node" | "skip-node"; runId: string; callId: number };
+  | { action: "run"; runId: string; status: "running" | "not_found"; name: string; slug?: string; __gui__?: GuiRenderResult }
+  | { action: "status"; runs: RunSummary[]; __gui__?: GuiRenderResult }
+  | { action: "pause" | "resume" | "abort"; runId: string; status: string; reason?: string; __gui__?: GuiRenderResult }
+  | { action: "retry-node" | "skip-node"; runId: string; callId: number; __gui__?: GuiRenderResult };
 
 /** Result returned by the `workflow` tool's execute. */
 export interface ToolResult {
@@ -141,16 +142,16 @@ export interface ToolResult {
 
 // ── GUI 协议 helpers ───────────────────────────────────────
 
-/** 为 details 附加 __gui__（RPC 模式下）。 */
-function withGui<T extends WorkflowToolDetails | undefined>(
-  details: T,
+/** 为 details 附加 __gui__（RPC 模式下）。union 各成员已声明 __gui__?，无需强转。 */
+function withGui(
+  details: WorkflowToolDetails | undefined,
   ctx?: GuiContext,
-): Record<string, unknown> {
-  const out: Record<string, unknown> = details ? { ...details } : {};
-  if (ctx && isGuiCapable(ctx) && details) {
-    out.__gui__ = guiResult(buildWorkflowGui(details));
+): WorkflowToolDetails | undefined {
+  if (!details) return undefined;
+  if (ctx && isGuiCapable(ctx)) {
+    return { ...details, __gui__: guiResult(buildWorkflowGui(details)) };
   }
-  return out;
+  return details;
 }
 
 /** 按 WorkflowToolDetails 构造对应的 GuiComponent。 */
@@ -284,7 +285,7 @@ export function registerWorkflowTool(
         // GUI 协议：RPC 模式下附加 __gui__ 到 details
         return {
           ...result,
-          details: withGui(result.details, toGuiCtx(_ctx)) as unknown as WorkflowToolDetails,
+          details: withGui(result.details, toGuiCtx(_ctx)),
         };
       } finally {
         releaseReentryGuard(reentryRef);

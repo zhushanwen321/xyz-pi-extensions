@@ -262,15 +262,14 @@ export function adapter(
   // content JSON：LLM 看的结构化结果（schema 模式 parsedOutput 作为嵌套 JSON 值可接受）。
   const text = JSON.stringify(result);
 
-  // GUI 协议：RPC 模式下附加结构化渲染数据
-  const details: Record<string, unknown> = { ...result };
-  if (ctx && isGuiCapable(ctx)) {
-    details.__gui__ = guiResult(buildGuiComponent(action, input, result));
-  }
+  // GUI 协议：RPC 模式下附加结构化渲染数据（union 各成员已声明 __gui__?，无需强转）
+  const details: SubagentToolResult = ctx && isGuiCapable(ctx)
+    ? { ...result, __gui__: guiResult(buildGuiComponent(action, input, result)) }
+    : result;
 
   return {
     content: [{ type: "text", text }],
-    details: details as unknown as SubagentToolResult,
+    details,
   };
 }
 
@@ -281,10 +280,14 @@ export function buildGuiComponent(
   _result: SubagentToolResult,
 ) {
   if (action === "start") {
-    // subagent-trace 多层语义（agent名+状态）用 card(stats-line) 组合表达
+    // subagent-trace 多层语义（agent名+slug+状态）用 card(stats-line) 组合表达。
+    // 利用 input.domain 的身份信息，让并发 subagent 可区分。
+    const d = input.domain as StartHandlerResult;
     return guiComponent("card", {
-      header: "subagent",
-      body: [guiComponent("stats-line", { items: [{ value: "running" }] })],
+      header: d.slug ? `${d.slug}` : d.subagentId.slice(0, 8),
+      body: [guiComponent("stats-line", {
+        items: [{ value: "running", severity: "ok" }],
+      })],
     });
   }
   if (action === "list") {

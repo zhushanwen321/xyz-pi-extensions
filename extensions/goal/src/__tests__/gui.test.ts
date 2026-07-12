@@ -118,4 +118,78 @@ describe("buildGoalGui", () => {
 		const gui = buildGoalGui(state);
 		expect(gui.component.props.header).toBe(state.goalId.slice(0, 8));
 	});
+
+	// ── S#2: statusSeverity 完整覆盖 ──
+
+	it("budget_limited 状态 → status severity danger（S#2）", () => {
+		const gui = buildGoalGui(makeState({ status: "budget_limited", budget: { tokenBudget: 10000 } }));
+		const body = gui.component.props.body as { type: string; props: { items: Array<{ label: string; severity: string }> } }[];
+		const stats = body.find((c) => c.type === "stats-line")!;
+		const statusItem = stats.props.items.find((i) => i.label === "status")!;
+		expect(statusItem.severity).toBe("danger");
+	});
+
+	it("time_limited 状态 → status severity danger（S#2）", () => {
+		const gui = buildGoalGui(makeState({ status: "time_limited", budget: { tokenBudget: 10000 } }));
+		const body = gui.component.props.body as { type: string; props: { items: Array<{ label: string; severity: string }> } }[];
+		const stats = body.find((c) => c.type === "stats-line")!;
+		const statusItem = stats.props.items.find((i) => i.label === "status")!;
+		expect(statusItem.severity).toBe("danger");
+	});
+
+	it("cancelled 状态 → status severity danger（S#2）", () => {
+		const gui = buildGoalGui(makeState({ status: "cancelled", budget: { tokenBudget: 10000 } }));
+		const body = gui.component.props.body as { type: string; props: { items: Array<{ label: string; severity: string }> } }[];
+		const stats = body.find((c) => c.type === "stats-line")!;
+		const statusItem = stats.props.items.find((i) => i.label === "status")!;
+		expect(statusItem.severity).toBe("danger");
+	});
+
+	it("paused 状态 → status severity warn（S#2）", () => {
+		const gui = buildGoalGui(makeState({ status: "paused", budget: { tokenBudget: 10000 } }));
+		const body = gui.component.props.body as { type: string; props: { items: Array<{ label: string; severity: string }> } }[];
+		const stats = body.find((c) => c.type === "stats-line")!;
+		const statusItem = stats.props.items.find((i) => i.label === "status")!;
+		expect(statusItem.severity).toBe("warn");
+	});
+
+	// ── S#14: 阈值边界精确值 ──
+
+	it("token 消耗正好 90% → severity danger（边界 ≥，S#14）", () => {
+		const gui = buildGoalGui(makeState({ tokensUsed: 9000, budget: { tokenBudget: 10000 } }));
+		const body = gui.component.props.body as { type: string; props: { label?: string; severity?: string } }[];
+		const tokenBar = body.find((c) => c.type === "progress-bar" && c.props.label === "tokens")!;
+		expect(tokenBar.props.severity).toBe("danger");
+	});
+
+	it("token 消耗正好 70% → severity warn（边界 ≥，S#14）", () => {
+		const gui = buildGoalGui(makeState({ tokensUsed: 7000, budget: { tokenBudget: 10000 } }));
+		const body = gui.component.props.body as { type: string; props: { label?: string; severity?: string } }[];
+		const tokenBar = body.find((c) => c.type === "progress-bar" && c.props.label === "tokens")!;
+		expect(tokenBar.props.severity).toBe("warn");
+	});
+
+	it("time 消耗正好 70% → severity warn（边界 ≥，S#14）", () => {
+		const gui = buildGoalGui(makeState({ timeUsedSeconds: 7 * 60, budget: { timeBudgetMinutes: 10 } }));
+		const body = gui.component.props.body as { type: string; props: { label?: string; severity?: string } }[];
+		const timeBar = body.find((c) => c.type === "progress-bar" && c.props.label === "time")!;
+		expect(timeBar.props.severity).toBe("warn");
+	});
+
+	// ── I#1: tokenBudget=0 口径统一 ──
+
+	it("tokenBudget=0 → 无 progress-bar（口径 >0，I#1）", () => {
+		const gui = buildGoalGui(makeState({ tokensUsed: 0, budget: { tokenBudget: 0 } }));
+		// tokenBudget=0 → hasBudget=false → 走无 budget 分支的 stats-line
+		expect(gui.component.type).toBe("stats-line");
+	});
+
+	// ── 无 budget 分支的 status severity ──
+
+	it("无 budget 时 status severity 正确（S#14）", () => {
+		const gui = buildGoalGui(makeState({ status: "active" }));
+		const items = gui.component.props.items as Array<{ label: string; severity?: string }>;
+		const statusItem = items.find((i) => i.label === "status");
+		expect(statusItem!.severity).toBe("ok");
+	});
 });

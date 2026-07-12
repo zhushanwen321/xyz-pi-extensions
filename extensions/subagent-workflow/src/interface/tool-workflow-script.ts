@@ -26,6 +26,7 @@ import { type Static, Type } from "typebox";
 import {
   guiComponent,
   type GuiContext,
+  type GuiRenderResult,
   guiResult,
   isGuiCapable,
 } from "@xyz-agent/extension-protocol";
@@ -67,11 +68,11 @@ type ScriptParams = Static<typeof WorkflowScriptParams>;
  * can distinguish error shape from success.
  */
 export type WorkflowScriptToolDetails =
-  | { action: "generate"; path: string; name: string; status: "ready" }
-  | { action: "lint"; name: string; valid: boolean; findingCount: number }
-  | { action: "list"; count: number }
-  | { action: "save"; name: string; ok: boolean }
-  | { action: "delete"; name: string; ok: boolean };
+  | { action: "generate"; path: string; name: string; status: "ready"; __gui__?: GuiRenderResult }
+  | { action: "lint"; name: string; valid: boolean; findingCount: number; __gui__?: GuiRenderResult }
+  | { action: "list"; count: number; __gui__?: GuiRenderResult }
+  | { action: "save"; name: string; ok: boolean; __gui__?: GuiRenderResult }
+  | { action: "delete"; name: string; ok: boolean; __gui__?: GuiRenderResult };
 
 /** Result returned by the `workflow-script` tool's execute. */
 export interface TextContent {
@@ -97,12 +98,10 @@ function withScriptGui(
 ): TextContent {
   if (!ctx || !isGuiCapable(ctx) || !result.details) return result;
   const details = result.details;
+  // union 各成员已声明 __gui__?，spread + 补字段类型安全，无需强转
   return {
     ...result,
-    details: {
-      ...details,
-      __gui__: guiResult(buildScriptGui(details)),
-    } as unknown as WorkflowScriptToolDetails,
+    details: { ...details, __gui__: guiResult(buildScriptGui(details)) },
   };
 }
 
@@ -137,6 +136,12 @@ export function buildScriptGui(details: WorkflowScriptToolDetails) {
             severity: details.ok ? "ok" : "warn",
           },
         ],
+      });
+    default:
+      // 防御性兜底：action 是有限联合类型，理论不可达。
+      // 若未来新增 action 忘了更新此 switch，返回中性 stats-line 而非 undefined。
+      return guiComponent("stats-line", {
+        items: [{ label: "action", value: String((details as { action: string }).action), severity: "warn" }],
       });
   }
 }

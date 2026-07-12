@@ -228,6 +228,31 @@ export function handleReportBlocked(
 // ── GUI 渲染描述符构造 ───────────────────────────────
 
 /**
+ * 按 GoalStatus 映射 stats-line severity（S#2）。
+ *
+ *   active/complete → ok（正常运行/成功完成）
+ *   paused          → warn（暂停可恢复）
+ *   blocked         → danger（阻塞需干预）
+ *   budget_limited/time_limited/cancelled → danger（预算耗尽/取消，错误终态）
+ *
+ * 对齐 projection/widget.ts 的 getBudgetColor 语义——终态预算耗尽渲染为 error。
+ */
+function goalStatusSeverity(status: GoalStatus): "ok" | "warn" | "danger" {
+	switch (status) {
+		case "active":
+		case "complete":
+			return "ok";
+		case "paused":
+			return "warn";
+		case "blocked":
+		case "budget_limited":
+		case "time_limited":
+		case "cancelled":
+			return "danger";
+	}
+}
+
+/**
  * 构造 goal 的 GUI 渲染描述符（RPC 模式下放进 details.__gui__）。
  *
  * 逻辑参考 projection/widget.ts 的 renderWidgetLines 预算计算，但此处只构造
@@ -238,31 +263,35 @@ export function handleReportBlocked(
  */
 export function buildGoalGui(state: GoalRuntimeState): GuiRenderResult {
 	const slug = state.slug ?? state.goalId.slice(0, SHORT_ID_LENGTH);
-	const statusSeverity = state.status === "active" ? "ok"
-		: state.status === "blocked" ? "danger"
-			: state.status === "complete" ? "ok"
-				: "warn";
+	// statusSeverity 按 GoalStatus 完整覆盖（S#2）：
+	//   active/complete → ok；blocked → danger；paused → warn；
+	//   budget_limited/time_limited/cancelled → danger（预算耗尽/取消是错误终态）
+	const statusSeverity = goalStatusSeverity(state.status);
 
-	const hasBudget = state.budget.tokenBudget !== undefined || state.budget.timeBudgetMinutes !== undefined;
+	// hasBudget 与进度条判定统一口径：用 > 0 而非 truthy（I#1：tokenBudget=0 不应触发 card 容器）
+	const hasBudget = (state.budget.tokenBudget ?? 0) > 0 || (state.budget.timeBudgetMinutes ?? 0) > 0;
 
 	if (hasBudget) {
 		const body: GuiComponent[] = [];
-		// token 进度条
-		if (state.budget.tokenBudget) {
-			const tokenPct = state.tokensUsed / state.budget.tokenBudget;
+		// token 进度条（>0 判定，与 hasBudget 口径一致）
+		const tokenBudget = state.budget.tokenBudget;
+		if ((tokenBudget ?? 0) > 0) {
+			const tb = tokenBudget!;
+			const tokenPct = state.tokensUsed / tb;
 			body.push(
 				guiComponent("progress-bar", {
 					label: "tokens",
 					current: state.tokensUsed,
-					total: state.budget.tokenBudget,
+					total: tb,
 					unit: "tok",
 					severity: tokenPct >= BUDGET_RATIO_HIGH ? "danger" : tokenPct >= BUDGET_RATIO_LOW ? "warn" : "ok",
 				}),
 			);
 		}
-		// time 进度条
-		if (state.budget.timeBudgetMinutes) {
-			const timeBudgetSec = state.budget.timeBudgetMinutes * SECONDS_PER_MINUTE;
+		// time 进度条（>0 判定，与 hasBudget 口径一致）
+		const timeBudgetMinutes = state.budget.timeBudgetMinutes;
+		if ((timeBudgetMinutes ?? 0) > 0) {
+			const timeBudgetSec = timeBudgetMinutes! * SECONDS_PER_MINUTE;
 			const timePct = state.timeUsedSeconds / timeBudgetSec;
 			body.push(
 				guiComponent("progress-bar", {

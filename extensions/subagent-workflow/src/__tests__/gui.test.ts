@@ -15,7 +15,7 @@
 import { isGuiCapable } from "@xyz-agent/extension-protocol";
 import { describe, expect,it } from "vitest";
 
-import { mapRunIcon,mapRunStatus } from "../interface/gui-mappers.ts";
+import { mapRunIcon,mapRunStatus, toGuiCtx } from "../interface/gui-mappers.ts";
 import { buildGuiComponent } from "../interface/subagent-actions.ts";
 import type { WorkflowToolDetails } from "../interface/tool-workflow.ts";
 import { buildWorkflowGui } from "../interface/tool-workflow.ts";
@@ -104,6 +104,41 @@ describe("mapRunIcon", () => {
     // （mapRunIcon 先判 paused 再判 running）。
     expect(mapRunIcon("running paused")).toBe("pause");
   });
+
+  it("未知状态 → done/check（default 兜底，S#15）", () => {
+    expect(mapRunStatus("foobar")).toBe("done");
+    expect(mapRunIcon("foobar")).toBe("check");
+  });
+
+  it("空串 → done/check（default 兜底，S#15）", () => {
+    expect(mapRunStatus("")).toBe("done");
+    expect(mapRunIcon("")).toBe("check");
+  });
+});
+
+// ============================================================
+// toGuiCtx —— ExtensionContext → GuiContext 最小子集
+// ============================================================
+
+describe("toGuiCtx", () => {
+  it("undefined → undefined（无 ctx 时返回 undefined，不构造空对象）", () => {
+    expect(toGuiCtx(undefined)).toBeUndefined();
+  });
+
+  it("rpc 模式 → 正确提取 mode + hasUI", () => {
+    const result = toGuiCtx({ mode: "rpc", hasUI: false });
+    expect(result).toEqual({ mode: "rpc", hasUI: false });
+  });
+
+  it("tui 模式 → 正确透传", () => {
+    const result = toGuiCtx({ mode: "tui", hasUI: true });
+    expect(result).toEqual({ mode: "tui", hasUI: true });
+  });
+
+  it("返回对象只有 mode/hasUI 两键（不泄漏 ui 引用）", () => {
+    const result = toGuiCtx({ mode: "rpc", hasUI: true });
+    expect(Object.keys(result!)).toEqual(["mode", "hasUI"]);
+  });
 });
 
 // ============================================================
@@ -144,7 +179,7 @@ describe("isGuiCapable (protocol)", () => {
 
 describe("buildGuiComponent", () => {
   describe("action: start", () => {
-    it("返回 card 组件，header 为 subagent，body 含 stats-line", () => {
+    it("返回 card 组件，header 为 slug（身份信息），body 含 stats-line", () => {
       const comp = buildGuiComponent(
         "start",
         {
@@ -168,10 +203,12 @@ describe("buildGuiComponent", () => {
       );
 
       expect(comp.type).toBe("card");
-      const props = comp.props as { header: string; body: Array<{ type: string }> };
-      expect(props.header).toBe("subagent");
+      const props = comp.props as { header: string; body: Array<{ type: string; props: { items: Array<{ severity: string }> } }> };
+      // S#1: header 用 slug 作为身份标识（非硬编码 "subagent"），并发 subagent 可区分
+      expect(props.header).toBe("review");
       expect(props.body).toHaveLength(1);
       expect(props.body[0].type).toBe("stats-line");
+      expect(props.body[0].props.items[0].severity).toBe("ok");
     });
   });
 

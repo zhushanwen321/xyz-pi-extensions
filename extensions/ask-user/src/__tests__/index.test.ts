@@ -578,6 +578,30 @@ describe("execute — RPC mode (askUserInteract via select channel)", () => {
 		expect(result.details.answers["Which tools?"]).toBe("A, C");
 	});
 
+	it("R-2b: multi-select 乱序回传 → 按 options 定义顺序排序（S#3）", async () => {
+		const tool = getTool();
+		const multi = {
+			questions: [
+				{
+					question: "Which tools?",
+					header: "Tools",
+					options: [{ label: "A" }, { label: "B" }, { label: "C" }],
+					multiSelect: true,
+				},
+			],
+		};
+		// 前端回传顺序 ["C", "A"] —— 应按 options 索引重排为 "A, C"
+		const protoAnswers = JSON.stringify({ Tools: JSON.stringify(["C", "A"]) });
+		const result = await tool.execute(
+			"id",
+			multi,
+			undefined,
+			undefined,
+			makeCtx({ mode: "rpc", selectResult: protoAnswers }),
+		);
+		expect(result.details.answers["Which tools?"]).toBe("A, C");
+	});
+
 	it("R-3: Other free text → appended to answer parts", async () => {
 		const tool = getTool();
 		// 单选 Postgres + Other "Custom DB"
