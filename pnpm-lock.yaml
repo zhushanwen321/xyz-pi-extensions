@@ -149,6 +149,9 @@ importers:
       '@sinclair/typebox':
         specifier: '*'
         version: 0.34.49
+      '@xyz-agent/extension-protocol':
+        specifier: ^0.2.0
+        version: 0.2.0
     devDependencies:
       vitest:
         specifier: ^4.1.8
@@ -260,6 +263,9 @@ importers:
       '@sinclair/typebox':
         specifier: '*'
         version: 0.34.49
+      '@xyz-agent/extension-protocol':
+        specifier: ^0.2.0
+        version: 0.2.0
       '@zhushanwen/pi-structured-output':
         specifier: '*'
         version: 0.2.1(@mariozechner/pi-coding-agent@0.73.1(ws@8.21.0)(zod@4.4.3))(@sinclair/typebox@0.34.49)
@@ -307,6 +313,9 @@ importers:
       '@sinclair/typebox':
         specifier: '*'
         version: 0.34.49
+      '@xyz-agent/extension-protocol':
+        specifier: ^0.2.0
+        version: 0.2.0
     devDependencies:
       vitest:
         specifier: ^4.1.8

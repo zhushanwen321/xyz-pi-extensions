@@ -33,7 +33,8 @@ import {
   type GuiContext,
   guiResult,
   isGuiCapable,
-} from "./gui-adapter.ts";
+} from "@xyz-agent/extension-protocol";
+import { mapRunIcon, mapRunStatus, toGuiCtx } from "./gui-mappers.ts";
 import {
   acquireReentryGuard,
   REENTRY_BUSY_MESSAGE,
@@ -122,7 +123,7 @@ interface RunSummary {
  * Discriminated union of `workflow` tool `details` payloads.
  *
  * Discriminant: `action`. Each action's details shape is explicitly typed so
- * downstream consumers (GUI task-list renderer, structured-output) can narrow
+ * downstream consumers (GUI list-tree renderer, structured-output) can narrow
  * without unsafe casts.
  */
 export type WorkflowToolDetails =
@@ -155,20 +156,25 @@ function withGui<T extends WorkflowToolDetails | undefined>(
 /** 按 WorkflowToolDetails 构造对应的 GuiComponent。 */
 function buildWorkflowGui(details: WorkflowToolDetails) {
   if (details.action === "run") {
-    return guiComponent("workflow-runs", {
-      runs: [{ runId: details.runId, name: details.name, slug: details.slug, status: details.status }],
+    const statusStr = details.status;
+    return guiComponent("list-tree", {
+      items: [{
+        label: `${details.name} ${details.slug ?? ""} ${details.runId.slice(0, 8)}`.trim(),
+        status: mapRunStatus(statusStr),
+        icon: mapRunIcon(statusStr),
+      }],
     });
   }
   if (details.action === "status") {
-    return guiComponent("workflow-runs", {
-      runs: details.runs.map((r) => ({
-        runId: r.runId,
-        name: r.name,
-        slug: r.slug,
-        status: r.status,
-        reason: r.reason,
-        error: r.error,
-      })),
+    return guiComponent("list-tree", {
+      items: details.runs.map((r) => {
+        const statusStr = r.reason ? `${r.status} (${r.reason})` : r.status;
+        return {
+          label: `${r.name} ${r.slug ?? ""} ${r.runId.slice(0, 8)}`.trim(),
+          status: mapRunStatus(statusStr),
+          icon: mapRunIcon(statusStr),
+        };
+      }),
     });
   }
   // pause/resume/abort/retry-node/skip-node
@@ -271,7 +277,7 @@ export function registerWorkflowTool(
         // GUI 协议：RPC 模式下附加 __gui__ 到 details
         return {
           ...result,
-          details: withGui(result.details, _ctx as GuiContext) as unknown as WorkflowToolDetails,
+          details: withGui(result.details, toGuiCtx(_ctx)) as unknown as WorkflowToolDetails,
         };
       } finally {
         releaseReentryGuard(reentryRef);

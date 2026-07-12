@@ -17,6 +17,7 @@ import { Type } from "@sinclair/typebox";
 import { getSubagentService } from "../execution/subagent-service.ts";
 import type { SubagentToolResult } from "../execution/types.ts";
 import { extractAgentName } from "./format.ts";
+import { toGuiCtx } from "./gui-mappers.ts";
 import { adapter, cancelHandler, listHandler, startHandler } from "./subagent-actions.ts";
 import { type RenderContext,renderSubagentCall, renderSubagentResult } from "./tool-render.ts";
 
@@ -289,11 +290,11 @@ const executeSubagent: SubagentExecuteCb = async (
 
   switch (params.action) {
     case "start":
-      return adapter({ action: "start", domain: await startHandler(service, params.startParam, signal, _ctx?.model) }, _ctx);
+      return adapter({ action: "start", domain: await startHandler(service, params.startParam, signal, _ctx?.model) }, toGuiCtx(_ctx));
     case "list":
-      return adapter({ action: "list", domain: listHandler(service, params.listParam) }, _ctx);
+      return adapter({ action: "list", domain: listHandler(service, params.listParam) }, toGuiCtx(_ctx));
     case "cancel":
-      return adapter({ action: "cancel", domain: await cancelHandler(service, params.cancelParam) }, _ctx);
+      return adapter({ action: "cancel", domain: await cancelHandler(service, params.cancelParam) }, toGuiCtx(_ctx));
     default:
       // assertNever：让 exhaustiveness 成为承重约束——新增 action 时 tsc 报错，
       // 而非悄悄落入此分支。

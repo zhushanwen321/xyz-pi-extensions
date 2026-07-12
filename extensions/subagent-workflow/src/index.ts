@@ -38,6 +38,7 @@ import { SubprocessAgentRunner } from "./execution/subprocess-agent-runner.ts";
 import { WorktreeManager } from "./execution/worktree-manager.ts";
 import { renderBgNotifyMessage } from "./interface/bg-notify-render.ts";
 import { registerWorkflowsCommand } from "./interface/commands.ts";
+import { toGuiCtx } from "./interface/gui-mappers.ts";
 import { notifyDone } from "./interface/helpers.ts";
 import { registerSubagentTool } from "./interface/subagent-tool.ts";
 // ═══ interface/ 层（tools/commands/tui 合并） ═══
@@ -168,7 +169,7 @@ export default function subagentsWorkflowExtension(pi: ExtensionAPI): void {
       runner: state.runner,
       runs: state.runs,
       registry,
-      onRunDone: (run: WorkflowRun) => notifyDone(pi, run.runId, run, notifiedRunIds, sessionCtx),
+      onRunDone: (run: WorkflowRun) => notifyDone(pi, run.runId, run, notifiedRunIds, toGuiCtx(sessionCtx)),
       agentRegistry: state.agentRegistry,
       sessionDir: state.sessionDir,
       activeTempFiles: state.activeTempFiles,

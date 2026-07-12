@@ -16,7 +16,8 @@ import {
   type GuiContext,
   guiResult,
   isGuiCapable,
-} from "./gui-adapter.ts";
+} from "@xyz-agent/extension-protocol";
+import { mapRunIcon, mapRunStatus } from "./gui-mappers.ts";
 
 // ── 常量 ─────────────────────────────────────────────────────
 
@@ -86,13 +87,14 @@ export function notifyDone(
 
   // GUI 协议：RPC 模式下附加结构化渲染数据
   if (ctx && isGuiCapable(ctx)) {
+    const reason = run.state.reason;
+    const statusStr = `${run.state.status}${reason ? ` (${reason})` : ""}`;
     details.__gui__ = guiResult(
-      guiComponent("workflow-runs", {
-        runs: [{
-          runId,
-          name,
-          status: run.state.status,
-          reason: run.state.reason,
+      guiComponent("list-tree", {
+        items: [{
+          label: `${name} ${runId.slice(0, 8)}`,
+          status: mapRunStatus(statusStr),
+          icon: mapRunIcon(statusStr),
         }],
       }),
     );

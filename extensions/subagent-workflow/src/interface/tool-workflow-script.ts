@@ -23,9 +23,16 @@ import type { ExtensionAPI, ExtensionContext, Theme } from "@mariozechner/pi-cod
 import { Text } from "@mariozechner/pi-tui";
 import { type Static, Type } from "typebox";
 
+import {
+  guiComponent,
+  type GuiContext,
+  guiResult,
+  isGuiCapable,
+} from "@xyz-agent/extension-protocol";
 import type { WorkflowScriptRegistry } from "../orchestration/models/workflow-script-registry.ts";
 import { lintScript } from "../orchestration/script-lint.ts";
 import { deleteWorkflow, saveWorkflow } from "../orchestration/workflow-files.ts";
+import { toGuiCtx } from "./gui-mappers.ts";
 import { renderTextFallback } from "./views/format.ts";
 
 // ── Parameter schema ─────────────────────────────────────────
@@ -73,6 +80,67 @@ export interface TextContent {
   isError?: boolean;
 }
 
+// ── GUI 协议 helpers ───────────────────────────────────────
+
+/**
+ * 为 details 附加 __gui__（RPC 模式下）。
+ *
+ * 所有 5 个 action 都映射到 stats-line（单行统计，无复杂结构）：
+ *   - generate: 显示生成的脚本名
+ *   - lint: passed / N findings
+ *   - list: 脚本数量
+ *   - save/delete: ok/warn
+ */
+function withScriptGui(
+  result: TextContent,
+  ctx?: GuiContext,
+): TextContent {
+  if (!ctx || !isGuiCapable(ctx) || !result.details) return result;
+  const details = result.details;
+  return {
+    ...result,
+    details: {
+      ...details,
+      __gui__: guiResult(buildScriptGui(details)),
+    } as unknown as WorkflowScriptToolDetails,
+  };
+}
+
+/** 按 WorkflowScriptToolDetails 构造 stats-line GuiComponent。 */
+function buildScriptGui(details: WorkflowScriptToolDetails) {
+  switch (details.action) {
+    case "generate":
+      return guiComponent("stats-line", {
+        items: [{ label: "generated", value: details.name, severity: "ok" }],
+      });
+    case "lint":
+      return guiComponent("stats-line", {
+        items: [
+          {
+            label: "lint",
+            value: details.valid ? "passed" : `${details.findingCount} findings`,
+            severity: details.valid ? "ok" : "warn",
+          },
+        ],
+      });
+    case "list":
+      return guiComponent("stats-line", {
+        items: [{ label: "scripts", value: String(details.count), severity: "ok" }],
+      });
+    case "save":
+    case "delete":
+      return guiComponent("stats-line", {
+        items: [
+          {
+            label: details.action,
+            value: details.name,
+            severity: details.ok ? "ok" : "warn",
+          },
+        ],
+      });
+  }
+}
+
 // ── Tool registration ────────────────────────────────────────
 
 /**
@@ -108,22 +176,31 @@ export function registerWorkflowScriptTool(
       params: ScriptParams,
       signal: AbortSignal | undefined,
       _onUpdate: unknown,
-      _ctx: ExtensionContext,
+      ctx: ExtensionContext,
     ): Promise<TextContent> {
+      let result: TextContent;
       switch (params.action) {
         case "generate":
-          return actionGenerate(params, signal);
+          result = actionGenerate(params, signal);
+          break;
         case "lint":
-          return actionLint(params, registry);
+          result = await actionLint(params, registry);
+          break;
         case "save":
-          return actionSave(params);
+          result = await actionSave(params);
+          break;
         case "delete":
-          return actionDelete(params, registry, isRunning);
+          result = actionDelete(params, registry, isRunning);
+          break;
         case "list":
-          return await actionList(registry);
+          result = await actionList(registry);
+          break;
         default:
-          return textResult(`Unknown action: ${String(params.action)}`, true);
+          result = textResult(`Unknown action: ${String(params.action)}`, true);
+          break;
       }
+      // GUI 协议：RPC 模式下附加 __gui__ 到 details
+      return withScriptGui(result, toGuiCtx(ctx));
     },
 
     renderCall(args: ScriptParams, theme: Theme, _context?: unknown) {

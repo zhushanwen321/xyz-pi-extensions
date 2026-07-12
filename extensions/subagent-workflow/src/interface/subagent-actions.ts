@@ -27,7 +27,8 @@ import {
   type GuiContext,
   guiResult,
   isGuiCapable,
-} from "./gui-adapter.ts";
+} from "@xyz-agent/extension-protocol";
+import { mapRunIcon, mapRunStatus } from "./gui-mappers.ts";
 
 // ============================================================
 // 常量
@@ -280,23 +281,20 @@ function buildGuiComponent(
   _result: SubagentToolResult,
 ) {
   if (action === "start") {
-    return guiComponent("subagent-trace", {
-      agent: "subagent",
-      status: "running" as const,
+    // subagent-trace 多层语义（agent名+状态）用 card(stats-line) 组合表达
+    return guiComponent("card", {
+      header: "subagent",
+      body: [guiComponent("stats-line", { items: [{ value: "running" }] })],
     });
   }
   if (action === "list") {
     const listResp = input.domain as ListHandlerResult;
-    return guiComponent("task-list", {
-      title: `Subagents (${listResp.response.running} running)`,
+    return guiComponent("list-tree", {
       items: listResp.response.items.map((it) => ({
         label: it.slug ? `${it.agent} · ${it.slug} · ${it.subagentId}` : `${it.agent} · ${it.subagentId}`,
-        status: it.status === "running" ? "in_progress" as const
-          : it.status === "done" ? "completed" as const
-          : it.status === "failed" ? "failed" as const
-          : "pending" as const,
+        status: mapRunStatus(it.status),
+        icon: mapRunIcon(it.status),
       })),
-      summary: `${listResp.response.running}/${listResp.response.items.length} running`,
     });
   }
   // cancel
