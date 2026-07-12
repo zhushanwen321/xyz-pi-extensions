@@ -156,6 +156,13 @@ function withGui<T extends WorkflowToolDetails | undefined>(
 /** 按 WorkflowToolDetails 构造对应的 GuiComponent。 */
 export function buildWorkflowGui(details: WorkflowToolDetails) {
   if (details.action === "run") {
+    // not_found 是脚本未找到的逻辑错误（isError:true），不能走通用 mapper 的 done/check 成功映射。
+    // 短路为 danger severity 的 stats-line，与 isError 文案一致。
+    if (details.status === "not_found") {
+      return guiComponent("stats-line", {
+        items: [{ label: "run", value: "not found", severity: "danger" as const }],
+      });
+    }
     const statusStr = details.status;
     return guiComponent("list-tree", {
       items: [{

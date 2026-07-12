@@ -313,7 +313,7 @@ describe("buildWorkflowGui", () => {
       expect(props.items[0].label).toBe("build ci abcdefgh");
     });
 
-    it("not_found → list-tree，单 item status=done icon=check", () => {
+    it("not_found → stats-line danger（错误状态不渲染为成功）", () => {
       const details: WorkflowToolDetails = {
         action: "run",
         runId: "",
@@ -322,11 +322,13 @@ describe("buildWorkflowGui", () => {
       };
       const comp = buildWorkflowGui(details);
 
-      expect(comp.type).toBe("list-tree");
-      const props = comp.props as { items: Array<{ status: string; icon: string }> };
-      // not_found 不是 failed/abort/cancel/crash/error/budget/time_limited 子串 → done/check
-      expect(props.items[0].status).toBe("done");
-      expect(props.items[0].icon).toBe("check");
+      // not_found 是脚本未找到的逻辑错误（isError:true），短路为 stats-line danger，
+      // 不走通用 mapper 的 done/check 成功映射（避免绿色对勾与错误文案矛盾）。
+      expect(comp.type).toBe("stats-line");
+      const props = comp.props as { items: Array<{ label: string; value: string; severity: string }> };
+      expect(props.items[0].label).toBe("run");
+      expect(props.items[0].value).toBe("not found");
+      expect(props.items[0].severity).toBe("danger");
     });
 
     it("无 slug 时 label 不含双空格（trim 生效）", () => {

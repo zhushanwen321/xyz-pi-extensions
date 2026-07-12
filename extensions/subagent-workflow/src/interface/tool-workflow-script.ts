@@ -107,7 +107,7 @@ function withScriptGui(
 }
 
 /** 按 WorkflowScriptToolDetails 构造 stats-line GuiComponent。 */
-function buildScriptGui(details: WorkflowScriptToolDetails) {
+export function buildScriptGui(details: WorkflowScriptToolDetails) {
   switch (details.action) {
     case "generate":
       return guiComponent("stats-line", {
