@@ -27,10 +27,10 @@
 import { StringEnum } from "@mariozechner/pi-ai";
 import type { ExtensionAPI, ExtensionContext, Theme } from "@mariozechner/pi-coding-agent";
 import { Text } from "@mariozechner/pi-tui";
+import { type GuiComponent, guiComponent, type GuiRenderResult,guiResult } from "@xyz-agent/extension-protocol";
 import { type Static, Type } from "typebox";
 
-import { guiComponent, guiResult, type GuiComponent, type GuiRenderResult } from "@xyz-agent/extension-protocol";
-
+import { BUDGET_RATIO_HIGH, BUDGET_RATIO_LOW, SECONDS_PER_MINUTE, SHORT_ID_LENGTH } from "../constants";
 import { isActiveStatus, isTerminalStatus, transitionStatus } from "../engine/goal";
 import type { BudgetConfig, GoalRuntimeState, GoalStatus } from "../engine/types";
 import { updateWidget } from "../projection/widget";
@@ -237,7 +237,7 @@ export function handleReportBlocked(
  * - 无 budget → stats-line 展示状态摘要
  */
 export function buildGoalGui(state: GoalRuntimeState): GuiRenderResult {
-	const slug = state.slug ?? state.goalId.slice(0, 8);
+	const slug = state.slug ?? state.goalId.slice(0, SHORT_ID_LENGTH);
 	const statusSeverity = state.status === "active" ? "ok"
 		: state.status === "blocked" ? "danger"
 			: state.status === "complete" ? "ok"
@@ -256,13 +256,13 @@ export function buildGoalGui(state: GoalRuntimeState): GuiRenderResult {
 					current: state.tokensUsed,
 					total: state.budget.tokenBudget,
 					unit: "tok",
-					severity: tokenPct >= 0.9 ? "danger" : tokenPct >= 0.7 ? "warn" : "ok",
+					severity: tokenPct >= BUDGET_RATIO_HIGH ? "danger" : tokenPct >= BUDGET_RATIO_LOW ? "warn" : "ok",
 				}),
 			);
 		}
 		// time 进度条
 		if (state.budget.timeBudgetMinutes) {
-			const timeBudgetSec = state.budget.timeBudgetMinutes * 60;
+			const timeBudgetSec = state.budget.timeBudgetMinutes * SECONDS_PER_MINUTE;
 			const timePct = state.timeUsedSeconds / timeBudgetSec;
 			body.push(
 				guiComponent("progress-bar", {
@@ -270,7 +270,7 @@ export function buildGoalGui(state: GoalRuntimeState): GuiRenderResult {
 					current: state.timeUsedSeconds,
 					total: timeBudgetSec,
 					unit: "s",
-					severity: timePct >= 0.9 ? "danger" : timePct >= 0.7 ? "warn" : "ok",
+					severity: timePct >= BUDGET_RATIO_HIGH ? "danger" : timePct >= BUDGET_RATIO_LOW ? "warn" : "ok",
 				}),
 			);
 		}
