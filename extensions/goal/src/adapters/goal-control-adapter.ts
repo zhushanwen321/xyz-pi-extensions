@@ -29,8 +29,10 @@ import type { ExtensionAPI, ExtensionContext, Theme } from "@mariozechner/pi-cod
 import { Text } from "@mariozechner/pi-tui";
 import { type Static, Type } from "typebox";
 
+import { guiComponent, guiResult, type GuiComponent, type GuiRenderResult } from "@xyz-agent/extension-protocol";
+
 import { isActiveStatus, isTerminalStatus, transitionStatus } from "../engine/goal";
-import type { BudgetConfig, GoalStatus } from "../engine/types";
+import type { BudgetConfig, GoalRuntimeState, GoalStatus } from "../engine/types";
 import { updateWidget } from "../projection/widget";
 import { createGoal, finalizeAndPersist, persistState, type ServicePorts, tickState } from "../service";
 import type { GoalSession } from "../session";
@@ -90,6 +92,8 @@ export interface GoalControlDetails {
 	goalId: string;
 	status: GoalStatus;
 	slug?: string;
+	/** RPC 模式下的 GUI 渲染描述符（progress-bar 预算进度）。TUI 模式无此字段。 */
+	__gui__?: GuiRenderResult;
 }
 
 // ── 业务 handler（契约对齐 §3，可测：fake ports）──────
@@ -221,6 +225,86 @@ export function handleReportBlocked(
 	return { action: "report_blocked", goalId: state.goalId, status: state.status };
 }
 
+// ── GUI 渲染描述符构造 ───────────────────────────────
+
+/**
+ * 构造 goal 的 GUI 渲染描述符（RPC 模式下放进 details.__gui__）。
+ *
+ * 逻辑参考 projection/widget.ts 的 renderWidgetLines 预算计算，但此处只构造
+ * 结构化数据（GuiComponent），不做 ANSI 渲染。
+ *
+ * - 有 tokenBudget 或 timeBudgetMinutes → card(progress-bar + stats-line) 展示预算消耗
+ * - 无 budget → stats-line 展示状态摘要
+ */
+export function buildGoalGui(state: GoalRuntimeState): GuiRenderResult {
+	const slug = state.slug ?? state.goalId.slice(0, 8);
+	const statusSeverity = state.status === "active" ? "ok"
+		: state.status === "blocked" ? "danger"
+			: state.status === "complete" ? "ok"
+				: "warn";
+
+	const hasBudget = state.budget.tokenBudget !== undefined || state.budget.timeBudgetMinutes !== undefined;
+
+	if (hasBudget) {
+		const body: GuiComponent[] = [];
+		// token 进度条
+		if (state.budget.tokenBudget) {
+			const tokenPct = state.tokensUsed / state.budget.tokenBudget;
+			body.push(
+				guiComponent("progress-bar", {
+					label: "tokens",
+					current: state.tokensUsed,
+					total: state.budget.tokenBudget,
+					unit: "tok",
+					severity: tokenPct >= 0.9 ? "danger" : tokenPct >= 0.7 ? "warn" : "ok",
+				}),
+			);
+		}
+		// time 进度条
+		if (state.budget.timeBudgetMinutes) {
+			const timeBudgetSec = state.budget.timeBudgetMinutes * 60;
+			const timePct = state.timeUsedSeconds / timeBudgetSec;
+			body.push(
+				guiComponent("progress-bar", {
+					label: "time",
+					current: state.timeUsedSeconds,
+					total: timeBudgetSec,
+					unit: "s",
+					severity: timePct >= 0.9 ? "danger" : timePct >= 0.7 ? "warn" : "ok",
+				}),
+			);
+		}
+		// 状态 + turn 统计行
+		body.push(
+			guiComponent("stats-line", {
+				items: [
+					{ label: "status", value: state.status, severity: statusSeverity },
+					{ label: "turn", value: String(state.currentTurnIndex) },
+				],
+			}),
+		);
+		return guiResult(
+			guiComponent("card", {
+				variant: state.status === "blocked" ? "danger" : state.status === "complete" ? "success" : "default",
+				header: slug,
+				body,
+			}),
+		);
+	}
+
+	// 无 budget：stats-line 摘要
+	return guiResult(
+		guiComponent("stats-line", {
+			items: [
+				{ label: "goal", value: slug },
+				{ label: "status", value: state.status, severity: statusSeverity },
+				{ label: "turn", value: String(state.currentTurnIndex) },
+				{ label: "tokens", value: String(state.tokensUsed) },
+			],
+		}),
+	);
+}
+
 // ── Tool 注册 ────────────────────────────────────────
 
 export function registerGoalControlTool(pi: ExtensionAPI, session: GoalSession): void {
@@ -262,6 +346,11 @@ export function registerGoalControlTool(pi: ExtensionAPI, session: GoalSession):
 					: details.action === "complete"
 						? `Goal completed.\nGoal ID: ${details.goalId}`
 						: `Goal reported blocked.\nGoal ID: ${details.goalId}\nReason: ${params.reason?.trim() ?? ""}`;
+
+			// RPC 模式下附加 __gui__（用展开避免 details 来自 frozen 对象时加字段失败）
+			if (ctx.mode === "rpc" && session.state) {
+				return { content: [{ type: "text", text }], details: { ...details, __gui__: buildGoalGui(session.state) } };
+			}
 			return { content: [{ type: "text", text }], details };
 		},
 

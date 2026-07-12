@@ -27,6 +27,9 @@
     "@mariozechner/pi-coding-agent": "*",
     "@sinclair/typebox": "*"
   },
+  "dependencies": {
+    "@xyz-agent/extension-protocol": "^0.2.0"
+  },
   "peerDependenciesMeta": {
     "@earendil-works/pi-tui": {
       "optional": true
