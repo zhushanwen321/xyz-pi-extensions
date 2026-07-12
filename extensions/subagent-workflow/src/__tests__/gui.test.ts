@@ -368,7 +368,7 @@ describe("buildWorkflowGui", () => {
       expect(props.items[0].severity).toBe("danger");
     });
 
-    it("无 slug 时 label 不含双空格（trim 生效）", () => {
+    it("无 slug 时 label 不含双空格（filter(Boolean).join 生效）", () => {
       const details: WorkflowToolDetails = {
         action: "run",
         runId: "1234567890",
@@ -377,10 +377,8 @@ describe("buildWorkflowGui", () => {
       };
       const comp = buildWorkflowGui(details);
       const props = comp.props as { items: Array<{ label: string }> };
-      // slug 缺失 → ""，拼接后 trim 去掉中间空格："deploy  12345678".trim() → "deploy  12345678"
-      // 注意：实现用 `${name} ${slug ?? ""} ${runId.slice(0,8)}`.trim()
-      // slug 为 undefined → "deploy  12345678"（两空格），trim 只去首尾。
-      expect(props.items[0].label).toBe("deploy  12345678");
+      // slug 缺失 → filter(Boolean) 过滤掉空段 → "deploy 12345678"（单空格）
+      expect(props.items[0].label).toBe("deploy 12345678");
     });
   });
 
@@ -425,7 +423,7 @@ describe("buildWorkflowGui", () => {
   });
 
   describe("lifecycle & node-ops actions → stats-line", () => {
-    it("pause → stats-line，label=pause value=runId 前 8 字符", () => {
+    it("pause → stats-line，label=pause value=runId 前 8 字符，severity=warn（挂起非成功完成）", () => {
       const details: WorkflowToolDetails = {
         action: "pause",
         runId: "pauseRunId99",
@@ -437,7 +435,7 @@ describe("buildWorkflowGui", () => {
       const props = comp.props as { items: Array<{ label: string; value: string; severity: string }> };
       expect(props.items[0].label).toBe("pause");
       expect(props.items[0].value).toBe("pauseRun");
-      expect(props.items[0].severity).toBe("ok");
+      expect(props.items[0].severity).toBe("warn");
     });
 
     it("resume → stats-line", () => {
@@ -459,6 +457,8 @@ describe("buildWorkflowGui", () => {
       };
       const comp = buildWorkflowGui(details);
       expect(comp.type).toBe("stats-line");
+      const props = comp.props as { items: Array<{ severity: string }> };
+      expect(props.items[0].severity).toBe("warn");
     });
 
     it("retry-node → stats-line，label=retry-node", () => {

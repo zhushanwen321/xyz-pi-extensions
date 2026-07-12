@@ -110,7 +110,9 @@ export function notifyDone(
     const statusStr = `${run.state.status}${reason ? ` (${reason})` : ""}`;
     // label 对齐 buildWorkflowGui 的格式：name + slug + runId 前 8 字符（I#3）
     const slug = run.spec.slug;
-    const label = `${name} ${slug ?? ""} ${runId.slice(0, RUN_ID_DISPLAY_LENGTH)}`.trim();
+    const label = [name, slug, runId.slice(0, RUN_ID_DISPLAY_LENGTH)]
+      .filter(Boolean)
+      .join(" ");
     details.__gui__ = guiResult(
       guiComponent("list-tree", {
         items: [{

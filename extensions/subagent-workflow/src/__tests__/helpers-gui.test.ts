@@ -94,11 +94,11 @@ describe("notifyDone — GUI 协议", () => {
     expect(items[0].icon).toBe("check");
   });
 
-  it("RPC 模式 + 无 reason → __gui__ status=done icon=check", () => {
+  it("RPC 模式 + reason=completed → __gui__ status=done icon=check", () => {
     const { pi, captured } = makePi();
-    const run = makeRun({ status: "done", reason: undefined, slug: "deploy" });
+    const run = makeRun({ status: "done", reason: "completed", slug: "deploy" });
 
-    notifyDone(pi, "run-defg1234", runAsParam(run), new Set(), { mode: "rpc", hasUI: true });
+    notifyDone(pi, "run-comp1234", runAsParam(run), new Set(), { mode: "rpc", hasUI: true });
 
     const details = captured[0] as WorkflowNotifyDetails;
     const items = details.__gui__!.component.props.items as Array<{ status: string; icon: string }>;
@@ -118,7 +118,7 @@ describe("notifyDone — GUI 协议", () => {
     expect(items[0].label).toBe("build ci abcdefgh");
   });
 
-  it("RPC 模式 + 无 slug → label 不含 slug（trim 去中间空格）", () => {
+  it("RPC 模式 + 无 slug → label 不含多余空格（filter(Boolean) 生效）", () => {
     const { pi, captured } = makePi();
     const run = makeRun({ status: "done", reason: "completed", slug: undefined });
 
@@ -126,8 +126,8 @@ describe("notifyDone — GUI 协议", () => {
 
     const details = captured[0] as WorkflowNotifyDetails;
     const items = details.__gui__!.component.props.items as Array<{ label: string }>;
-    // slug 为 undefined → "build  abcdefgh"（中间双空格），trim 不去中间空格
-    expect(items[0].label).toBe("build  abcdefgh");
+    // slug 为 undefined → filter(Boolean) 过滤空段 → "build abcdefgh"（单空格）
+    expect(items[0].label).toBe("build abcdefgh");
   });
 
   it("非 RPC 模式 → 不附加 __gui__", () => {

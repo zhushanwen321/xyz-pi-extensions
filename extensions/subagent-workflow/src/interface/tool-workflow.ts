@@ -167,7 +167,7 @@ export function buildWorkflowGui(details: WorkflowToolDetails) {
     const statusStr = details.status;
     return guiComponent("list-tree", {
       items: [{
-        label: `${details.name} ${details.slug ?? ""} ${details.runId.slice(0, 8)}`.trim(),
+        label: [details.name, details.slug, details.runId.slice(0, 8)].filter(Boolean).join(" "),
         status: mapRunStatus(statusStr),
         icon: mapRunIcon(statusStr),
       }],
@@ -178,7 +178,7 @@ export function buildWorkflowGui(details: WorkflowToolDetails) {
       items: details.runs.map((r) => {
         const statusStr = r.reason ? `${r.status} (${r.reason})` : r.status;
         return {
-          label: `${r.name} ${r.slug ?? ""} ${r.runId.slice(0, 8)}`.trim(),
+          label: [r.name, r.slug, r.runId.slice(0, 8)].filter(Boolean).join(" "),
           status: mapRunStatus(statusStr),
           icon: mapRunIcon(statusStr),
         };
@@ -186,11 +186,13 @@ export function buildWorkflowGui(details: WorkflowToolDetails) {
     });
   }
   // pause/resume/abort/retry-node/skip-node
+  // abort 是破坏性终止、pause 是挂起（非成功完成），用 warn 区分；resume/retry/skip 保留 ok
+  const severity = details.action === "abort" || details.action === "pause" ? "warn" as const : "ok" as const;
   return guiComponent("stats-line", {
     items: [{
       label: details.action,
       value: details.runId.slice(0, 8),
-      severity: "ok" as const,
+      severity,
     }],
   });
 }

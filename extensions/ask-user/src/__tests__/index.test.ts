@@ -695,4 +695,89 @@ describe("execute — RPC mode (askUserInteract via select channel)", () => {
 		// 转换后 key 必须是 question 全文（与 TUI 版 buildResult 一致）
 		expect(result.details.answers["Which database?"]).toBe("Postgres");
 	});
+
+	it("R-8: multi-question mixed (single-select + multi-select + Other + comment)", async () => {
+		const tool = getTool();
+		const mixed = {
+			questions: [
+				{
+					question: "Which database?",
+					header: "DB",
+					options: [{ label: "Postgres" }, { label: "MySQL" }],
+				},
+				{
+					question: "Which tools?",
+					header: "Tools",
+					options: [{ label: "A" }, { label: "B" }, { label: "C" }],
+					multiSelect: true,
+				},
+				{
+					question: "Which region?",
+					header: "Region",
+					options: [{ label: "US" }, { label: "EU" }],
+					allowComment: true,
+				},
+			],
+		};
+		// Q1: single-select Postgres
+		// Q2: multi-select [C, A] (乱序 → 应重排为 A, C) + Other "Custom"
+		// Q3: 无选中 (parts.length === 0 → skip, 不出现在 answers 中)
+		const protoAnswers = JSON.stringify({
+			DB: "Postgres",
+			Tools: JSON.stringify(["C", "A"]),
+			"Tools__other": "Custom",
+			// Region 无选中 → protoAnswersToResult 的 `if (parts.length === 0) continue` 跳过
+		});
+		const result = await tool.execute(
+			"id",
+			mixed,
+			undefined,
+			undefined,
+			makeCtx({ mode: "rpc", selectResult: protoAnswers }),
+		);
+
+		expect(result.details.cancelled).toBe(false);
+		// Q1: single-select
+		expect(result.details.answers["Which database?"]).toBe("Postgres");
+		// Q2: multi-select 重排 + Other
+		expect(result.details.answers["Which tools?"]).toBe("A, C, Custom");
+		// Q3: 无选中 → 跳过（不在 answers map 中）
+		expect(result.details.answers["Which region?"]).toBeUndefined();
+	});
+
+	it("R-9: multi-question with comment on one question", async () => {
+		const tool = getTool();
+		const multiQ = {
+			questions: [
+				{
+					question: "Which DB?",
+					header: "DB",
+					options: [{ label: "Postgres" }],
+				},
+				{
+					question: "Why?",
+					header: "Reason",
+					options: [{ label: "Performance" }],
+					allowComment: true,
+				},
+			],
+		};
+		const protoAnswers = JSON.stringify({
+			DB: "Postgres",
+			Reason: "Performance",
+			"Reason__comment": "benchmarked",
+		});
+		const result = await tool.execute(
+			"id",
+			multiQ,
+			undefined,
+			undefined,
+			makeCtx({ mode: "rpc", selectResult: protoAnswers }),
+		);
+
+		// Q1: 无 comment
+		expect(result.details.answers["Which DB?"]).toBe("Postgres");
+		// Q2: 有 comment → 内联
+		expect(result.details.answers["Why?"]).toBe("Performance — benchmarked");
+	});
 });

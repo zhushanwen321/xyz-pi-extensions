@@ -28,11 +28,17 @@ export function registerSubagentsCommand(pi: ExtensionAPI): void {
         const parsed = parseSubagentRpcCommand(argsStr);
         switch (parsed.action) {
           case "cancel": {
-            const ok = service.cancel(parsed.recordId);
-            ctx.ui.notify(
-              ok ? `Cancelled subagent ${parsed.recordId}` : `Subagent ${parsed.recordId} not found or already finished`,
-              ok ? "info" : "warning",
-            );
+            try {
+              const ok = service.cancel(parsed.recordId);
+              ctx.ui.notify(
+                ok ? `Cancelled subagent ${parsed.recordId}` : `Subagent ${parsed.recordId} not found or already finished`,
+                ok ? "info" : "warning",
+              );
+            } catch (err) {
+              // service.cancel 内部 assertReady 在 session_shutdown 并发 dispose 时会抛
+              const msg = err instanceof Error ? err.message : String(err);
+              ctx.ui.notify(`Failed to cancel subagent ${parsed.recordId}: ${msg}`, "warning");
+            }
             return;
           }
           case "cancel-missing-id":
@@ -42,6 +48,11 @@ export function registerSubagentsCommand(pi: ExtensionAPI): void {
             // 无 action 或未知 action：GUI 端已屏蔽此 command 入口，此处兜底
             ctx.ui.notify("View subagents in the sidebar Agents tab", "info");
             return;
+          default: {
+            // exhaustiveness 断言：未来新增 action verb 忘加 case 时 tsc 报错
+            const _exhaustive: never = parsed;
+            throw new Error(`Unhandled subagent RPC action: ${String(_exhaustive)}`);
+          }
         }
       }
 

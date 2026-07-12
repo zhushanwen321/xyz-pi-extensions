@@ -79,7 +79,8 @@ export function registerWorkflowsCommand(
               if (parsed.action === "pause") await pauseRun(parsed.runId, deps);
               else if (parsed.action === "resume") await resumeRun(parsed.runId, deps);
               else await abortRun(parsed.runId, deps);
-              ctx.ui.notify(`Workflow ${parsed.runId}: ${parsed.action}d`, "info");
+              const pastTense = parsed.action === "abort" ? "aborted" : `${parsed.action}d`;
+              ctx.ui.notify(`Workflow ${parsed.runId}: ${pastTense}`, "info");
             } catch (err) {
               const msg = err instanceof Error ? err.message : String(err);
               ctx.ui.notify(`Failed to ${parsed.action} workflow ${parsed.runId}: ${msg}`, "warning");
@@ -93,6 +94,11 @@ export function registerWorkflowsCommand(
             // 无 action 或未知 action：GUI 端已屏蔽此 command 入口，此处兜底
             ctx.ui.notify("View workflows in the sidebar Flows tab", "info");
             return;
+          default: {
+            // exhaustiveness 断言：未来新增 action verb 忘加 case 时 tsc 报错
+            const _exhaustive: never = parsed;
+            throw new Error(`Unhandled workflow RPC action: ${String(_exhaustive)}`);
+          }
         }
       }
 

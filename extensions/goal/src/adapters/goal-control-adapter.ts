@@ -24,7 +24,7 @@
  * 错误处理：用 throw new Error（CLAUDE.md Tool 设计规范），不返回错误成功模式。
  */
 
-import { StringEnum } from "@mariozechner/pi-ai";
+import { StringEnum } from "@earendil-works/pi-ai";
 import type { ExtensionAPI, ExtensionContext, Theme } from "@mariozechner/pi-coding-agent";
 import { Text } from "@mariozechner/pi-tui";
 import { type GuiComponent, guiComponent, type GuiRenderResult,guiResult } from "@xyz-agent/extension-protocol";
