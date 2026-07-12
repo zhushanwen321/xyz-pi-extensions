@@ -25,18 +25,19 @@
  * 参考：domain-models.md §失败处理矩阵。
  */
 
+import { SLUG_MAX_LENGTH } from "../execution/execute-options-mapper.ts";
+import { createRecord, updateFromEvent } from "../execution/execution-record.ts";
 import type { AgentEvent } from "../shared/agent-event.ts";
 import { resolveAgentOpts } from "./agent-opts-resolver.ts";
 import { ConcurrencyGate, DEFAULT_CONCURRENCY } from "./concurrency-gate.ts";
-import type { WorkerHandle } from "./worker-handle.ts";
 import { executeAgentCall } from "./execute-agent-call.ts";
-import { createRecord, updateFromEvent } from "../execution/execution-record.ts";
 import { AgentCall } from "./models/agent-call.ts";
 import type { LifecycleDeps, WorkerHandlers } from "./models/ports.ts";
 import { RunRuntime } from "./models/run-runtime.ts";
 import type { WorkerLogEntry } from "./models/types.ts";
 import type { AgentCallOpts, AgentResult, ExecutionTraceNode } from "./models/types.ts";
 import type { WorkflowRun } from "./models/workflow-run.ts";
+import type { WorkerHandle } from "./worker-handle.ts";
 
 // ── 常量 ─────────────────────────────────────────────────────
 
@@ -209,8 +210,10 @@ function dispatchAgentCall(
     return;
   }
 
- // 构建 trace 节点 + live record（TUI 实时进度）
+  // 构建 trace 节点 + live record（TUI 实时进度）
   const agentName = msg.opts.description ?? msg.opts.agent ?? "unknown";
+  // slug 复用 agentName（超长截断），live record 的 slug 仅用于 TUI 展示。
+  const liveSlug = agentName.length > SLUG_MAX_LENGTH ? agentName.slice(0, SLUG_MAX_LENGTH) : agentName;
   const now = new Date().toISOString();
   // live record：收口 agent 执行过程中的 text/thinking/toolCalls/usage，
   // 供 TUI 在 agent 运行期间显示进度（getEventLog/getCurrentActivity）。
@@ -220,6 +223,7 @@ function dispatchAgentCall(
     model: msg.opts.model ?? "default",
     mode: "background",
     task: msg.opts.prompt,
+    slug: liveSlug,
     startedAt: Date.now(),
   });
   const node: ExecutionTraceNode = {

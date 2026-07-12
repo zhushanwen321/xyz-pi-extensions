@@ -69,6 +69,14 @@ const WorkflowParams = Type.Object({
   name: Type.Optional(
     Type.String({ description: "Workflow name (run action)" }),
   ),
+  slug: Type.Optional(
+    Type.String({
+      description:
+        "Short label (max 20 chars) for this run, shown in the TUI to distinguish concurrent runs. " +
+        "If omitted, defaults to the script name.",
+      maxLength: 20,
+    }),
+  ),
   runId: Type.Optional(
     Type.String({ description: "Workflow run ID (pause/resume/abort/retry-node/skip-node)" }),
   ),
@@ -99,6 +107,8 @@ const RUNID_SHORT = 8;
 interface RunSummary {
   runId: string;
   name: string;
+  /** Run 级 slug（可选，旧 run 缺失为 undefined）。 */
+  slug?: string;
   status: string;
   reason?: string;
   startedAt?: string;
@@ -116,7 +126,7 @@ interface RunSummary {
  * without unsafe casts.
  */
 export type WorkflowToolDetails =
-  | { action: "run"; runId: string; status: "running" | "not_found"; name: string }
+  | { action: "run"; runId: string; status: "running" | "not_found"; name: string; slug?: string }
   | { action: "status"; runs: RunSummary[] }
   | { action: "pause" | "resume" | "abort"; runId: string; status: string; reason?: string }
   | { action: "retry-node" | "skip-node"; runId: string; callId: number };
@@ -146,7 +156,7 @@ function withGui<T extends WorkflowToolDetails | undefined>(
 function buildWorkflowGui(details: WorkflowToolDetails) {
   if (details.action === "run") {
     return guiComponent("workflow-runs", {
-      runs: [{ runId: details.runId, name: details.name, status: details.status }],
+      runs: [{ runId: details.runId, name: details.name, slug: details.slug, status: details.status }],
     });
   }
   if (details.action === "status") {
@@ -154,6 +164,7 @@ function buildWorkflowGui(details: WorkflowToolDetails) {
       runs: details.runs.map((r) => ({
         runId: r.runId,
         name: r.name,
+        slug: r.slug,
         status: r.status,
         reason: r.reason,
         error: r.error,
@@ -270,11 +281,16 @@ export function registerWorkflowTool(
     renderCall(args: Record<string, unknown>, theme: Theme, _context?: unknown) {
       const action = String(args.action ?? "");
       const name = args.name ? ` ${String(args.name)}` : "";
+      // run action 可选 slug：在 name 后追加 · slug（accent 色）
+      const slug = typeof args.slug === "string" && args.slug.trim()
+        ? `${theme.fg("dim", " · ")}${theme.fg("accent", String(args.slug))}`
+        : "";
       const runId = args.runId ? ` ${String(args.runId).slice(0, RUNID_SHORT)}` : "";
       return new Text(
         theme.fg("toolTitle", theme.bold("workflow ")) +
           theme.fg("muted", action) +
           theme.fg("accent", name) +
+          slug +
           theme.fg("dim", runId),
         0,
         0,
@@ -330,6 +346,7 @@ async function actionRun(
       budgetTokens: tokens,
       budgetTimeMs: time,
       scriptName: script.name,
+      slug: params.slug,
       scriptPath: script.path,
       description: script.meta.description,
     },
@@ -341,10 +358,12 @@ async function actionRun(
     content: [
       {
         type: "text",
-        text: `Started workflow '${script.name}' (${runId}). Running in background — do NOT poll status.`,
+        text: params.slug
+          ? `Started workflow '${script.name}' · ${params.slug} (${runId}). Running in background — do NOT poll status.`
+          : `Started workflow '${script.name}' (${runId}). Running in background — do NOT poll status.`,
       },
     ],
-    details: { action: "run", runId, status: "running", name: script.name },
+    details: { action: "run", runId, status: "running", name: script.name, slug: params.slug },
   };
 }
 
@@ -468,6 +487,7 @@ function toRunSummary(run: WorkflowRun): RunSummary {
   return {
     runId: run.runId,
     name: run.spec.scriptName,
+    slug: run.spec.slug,
     status: run.state.status,
     reason: run.state.reason,
     startedAt: run.meta.startedAt,

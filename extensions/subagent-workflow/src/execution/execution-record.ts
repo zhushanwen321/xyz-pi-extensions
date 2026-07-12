@@ -147,6 +147,8 @@ export function createRecord(
     thinkingLevel?: string;
     mode: ExecutionMode;
     task: string;
+    /** 短标签（≤20 字符），必填。持久化兜底空串。 */
+    slug: string;
     startedAt: number;
     /** 根 Pi session ID（session 隔离过滤用）。递归链上所有层同值。 */
     rootSessionId?: string;
@@ -164,6 +166,7 @@ export function createRecord(
     thinkingLevel: identity.thinkingLevel,
     mode: identity.mode,
     task: identity.task,
+    slug: identity.slug,
     startedAt: identity.startedAt,
     rootSessionId: identity.rootSessionId,
     parentRecordId: identity.parentRecordId,
@@ -607,6 +610,7 @@ export function project(record: ExecutionRecord): SubagentToolDetails {
     agent: record.agent,
     model: record.model,
     thinkingLevel: record.thinkingLevel,
+    slug: record.slug,
     turns: record.turnCount,
     totalTokens: record.totalTokens,
     elapsedSeconds: computeElapsedSeconds(record),
@@ -657,6 +661,7 @@ export function snapshot(record: ExecutionRecord): RecordSnapshot {
     thinkingLevel: record.thinkingLevel,
     mode: record.mode,
     task: record.task,
+    slug: record.slug,
     status: record.status,
     turns: record.turnCount,
     totalTokens: record.totalTokens,

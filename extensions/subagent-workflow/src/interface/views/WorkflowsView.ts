@@ -579,7 +579,9 @@ function renderHeader(
   const budget = run.state.budget;
   const budgetStr = `${Math.round(budget.usedTokens / BUDGET_TOKENS_DIVISOR)}k/${budget.maxTokens ? `${Math.round(budget.maxTokens / BUDGET_TOKENS_DIVISOR)}k` : "∞"} tok · $${budget.usedCost.toFixed(BUDGET_COST_DECIMALS)}`;
 
-  const nameLine = theme.bold(run.spec.scriptName);
+  const nameLine = run.spec.slug
+    ? `${theme.bold(run.spec.scriptName)}${theme.fg("dim", " · ")}${theme.fg("accent", run.spec.slug)}`
+    : theme.bold(run.spec.scriptName);
   const rightPart = theme.fg("muted", `${headerRight} · ${budgetStr}`);
 
   lines.push(plainBorder(theme, "╭", "╮", contentWidth));

@@ -84,6 +84,11 @@ export interface SubagentIdentityData {
   agent: string;
   mode: ExecutionMode;
   task: string;
+  /**
+   * 短标签（≤20 字符）。旧文件缺失→读取兜底空串（见 reconstructFromFile）。
+   * 写入时（session-runner）必填；读取时可选以兼容旧文件。
+   */
+  slug?: string;
   startedAt: number;
   /** 根 Pi session ID（session 隔离过滤用）。旧文件可能缺失。 */
   rootSessionId?: string;
@@ -126,6 +131,8 @@ export interface ReconstructedRecord {
   agent: string;
   mode: ExecutionMode;
   task: string;
+  /** 短标签（≤20 字符）。旧文件缺失→兜底空串。 */
+  slug: string;
   startedAt: number;
   /** 根 Pi session ID（session 隔离过滤用）。旧文件可能缺失。 */
   rootSessionId: string | undefined;
@@ -428,8 +435,11 @@ export function reconstructFromFile(sessionFile: string): ReconstructedRecord | 
 
   // rootSessionId 归一化：新文件读 rootSessionId，旧文件 fallback parentSessionId。
   const rootSessionId = identity.rootSessionId ?? identity.parentSessionId;
+  // slug 兜底：旧 identity entry 无 slug 字段 → 空串（与 SubagentRecord.slug: string 契约一致）。
+  const slug = identity.slug ?? "";
   return {
     ...identity,
+    slug,
     rootSessionId,
     parentRecordId: identity.parentRecordId,
     depth: identity.depth ?? 0,

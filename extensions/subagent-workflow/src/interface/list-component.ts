@@ -419,7 +419,9 @@ export class SubagentsListComponent implements Component {
       // 方案 D：递归深度标记。顶层(depth=0, 主 session 直接创建)不显示；
       // depth≥1 显示 [L2]/[L3]...——平铺列表一眼区分哪些是嵌套产生的，不干扰 fan-out 场景。
       const depthTag = r.depth > 0 ? ` ${t.fg("dim", `[L${r.depth + 1}]`)}` : "";
-      const label = `${iconStr} ${sid}${depthTag} ${r.agent} ${t.fg("dim", modeTag)} ${t.fg("dim", dur)}`;
+      // slug 非空时在 agent 后展示（accent 色），空串时省略。
+      const slugTag = r.slug ? ` ${t.fg("accent", r.slug)}` : "";
+      const label = `${iconStr} ${sid}${depthTag} ${r.agent}${slugTag} ${t.fg("dim", modeTag)} ${t.fg("dim", dur)}`;
       // 阶段 2：锚定行 accent + ▶；其余行 dim。阶段 1：选中 accent + →，其余正常。
       const content = inDetail
         ? (selected ? t.fg("accent", label) : t.fg("dim", label))

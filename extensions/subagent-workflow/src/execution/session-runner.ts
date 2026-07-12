@@ -667,6 +667,7 @@ export async function runSpawn(
           agent: record.agent,
           mode: record.mode,
           task: record.task,
+          slug: record.slug,
           startedAt: record.startedAt,
           rootSessionId: record.rootSessionId,
           parentRecordId: record.parentRecordId,

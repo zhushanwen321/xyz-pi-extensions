@@ -31,6 +31,8 @@ import { type RenderContext,renderSubagentCall, renderSubagentResult } from "./t
  */
 interface StartParam {
   task: string;
+  /** 短标签（≤20 字符），必填。展示在 TUI 标题行/列表。 */
+  slug: string;
   agent?: string;
   model?: string;
   thinkingLevel?: string;
@@ -91,6 +93,12 @@ const SubagentParams = Type.Object({
   startParam: Type.Optional(Type.Object({
     task: Type.String({
       description: "The task for the subagent to execute (required for action:'start'). Whitespace-only is rejected.",
+    }),
+    slug: Type.String({
+      description:
+        "Short label (max 20 chars) describing what THIS subagent does — e.g. 'extract-urls', 'fix-login-bug'. " +
+        "Shown in the TUI alongside the agent type to distinguish concurrent subagents. Required, non-empty.",
+      maxLength: 20,
     }),
     agent: Type.Optional(Type.String({
       description: 'Agent name (system prompt + tools). If omitted, defaults to "general-purpose" — a generic agent that inherits the main agent\'s model and project context. Available: general-purpose (default fallback), worker, researcher, scout, planner, reviewer, oracle, context-builder. Custom agents configurable.',

@@ -1,5 +1,9 @@
 # workflow
 
+> ⚠️ **DEPRECATED** — 本包已废弃，superseded by [`@zhushanwen/pi-subagent-workflow`](../subagent-workflow/)（ADR-030）。
+> `pi-subagents` + `pi-workflow` 已合并为单包 `pi-subagent-workflow`，提供统一的 subagent 委派 + workflow 编排能力。
+> 新项目请安装 `pi install npm:@zhushanwen/pi-subagent-workflow`，不要使用本包。
+
 多 Agent 编排引擎 — 用 JS 脚本描述任务流程，Worker 线程隔离执行，支持 `agent()` / `parallel()` / `pipeline()` API。
 
 ## 功能

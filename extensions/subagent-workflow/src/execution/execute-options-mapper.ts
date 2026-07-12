@@ -10,6 +10,12 @@ import type { ModelInfo } from "./model-resolver.ts";
 import type { ExecuteOptions } from "./types.ts";
 
 /**
+ * slug 最大长度（字符）。subagent/workflow 创建时 slug 超过此值会被截断。
+ * 与 subagent tool schema 的 maxLength: 20 保持一致。
+ */
+export const SLUG_MAX_LENGTH = 20;
+
+/**
  * D-A2: AgentCallOpts → ExecuteOptions 映射。
  *
  * adapter 职责——SubagentService 的 ExecuteOptions 是稳定内部契约，不为 workflow 的
@@ -17,6 +23,7 @@ import type { ExecuteOptions } from "./types.ts";
  *
  * 映射规则：
  *   prompt          → task
+ *   description     → slug（≤20 字符，超长截断。缺失时回落 agent 名）
  *   agent           → agent
  *   schema          → schema
  *   schemaEnv       → schemaEnv（D-A6 bridge）
@@ -27,14 +34,19 @@ import type { ExecuteOptions } from "./types.ts";
  * 忽略字段（委托后由 executeAndAwait 内部机制替代）：
  *   systemPromptFiles —— resolveIdentity 从 agentConfig.systemPrompt 读
  *   timeoutMs         —— mergeTimeoutSignal 单独处理
- *   scene/description —— subagents 不消费
+ *   scene             —— subagents 不消费
+ *
+ * description 原先被忽略，现作为 slug 透传（ExecuteOptions.slug 必填）。
  */
 export function mapToExecuteOptions(
   opts: AgentCallOpts,
   ctxModel?: ModelInfo,
 ): ExecuteOptions {
+  // slug：优先 description，缺失回落 agent 名（保证非空）。超长截断。
+  const rawSlug = opts.description ?? opts.agent ?? "workflow-agent";
   return {
     task: opts.prompt,
+    slug: rawSlug.length > SLUG_MAX_LENGTH ? rawSlug.slice(0, SLUG_MAX_LENGTH) : rawSlug,
     agent: opts.agent,
     schema: opts.schema,
     schemaEnv: opts.schemaEnv,

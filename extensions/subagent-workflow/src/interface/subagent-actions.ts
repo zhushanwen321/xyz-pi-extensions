@@ -10,6 +10,7 @@
 
 import type { AgentToolResult } from "@mariozechner/pi-coding-agent";
 
+import { SLUG_MAX_LENGTH } from "../execution/execute-options-mapper.ts";
 import { computeElapsedSeconds } from "../execution/execution-record.ts";
 import type { ModelInfo } from "../execution/model-resolver.ts";
 import type { SubagentService } from "../execution/subagent-service.ts";
@@ -44,9 +45,11 @@ const BG_MESSAGE = "detached, will notify on completion";
 // 入参 / 出参类型
 // ============================================================
 
-/** start 入参（从 tool params.startParam 来，task 必填）。 */
+/** start 入参（从 tool params.startParam 来，task + slug 必填）。 */
 export interface StartHandlerInput {
   task?: string;
+  /** 短标签（≤20 字符），必填。 */
+  slug?: string;
   agent?: string;
   model?: string;
   thinkingLevel?: string;
@@ -68,6 +71,8 @@ export type StartHandlerResult = {
   kind: "bg";
   subagentId: string;
   sessionFile: string | undefined;
+  /** 短标签，来自 record（handle.details.slug）。用于 result 行展示。 */
+  slug: string;
   response: BgResponse;
 };
 
@@ -108,6 +113,7 @@ function recordToListItem(r: SubagentRecord): SubagentListItem {
   return {
     subagentId: r.id,
     agent: r.agent,
+    slug: r.slug,
     status: r.status,
     mode: r.mode,
     duration: computeElapsedSeconds(r),
@@ -131,9 +137,14 @@ export async function startHandler(
   // task 必填 + 空白校验（G-008）
   const task = input.task?.trim();
   if (!task) throw new Error("startParam.task is required (and must not be whitespace-only)");
+  // slug 必填 + 空白校验 + 长度校验（≤ SLUG_MAX_LENGTH 字符）
+  const slug = input.slug?.trim();
+  if (!slug) throw new Error("startParam.slug is required (and must not be whitespace-only)");
+  if (slug.length > SLUG_MAX_LENGTH) throw new Error(`startParam.slug must be ≤${SLUG_MAX_LENGTH} chars (got ${slug.length})`);
 
   const handle = await service.execute({
     task,
+    slug,
     agent: input.agent,
     model: input.model,
     thinkingLevel: input.thinkingLevel,
@@ -155,6 +166,7 @@ export async function startHandler(
     kind: "bg",
     subagentId: handle.subagentId,
     sessionFile: handle.sessionFile,
+    slug: handle.details.slug,
     response: {
       status: "running",
       mode: "background",
@@ -239,7 +251,7 @@ export function adapter(
   let result: SubagentToolResult;
   if (action === "start") {
     const d = input.domain;
-    result = { action, subagentId: d.subagentId, sessionFile: d.sessionFile ?? null, bgResponse: d.response };
+    result = { action, subagentId: d.subagentId, sessionFile: d.sessionFile ?? null, slug: d.slug, bgResponse: d.response };
   } else if (action === "list") {
     result = { action, subagentId: null, sessionFile: null, listResponse: input.domain.response };
   } else {
@@ -278,7 +290,7 @@ function buildGuiComponent(
     return guiComponent("task-list", {
       title: `Subagents (${listResp.response.running} running)`,
       items: listResp.response.items.map((it) => ({
-        label: `${it.agent} · ${it.subagentId}`,
+        label: it.slug ? `${it.agent} · ${it.slug} · ${it.subagentId}` : `${it.agent} · ${it.subagentId}`,
         status: it.status === "running" ? "in_progress" as const
           : it.status === "done" ? "completed" as const
           : it.status === "failed" ? "failed" as const

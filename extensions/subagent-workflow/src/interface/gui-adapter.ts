@@ -47,6 +47,8 @@ export interface WorkflowRunsProps {
   runs: Array<{
     runId: string;
     name: string;
+    /** Run 级 slug（可选，旧 run 缺失为 undefined）。 */
+    slug?: string;
     status: string;
     reason?: string;
     durationMs?: number;

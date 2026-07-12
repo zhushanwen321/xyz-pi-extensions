@@ -538,6 +538,7 @@ export class SubagentService {
       thinkingLevel: identity.resolved.thinkingLevel,
       mode,
       task: opts.task,
+      slug: opts.slug,
       startedAt: Date.now(),
       rootSessionId: this.sessionId ?? undefined,
       parentRecordId,

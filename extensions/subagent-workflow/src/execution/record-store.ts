@@ -250,6 +250,7 @@ export class RecordStore {
       const rec: SubagentRecord = {
         id: recon.id,
         agent: recon.agent,
+        slug: recon.slug,
         status: recon.status, // 临时值，各分支覆盖
         mode: recon.mode,
         startedAt: recon.startedAt,
@@ -329,6 +330,7 @@ export class RecordStore {
       agent: r.agent,
       status: r.status,
       mode: r.mode,
+      slug: r.slug,
       startedAt: r.startedAt,
       rootSessionId: r.rootSessionId,
       parentRecordId: r.parentRecordId,
