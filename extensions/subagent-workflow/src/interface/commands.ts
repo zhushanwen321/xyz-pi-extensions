@@ -24,6 +24,7 @@ import type { ExtensionAPI, ExtensionCommandContext, Theme } from "@mariozechner
 import type { LauncherDeps } from "../orchestration/launcher.ts";
 import { abortRun, pauseRun, resumeRun } from "../orchestration/lifecycle.ts";
 import type { WorkflowRun } from "../orchestration/models/workflow-run.ts";
+import { parseWorkflowRpcCommand } from "./command-actions.ts";
 import { createWorkflowsView, type ViewActions } from "./views/WorkflowsView.ts";
 
 /** runId 截断长度（显示用）。 */
@@ -64,10 +65,39 @@ export function registerWorkflowsCommand(
   deps: LauncherDeps,
 ): void {
   api.registerCommand("workflows", {
-    description: "Open workflow interactive panel. /workflows [runId] to open a specific run.",
+    description: "Open workflow panel. /workflows [runId] | /workflows pause|resume|abort <runId>",
     handler: async (args: string, ctx: ExtensionCommandContext) => {
- // RPC/print/json 模式无 TUI——降级提示
-      if (!ctx.hasUI) {
+      // ── RPC 模式（xyz-agent GUI）：解析 lifecycle action 直接执行，不打开 TUI ──
+      // hasUI 在 TUI 和 RPC 都为 true，不能用于区分；用 ctx.mode === "rpc" 判定 GUI 通道。
+      if (ctx.mode === "rpc") {
+        const parsed = parseWorkflowRpcCommand(args);
+        switch (parsed.action) {
+          case "pause":
+          case "resume":
+          case "abort": {
+            try {
+              if (parsed.action === "pause") await pauseRun(parsed.runId, deps);
+              else if (parsed.action === "resume") await resumeRun(parsed.runId, deps);
+              else await abortRun(parsed.runId, deps);
+              ctx.ui.notify(`Workflow ${parsed.runId}: ${parsed.action}d`, "info");
+            } catch (err) {
+              const msg = err instanceof Error ? err.message : String(err);
+              ctx.ui.notify(`Failed to ${parsed.action} workflow ${parsed.runId}: ${msg}`, "warning");
+            }
+            return;
+          }
+          case "lifecycle-missing-id":
+            ctx.ui.notify(`Usage: /workflows ${parsed.verb} <runId>`, "warning");
+            return;
+          case "noop":
+            // 无 action 或未知 action：GUI 端已屏蔽此 command 入口，此处兜底
+            ctx.ui.notify("View workflows in the sidebar Flows tab", "info");
+            return;
+        }
+      }
+
+      // ── print/json 模式（headless）：不可交互 ──
+      if (ctx.mode !== "tui") {
         ctx.ui.notify("/workflows requires interactive mode", "error");
         return;
       }
