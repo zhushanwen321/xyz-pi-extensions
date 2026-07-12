@@ -275,7 +275,7 @@ export function adapter(
 }
 
 /** 按 action 构造对应的 GuiComponent。 */
-function buildGuiComponent(
+export function buildGuiComponent(
   action: string,
   input: AdapterInput,
   _result: SubagentToolResult,

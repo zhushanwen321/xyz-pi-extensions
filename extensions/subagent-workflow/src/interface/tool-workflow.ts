@@ -154,7 +154,7 @@ function withGui<T extends WorkflowToolDetails | undefined>(
 }
 
 /** 按 WorkflowToolDetails 构造对应的 GuiComponent。 */
-function buildWorkflowGui(details: WorkflowToolDetails) {
+export function buildWorkflowGui(details: WorkflowToolDetails) {
   if (details.action === "run") {
     const statusStr = details.status;
     return guiComponent("list-tree", {
