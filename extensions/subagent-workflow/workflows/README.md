@@ -1,43 +1,58 @@
-# Workflow Examples
+# 内置通用编排 Workflow
 
-4 个预制编排模板，展示 `workflow()` 嵌套调用 + `parallel()`/`pipeline()` 组合模式。
+4 个开箱即用的通用 subagent 编排 workflow，覆盖日常常见的多 agent 协作模式。每个脚本用 `agent()`/`parallel()` 自包含实现，`workflow run <name>` 直接执行，无需额外定义子 workflow。
 
 ## 文件清单
 
-| 模板 | 模式 | 说明 |
-|------|------|------|
-| `chain.example.js` | 顺序编排（UC-1） | `workflow("extract") → workflow("transform") → workflow("load") → agent(verify)`，每步输出作下步输入 |
-| `parallel.example.js` | 并行扇出（UC-2） | `parallel()` 同时跑多个独立 `agent()`，适合无依赖任务并发 |
-| `scatter-gather.example.js` | 分散-聚合（UC-3） | `workflow("split")` 分片 → `parallel()` 并行处理 → `workflow("merge")` 聚合 |
-| `map-reduce.example.js` | Map-Reduce（UC-4） | `workflow("map")` 映射 → `workflow("reduce")` 归约 |
+| workflow | 模式 | 必需参数 | 适用场景 |
+|----------|------|----------|----------|
+| `chain.js` | analyze → transform → synthesize 顺序链 | `task` | 多阶段处理：先分析、再变换、最后综合 |
+| `parallel.js` | 多视角并行分析 → 聚合汇总 | `target`（可选 `perspectives`） | 多维度评估同一目标（安全/性能/可维护性等） |
+| `scatter-gather.js` | scatter 拆分 → parallel 处理 → gather 合并 | `task` | 大任务先拆成子任务再并行处理 |
+| `map-reduce.js` | parallel map → reduce 归约 | `items`/`itemsJson` + `operation` | 对已知数组批量变换后归约成单一结果 |
 
-## ⚠️ 这些是模板，不能直接运行
+## 用法
 
-每个模板调用的子 workflow（如 `workflow("extract")`、`workflow("split")`）**未在本文件内定义**。运行前你必须：
+### chain — 顺序多步处理
 
-1. **复制模板到 workflows 目录**：
-   ```bash
-   cp chain.example.js ~/.pi/agent/workflows/chain.js
-   # 或项目级：cp chain.example.js .pi/workflows/chain.js
-   ```
+```
+workflow run chain --args task="把这段需求文档拆成技术任务：..."
+```
 
-2. **定义被引用的子 workflow**：在 workflows 目录下创建 `extract.js`、`transform.js`、`load.js` 等，每个含 `meta` + `execute()` + `agent()`/`parallel()`/`pipeline()` 入口。
+三段 agent 调用：分析任务 → 基于分析产出方案 → 综合方案输出结论。每步用 `schema` 拿结构化输出，上一步输出拼进下一步 prompt。
 
-3. **运行**：
-   ```bash
-   workflow run chain --args inputPath=/path/to/input.json
-   ```
+### parallel — 并行多视角分析
 
-## 嵌套 workflow() 说明
+```
+workflow run parallel --args target="src/auth/login.ts"
+workflow run parallel --args target="..." --args 'perspectives=["security","readability"]'
+```
 
-`workflow("name", args)` 在 worker 线程内调用另一个已注册的 workflow（详见 SKILL.md `workflow()` section）：
+`perspectives` 默认 `["security","performance","maintainability"]`。每个视角一个并行 agent，各自返回评分+发现的问题；最后再一个 agent 汇总成总体评分+top 问题+共识。
 
-- **返回值**：`AgentResult`——成功 `{ content, parsedOutput? }`，失败 `{ content: "", error }`
-- **循环检测**：自动追踪调用链（A→B→A 立即拒绝）
-- **预算继承**：子 workflow 继承父剩余预算，消耗累加回父
-- **并发配额**：嵌套按 depth 分层分配（`max(1, 6-depth)`），保底 1 槽防饿死
+### scatter-gather — 分发-收集
+
+```
+workflow run scatter-gather --args task="重构认证模块，涉及 session/jwt/oauth 三块"
+```
+
+三段：第一个 agent 把大任务拆成 2-4 个可并行子任务 → `parallel()` 并行处理每个子任务 → 最后一个 agent 合并所有结果。
+
+### map-reduce — 映射-归约
+
+```
+workflow run map-reduce --args 'items=["file1.ts","file2.ts","file3.ts"]' --args operation="审查代码风格"
+workflow run map-reduce --args itemsJson=/path/to/items.json --args operation="..."
+```
+
+`items` 直接传 JSON 数组，或 `itemsJson` 传 JSON 文件路径（二选一）。`parallel()` 对每个 item 并行执行 `operation` → 一个 agent 把所有结果归约成单一结论。
+
+## 编排 API
+
+这些 workflow 内部使用的编排函数（`agent()` / `parallel()` / `pipeline()` / `workflow()`）由 worker 线程注入，完整 API 参考见 `skills/workflow-script-format/SKILL.md`。
 
 ## 相关文档
 
-- `skills/workflow-script-format/SKILL.md` — workflow script 完整 API
-- `docs/adr/030-subagents-workflow-merge.md` — 合并决策（决策 3 嵌套护栏）
+- `skills/workflow-script-format/SKILL.md` — workflow script 完整 API（agent/parallel/pipeline/workflow 签名、$ARGS/$BUDGET、lint 规则）
+- `docs/adr/030-subagents-workflow-merge.md` — 合并决策（决策 3 分层配额 + workflow 嵌套）
+- `docs/adr/032-builtin-orchestration-workflows.md` — 从"参考模板"改为"内置通用编排 workflow"的决策

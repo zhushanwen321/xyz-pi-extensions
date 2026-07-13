@@ -1,98 +1,138 @@
-// scatter-gather.example.js — 分发-收集模板（UC-3）
+// scatter-gather.js — 分发-收集（通用 subagent 编排）
 //
 // 模式（三段）：
-//   段 1 scatter: workflow("split", data) → 出 shards[]
-//   段 2 process: parallel(shards.map(s => workflow("process", {shard:s}))) → 并行处理
-//   段 3 gather:  workflow("merge", results) → 合并
+//   段 1 scatter: agent() 把大任务拆成 2-4 个可并行的子任务
+//   段 2 process: parallel() 并行处理每个子任务
+//   段 3 gather:  agent() 合并所有子任务结果
 //
-// 用法：复制本文件到 .pi/workflows/ 或 ~/.pi/agent/workflows/，改 workflow 名后：
-//   workflow run scatter-gather --args dataPath=/path/to/big.json
+// 适用于"任务太大需要先拆分再并行处理"的场景。
 //
-// ⚠️ lintScript 约束（本模板已遵守）：
-//   - 含 parallel() 入口（兼展示 workflow() 嵌套：split/merge + process）
-//   - 禁止 bare IIFE / 禁止变量名 result
+// 用法：
+//   workflow run scatter-gather --args task="重构认证模块，涉及 session/jwt/oauth 三块"
+//
+// ⚠️ lintScript 约束（本脚本已遵守）：含 parallel() 入口（兼 agent 嵌套），禁止 bare IIFE
 
 const meta = {
   name: "scatter-gather",
-  description: "分发-收集模板：split → parallel process → merge 三段",
+  description: "通用编排：scatter 拆分 → parallel 处理 → gather 合并 三段",
   phases: ["scatter", "process", "gather"],
 };
 
-const fs = require("fs");
-
 // ── 入参（$ARGS）──────────────────────────────────────────────────
-const dataPath = $ARGS.dataPath;
-if (!dataPath) {
-  throw new Error("scatter-gather 缺少必需参数 dataPath。用法：workflow run scatter-gather --args dataPath=/path/to/big.json");
-}
-if (!fs.existsSync(dataPath)) {
-  throw new Error("dataPath 不存在: " + dataPath);
+const task = $ARGS.task;
+if (!task) {
+  throw new Error("scatter-gather 缺少必需参数 task。用法：workflow run scatter-gather --args task=\"<大任务描述>\"");
 }
 
-log("scatter-gather 开始，dataPath=" + dataPath);
+log("scatter-gather 开始，task=" + task);
 
 let currentPhase = "init";
 let outcome;
 
 try {
-  // ── 段 1：scatter（split workflow 分片数据）──────────────────────
+  // ── 段 1：scatter（拆分任务）─────────────────────────────────────
   phase("scatter");
   currentPhase = "scatter";
-  const splitOutcome = await workflow("split", {
-    source: dataPath,
-    // split workflow 决定分片数（按数据量/可用配额），返回 shards 数组
+  const split = await agent({
+    prompt:
+      "把以下任务拆成 2-4 个可独立并行处理的子任务。每个子任务应有明确边界，不互相依赖：\n\n" +
+      task,
+    schema: {
+      type: "object",
+      properties: {
+        subtasks: {
+          type: "array",
+          items: {
+            type: "object",
+            properties: {
+              name: { type: "string", description: "子任务名称" },
+              description: { type: "string", description: "子任务详细描述" },
+            },
+            required: ["name", "description"],
+          },
+          description: "2-4 个可并行的子任务",
+        },
+      },
+      required: ["subtasks"],
+    },
+    description: "scatter-split",
   });
-  if (splitOutcome.error) throw new Error("split 失败: " + splitOutcome.error);
 
-  // split workflow 返回的 content 应是分片清单（JSON 字符串或 parsedOutput 数组）
-  // 用 schema 让 split 直接返回结构化 shards（参考 workflow-script-format 结构化输出规则）
-  const shards = splitOutcome.parsedOutput || JSON.parse(splitOutcome.content);
-  if (!Array.isArray(shards) || shards.length === 0) {
-    throw new Error("split 返回的 shards 非数组或为空");
+  const subtasks = Array.isArray(split.subtasks) ? split.subtasks : [];
+  if (subtasks.length === 0) {
+    throw new Error("scatter 返回的 subtasks 为空");
   }
-  log("split 出 " + shards.length + " 个分片");
+  log("scatter 出 " + subtasks.length + " 个子任务");
 
-  // ── 段 2：process（parallel 并行处理每个分片）────────────────────
+  // ── 段 2：process（parallel 并行处理每个子任务）──────────────────
   phase("process");
   currentPhase = "process";
-  // parallel() allSettled 语义：单个分片处理失败不 reject，收集后统一判断
-  const processed = await parallel(
-    shards.map((shard, idx) => workflow("process", { shard, shardIndex: idx })),
+  const processedRaw = await parallel(
+    subtasks.map((s) =>
+      agent({
+        prompt:
+          "处理以下子任务，输出处理结果：\n\n子任务：" + s.name + "\n描述：" + s.description,
+        schema: {
+          type: "object",
+          properties: {
+            subtask: { type: "string", description: "子任务名称" },
+            result: { type: "string", description: "处理结果" },
+          },
+          required: ["subtask", "result"],
+        },
+        description: "scatter-process-" + s.name,
+      })
+    ),
   );
 
-  const shardResults = [];
-  let failedShards = 0;
-  for (let i = 0; i < processed.length; i++) {
-    const p = processed[i];
-    if (!p || p.error) {
-      shardResults.push({ shardIndex: i, status: "failed", error: p ? p.error : "无返回" });
-      failedShards++;
+  const processed = [];
+  let failedCount = 0;
+  for (let i = 0; i < processedRaw.length; i++) {
+    const r = processedRaw[i];
+    if (!r || r.error) {
+      processed.push({
+        subtask: subtasks[i].name,
+        status: "failed",
+        error: r ? r.error : "agent 无返回",
+      });
+      failedCount++;
     } else {
-      shardResults.push({ shardIndex: i, status: "ok", content: p.content });
+      processed.push({ subtask: subtasks[i].name, status: "ok", result: r.result });
     }
   }
-  if (failedShards === shards.length) {
-    throw new Error("全部分片处理失败（" + failedShards + "/" + shards.length + "）");
+  if (failedCount === subtasks.length) {
+    throw new Error("全部子任务处理失败（" + failedCount + "/" + subtasks.length + "）");
   }
-  log("process 完成：ok=" + (shards.length - failedShards) + " failed=" + failedShards);
+  log("process 完成：ok=" + (subtasks.length - failedCount) + " failed=" + failedCount);
 
-  // ── 段 3：gather（merge workflow 合并结果）───────────────────────
+  // ── 段 3：gather（合并所有子任务结果）───────────────────────────
   phase("gather");
   currentPhase = "gather";
-  const merged = await workflow("merge", {
-    shardResults,
-    totalShards: shards.length,
-    failedShards,
+  const gathered = await agent({
+    prompt:
+      "以下是各子任务的处理结果，请合并成一个完整、一致的最终结果：\n\n" +
+      JSON.stringify(processed, null, 2),
+    schema: {
+      type: "object",
+      properties: {
+        mergedResult: { type: "string", description: "合并后的最终结果" },
+        completeness: { type: "string", description: "完整性评估" },
+      },
+      required: ["mergedResult", "completeness"],
+    },
+    description: "scatter-gather-merge",
   });
-  if (merged.error) throw new Error("merge 失败: " + merged.error);
 
   outcome = {
-    status: failedShards > 0 ? "partial" : "ok",
-    phase: currentPhase,
-    shards_total: shards.length,
-    shards_failed: failedShards,
-    merged: merged.content,
-    message: "scatter-gather 完成：split " + shards.length + " → process（失败 " + failedShards + "）→ merge",
+    status: failedCount > 0 ? "partial" : "ok",
+    phases_run: ["scatter", "process", "gather"],
+    subtasks_total: subtasks.length,
+    subtasks_processed: subtasks.length - failedCount,
+    gathered: {
+      mergedResult: gathered.mergedResult,
+      completeness: gathered.completeness,
+    },
+    message: "scatter-gather 完成：split " + subtasks.length + " → process（失败 " + failedCount + "）→ merge",
   };
 } catch (err) {
   outcome = {

@@ -1,91 +1,134 @@
-// map-reduce.example.js — 映射-归约模板（UC-4）
+// map-reduce.js — 映射-归约（通用 subagent 编排）
 //
 // 模式（两段）：
-//   段 1 map:    parallel(items.map(i => workflow("map", {item:i}))) → mapped[]
-//   段 2 reduce: workflow("reduce", mapped) → 归约结果
+//   段 1 map:    parallel() 对每个 item 并行执行 operation
+//   段 2 reduce: agent() 把所有 map 结果归约成单一结果
 //
-// 与 scatter-gather 的区别：scatter-gather 强调数据分片（split 决定分片数）；
-// map-reduce 强调对固定 items 数组的变换+聚合（items 已知，map 变换、reduce 聚合）。
+// 与 scatter-gather 的区别：scatter-gather 强调"拆分"（scatter 决定子任务数）；
+// map-reduce 强调对"已知 items 数组"的变换+聚合（items 已有，map 变换、reduce 归约）。
 //
-// 用法：复制本文件到 .pi/workflows/ 或 ~/.pi/agent/workflows/，改 workflow 名后：
-//   workflow run map-reduce --args itemsPath=/path/to/items.json
+// 用法：
+//   workflow run map-reduce --args 'items=["file1.ts","file2.ts","file3.ts"]' --args operation="审查代码风格"
+//   workflow run map-reduce --args itemsJson=/path/to/items.json --args operation="..."
 //
-// ⚠️ lintScript 约束（本模板已遵守）：
-//   - 含 parallel() 入口（兼展示 workflow() 嵌套：map + reduce）
-//   - 禁止 bare IIFE / 禁止变量名 result
+// ⚠️ lintScript 约束（本脚本已遵守）：含 parallel() 入口（兼 agent 嵌套），禁止 bare IIFE
 
 const meta = {
   name: "map-reduce",
-  description: "映射-归约模板：parallel map → reduce 两段",
+  description: "通用编排：parallel map → reduce 两段，处理已知 items 数组",
   phases: ["map", "reduce"],
 };
 
 const fs = require("fs");
 
 // ── 入参（$ARGS）──────────────────────────────────────────────────
-const itemsPath = $ARGS.itemsPath;
-if (!itemsPath) {
-  throw new Error("map-reduce 缺少必需参数 itemsPath。用法：workflow run map-reduce --args itemsPath=/path/to/items.json");
-}
-if (!fs.existsSync(itemsPath)) {
-  throw new Error("itemsPath 不存在: " + itemsPath);
+const operation = $ARGS.operation;
+if (!operation) {
+  throw new Error(
+    'map-reduce 缺少必需参数 operation。用法：workflow run map-reduce --args operation="<对每个 item 做什么>"',
+  );
 }
 
-log("map-reduce 开始，itemsPath=" + itemsPath);
+// items 来源：直接数组 或 itemsJson 文件路径（二选一）
+let items = $ARGS.items;
+if (!items) {
+  const itemsPath = $ARGS.itemsJson;
+  if (!itemsPath) {
+    throw new Error(
+      'map-reduce 需要 items（直接数组）或 itemsJson（JSON 文件路径）参数',
+    );
+  }
+  if (!fs.existsSync(itemsPath)) {
+    throw new Error("itemsJson 文件不存在: " + itemsPath);
+  }
+  items = JSON.parse(fs.readFileSync(itemsPath, "utf-8"));
+}
+
+if (!Array.isArray(items) || items.length === 0) {
+  throw new Error("items 不是数组或为空");
+}
+
+log("map-reduce 开始，items=" + items.length + " 个，operation=" + operation);
 
 let currentPhase = "init";
 let outcome;
 
 try {
-  // 读 items 数组（外部数据，非 workflow 状态文件）
-  const rawItems = JSON.parse(fs.readFileSync(itemsPath, "utf-8"));
-  if (!Array.isArray(rawItems) || rawItems.length === 0) {
-    throw new Error("itemsPath 内容非数组或为空");
-  }
-  log("读入 " + rawItems.length + " 个 item");
-
   // ── 段 1：map（parallel 对每个 item 并行变换）────────────────────
   phase("map");
   currentPhase = "map";
-  // parallel() allSettled 语义：单个 map 失败不 reject
+
+  // 每个 item 字符串化，便于拼进 prompt
   const mappedRaw = await parallel(
-    rawItems.map((item, idx) => workflow("map", { item, itemIndex: idx })),
+    items.map((item, idx) =>
+      agent({
+        prompt:
+          "对以下 item 执行操作：\n\noperation：" + operation +
+          "\nitem：" + (typeof item === "string" ? item : JSON.stringify(item)),
+        schema: {
+          type: "object",
+          properties: {
+            itemIndex: { type: "number", description: "item 序号" },
+            mapped: { type: "string", description: "map 后的结果" },
+          },
+          required: ["itemIndex", "mapped"],
+        },
+        description: "map-reduce-map-" + idx,
+      })
+    ),
   );
 
   const mapped = [];
   let mapFailed = 0;
   for (let i = 0; i < mappedRaw.length; i++) {
-    const m = mappedRaw[i];
-    if (!m || m.error) {
-      // map 失败的 item 用 error 占位传入 reduce，由 reduce 决定跳过还是报错
-      mapped.push({ itemIndex: i, status: "failed", error: m ? m.error : "无返回" });
+    const r = mappedRaw[i];
+    if (!r || r.error) {
+      mapped.push({
+        itemIndex: i,
+        item: items[i],
+        status: "failed",
+        error: r ? r.error : "agent 无返回",
+      });
       mapFailed++;
     } else {
-      mapped.push({ itemIndex: i, status: "ok", content: m.content });
+      mapped.push({
+        itemIndex: i,
+        item: items[i],
+        status: "ok",
+        mapped: r.mapped,
+      });
     }
   }
-  if (mapFailed === rawItems.length) {
-    throw new Error("全部 map 失败（" + mapFailed + "/" + rawItems.length + "）");
+  if (mapFailed === items.length) {
+    throw new Error("全部 map 失败（" + mapFailed + "/" + items.length + "）");
   }
-  log("map 完成：ok=" + (rawItems.length - mapFailed) + " failed=" + mapFailed);
+  log("map 完成：ok=" + (items.length - mapFailed) + " failed=" + mapFailed);
 
-  // ── 段 2：reduce（workflow 聚合所有 map 结果）───────────────────
+  // ── 段 2：reduce（agent 聚合所有 map 结果）──────────────────────
   phase("reduce");
   currentPhase = "reduce";
-  const reduced = await workflow("reduce", {
-    mapped,
-    totalItems: rawItems.length,
-    mapFailed,
+  const reduced = await agent({
+    prompt:
+      "以下是对 " + items.length + " 个 item 执行「" + operation + "」的结果，请归约成单一结论：\n\n" +
+      JSON.stringify(mapped, null, 2),
+    schema: {
+      type: "object",
+      properties: {
+        reduced: { type: "string", description: "归约后的最终结果" },
+        stats: { type: "string", description: "统计摘要（成功率/共性发现等）" },
+      },
+      required: ["reduced", "stats"],
+    },
+    description: "map-reduce-reduce",
   });
-  if (reduced.error) throw new Error("reduce 失败: " + reduced.error);
 
   outcome = {
     status: mapFailed > 0 ? "partial" : "ok",
-    phase: currentPhase,
-    items_total: rawItems.length,
-    map_failed: mapFailed,
-    reduced: reduced.content,
-    message: "map-reduce 完成：map " + rawItems.length + " 项（失败 " + mapFailed + "）→ reduce",
+    phases_run: ["map", "reduce"],
+    items_total: items.length,
+    items_mapped: items.length - mapFailed,
+    reduced: { reduced: reduced.reduced, stats: reduced.stats },
+    message: "map-reduce 完成：map " + items.length + " 项（失败 " + mapFailed + "）→ reduce",
   };
 } catch (err) {
   outcome = {
