@@ -1,29 +1,22 @@
 // src/__tests__/w3-regression.test.ts
-// W3: Forward regression + full validation (#5)
-// Comprehensive no-op key coverage + draftText edge cases + full regression.
+// W3: Forward regression — freeform/comment/bksp edge cases.
+// No-op keymap coverage moved to component-keymap.test.ts (deduplicated).
 import { describe, expect, it } from "vitest";
 
 import { AskUserComponent } from "../component";
 import type { Question, Result } from "../types";
 import {
 	BACKSPACE,
-	DELETE,
 	DOWN,
-	END,
 	ENTER,
 	ESC,
-	F1,
 	HOME,
-	INSERT,
 	LEFT,
 	mockTui,
 	multiQ,
 	multiQWithComment,
-	PGDN,
-	PGUP,
 	RIGHT,
 	singleQ,
-	singleQWithComment,
 	stubTheme,
 } from "./fixtures";
 
@@ -41,148 +34,6 @@ function openFreeform(c: AskUserComponent): void {
 	c.handleInput(DOWN); // 1→2 (Other)
 	c.handleInput(ENTER); // open freeform
 }
-
-// ── C-KEYMAP-*: extended no-op key coverage ──
-describe("W3 — extended no-op key coverage (C-KEYMAP-*)", () => {
-	it("C-KEYMAP-DOWN: down arrow is no-op in freeform editor", () => {
-		const { c } = make([singleQ]);
-		openFreeform(c);
-		c.handleInput("a");
-		c.handleInput(DOWN);
-		c.handleInput("b");
-		const lines = c.render(60);
-		const editorLine = lines.find((l) => l.includes("\x1b[7m"));
-		expect(editorLine).toContain("ab");
-		expect(editorLine).not.toContain("\x1b[A"); expect(editorLine).not.toContain("\x1b[B"); expect(editorLine).not.toContain("\x1b[C"); expect(editorLine).not.toContain("\x1b[D");
-	});
-
-	it("C-KEYMAP-LEFT: left arrow moves cursor in freeform editor", () => {
-		const { c } = make([singleQ]);
-		openFreeform(c);
-		c.handleInput("ab");  // "ab", cursor=2
-		c.handleInput(LEFT);   // cursor 2→1
-		c.handleInput("c");   // insert at 1 → "acb", cursor=2
-		const lines = c.render(60);
-		const editorLine = lines.find((l) => l.includes("\x1b[7m"));
-		// cursor at 2: "ac█b" — 去 ANSI 后精确文本 "acb"（证明 c 插在 a 与 b 之间）
-		const stripped = editorLine!.replace(/\x1b\[[0-9;]*m/g, "");
-		expect(stripped).toContain("acb");
-		expect(editorLine).not.toContain("\x1b[A"); expect(editorLine).not.toContain("\x1b[B"); expect(editorLine).not.toContain("\x1b[C"); expect(editorLine).not.toContain("\x1b[D");
-	});
-
-	it("C-KEYMAP-HOME: Home key moves cursor to start in freeform editor", () => {
-		const { c } = make([singleQ]);
-		openFreeform(c);
-		c.handleInput("abc");  // fallback: "abc", cursor=3
-		c.handleInput(HOME);    // cursor 3→0
-		c.handleInput("d");    // insert at 0 → "dabc", cursor=1
-		const lines = c.render(60);
-		const editorLine = lines.find((l) => l.includes("\x1b[7m"));
-		// cursor at 1: "d\x1b[7ma\x1b[27mbc" — 去 ANSI 后精确文本 "dabc"（证明 d 插在开头）
-		const stripped = editorLine!.replace(/\x1b\[[0-9;]*m/g, "");
-		expect(stripped).toContain("dabc");
-		expect(editorLine).not.toContain("\x1b[A"); expect(editorLine).not.toContain("\x1b[B"); expect(editorLine).not.toContain("\x1b[C"); expect(editorLine).not.toContain("\x1b[D");
-		expect(editorLine).not.toContain("\x1b[H");
-	});
-
-	it("C-KEYMAP-END: End key moves cursor to end of text", () => {
-		const { c } = make();
-		openFreeform(c);
-		c.handleInput("abc");
-		c.handleInput(HOME); // 移到开头
-		c.handleInput(END);  // 移到末尾
-		// 验证在末尾输入 "d" 被追加到末尾
-		c.handleInput("d");
-		const lines = c.render(60);
-		const editorLine = lines.find((l: string) => l.includes("\x1b[7m"));
-		// 去除 ANSI 转义码后检查
-		const stripped = editorLine!.replace(/\x1b\[[0-9;]*m/g, "");
-		expect(stripped).toContain("abcd");
-	});
-
-	it("C-KEYMAP-INSERT: Insert key is no-op in freeform editor", () => {
-		const { c } = make([singleQ]);
-		openFreeform(c);
-		c.handleInput("a");
-		c.handleInput(INSERT);
-		c.handleInput("b");
-		const lines = c.render(60);
-		const editorLine = lines.find((l) => l.includes("\x1b[7m"));
-		expect(editorLine).toContain("ab");
-		expect(editorLine).not.toContain("\x1b[A"); expect(editorLine).not.toContain("\x1b[B"); expect(editorLine).not.toContain("\x1b[C"); expect(editorLine).not.toContain("\x1b[D");
-		expect(editorLine).not.toContain("~");
-	});
-
-	it("C-KEYMAP-PGUP: Page Up is no-op in freeform editor", () => {
-		const { c } = make([singleQ]);
-		openFreeform(c);
-		c.handleInput("a");
-		c.handleInput(PGUP);
-		c.handleInput("b");
-		const lines = c.render(60);
-		const editorLine = lines.find((l) => l.includes("\x1b[7m"));
-		expect(editorLine).toContain("ab");
-		expect(editorLine).not.toContain("\x1b[A"); expect(editorLine).not.toContain("\x1b[B"); expect(editorLine).not.toContain("\x1b[C"); expect(editorLine).not.toContain("\x1b[D");
-		expect(editorLine).not.toContain("~");
-	});
-
-	it("C-KEYMAP-PGDN: Page Down is no-op in freeform editor", () => {
-		const { c } = make([singleQ]);
-		openFreeform(c);
-		c.handleInput("a");
-		c.handleInput(PGDN);
-		c.handleInput("b");
-		const lines = c.render(60);
-		const editorLine = lines.find((l) => l.includes("\x1b[7m"));
-		expect(editorLine).toContain("ab");
-		expect(editorLine).not.toContain("\x1b[A"); expect(editorLine).not.toContain("\x1b[B"); expect(editorLine).not.toContain("\x1b[C"); expect(editorLine).not.toContain("\x1b[D");
-		expect(editorLine).not.toContain("~");
-	});
-
-	it("C-KEYMAP-F1: F1 key is no-op in freeform editor", () => {
-		const { c } = make([singleQ]);
-		openFreeform(c);
-		c.handleInput("a");
-		c.handleInput(F1);
-		c.handleInput("b");
-		const lines = c.render(60);
-		const editorLine = lines.find((l) => l.includes("\x1b[7m"));
-		expect(editorLine).toContain("ab");
-		expect(editorLine).not.toContain("\x1b[A"); expect(editorLine).not.toContain("\x1b[B"); expect(editorLine).not.toContain("\x1b[C"); expect(editorLine).not.toContain("\x1b[D");
-		expect(editorLine).not.toContain("\x1bO");
-	});
-
-	it("C-KEYMAP-DELETE: Delete key is no-op in freeform editor (not backspace)", () => {
-		const { c } = make([singleQ]);
-		openFreeform(c);
-		c.handleInput("abc");
-		c.handleInput(DELETE); // delete ≠ backspace — should NOT delete
-		const lines = c.render(60);
-		const editorLine = lines.find((l) => l.includes("\x1b[7m"));
-		expect(editorLine).toContain("abc"); // unchanged
-		expect(editorLine).not.toContain("\x1b[A"); expect(editorLine).not.toContain("\x1b[B"); expect(editorLine).not.toContain("\x1b[C"); expect(editorLine).not.toContain("\x1b[D");
-		expect(editorLine).not.toContain("~");
-	});
-
-	it.each([
-		["super+up", "\x1b[1;9A"],
-		["super+down", "\x1b[1;9B"],
-		["super+left", "\x1b[1;9D"],
-		["super+right", "\x1b[1;9C"],
-		["ctrl+shift+up", "\x1b[1;6A"],
-		["ctrl+shift+down", "\x1b[1;6B"],
-	])("C-KEYMAP-MOD (extended): %s is no-op in editor", (_name, seq) => {
-		const { c } = make([singleQ]);
-		openFreeform(c);
-		c.handleInput("a");
-		c.handleInput(seq);
-		c.handleInput("b");
-		const lines = c.render(60);
-		const editorLine = lines.find((l) => l.includes("\x1b[7m"));
-		expect(editorLine).toContain("ab");
-		expect(editorLine).not.toContain("\x1b[A"); expect(editorLine).not.toContain("\x1b[B"); expect(editorLine).not.toContain("\x1b[C"); expect(editorLine).not.toContain("\x1b[D");
-	});
-});
 
 // ── C-BC4B: freeform Enter clears selectedIndex (BC-4b regression) ──
 describe("W3 — freeform Enter clears selectedIndex (C-BC4B)", () => {
@@ -221,19 +72,9 @@ describe("W3 — freeform Enter clears selectedIndex (C-BC4B)", () => {
 	});
 });
 
-// ── C-BC4C-REEDIT: comment re-edit prefills old comment ──
-describe("W3 — comment re-edit prefills old comment (C-BC4C-REEDIT)", () => {
-	it("C-BC4C-REEDIT: editing comment after initial submission prefills old text", () => {
-		const { c, result } = make([singleQWithComment]);
-		// Select option A → enter comment mode
-		c.handleInput(ENTER);
-		// Type initial comment
-		c.handleInput("initial comment");
-		c.handleInput(ENTER); // submit → auto-advance → submit all
-		expect(result.val).toBeDefined();
-		expect(result.val!.answers["Which DB? (with comment)"]).toBe("Postgres — initial comment");
-	});
-
+// ── C-BC4C: comment edge cases ──
+// C-BC4C-REEDIT (initial comment submit) removed — duplicate of w2-draft-hint C-BC4C.
+describe("W3 — comment re-edit (C-BC4C-CLEAR)", () => {
 	it("C-BC4C-CLEAR: Esc in comment mode skips comment, keeps existing commentValue", () => {
 		const { c, result } = make(multiQWithComment);
 		// Q1: select A → comment mode
@@ -255,29 +96,6 @@ describe("W3 — comment re-edit prefills old comment (C-BC4C-REEDIT)", () => {
 		expect(result.val).toBeDefined();
 		// Comment should still be "my note" (Esc preserved commentValue)
 		expect(result.val!.answers["Q1"]).toBe("A — my note");
-	});
-});
-
-// ── C-PASTE-EQUIV: single char via parseKey path (not undefined path) ──
-describe("W3 — single char append via parseKey path (C-PASTE-5 equiv)", () => {
-	it("single char 'x' is appended correctly (parseKey returns 'x')", () => {
-		const { c } = make([singleQ]);
-		openFreeform(c);
-		c.handleInput("x");
-		const lines = c.render(60);
-		const editorLine = lines.find((l) => l.includes("\x1b[7m"));
-		expect(editorLine).toContain("x");
-	});
-
-	it("single printable chars in sequence build string correctly", () => {
-		const { c } = make([singleQ]);
-		openFreeform(c);
-		for (const ch of "hello") {
-			c.handleInput(ch);
-		}
-		const lines = c.render(60);
-		const editorLine = lines.find((l) => l.includes("\x1b[7m"));
-		expect(editorLine).toContain("hello");
 	});
 });
 

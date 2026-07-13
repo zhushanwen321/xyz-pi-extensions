@@ -473,37 +473,6 @@ describe("AskUserComponent — unknown control sequence leak fix (C-CSI)", () =>
 		expect(editorLine).toContain("hello");
 		expect(editorLine).not.toContain("[200~");
 	});
-
-	it("C-CSI-R5: arrow keys still no-op", () => {
-		const c = openFreeform([singleQ]);
-		c.handleInput(RIGHT);
-		c.handleInput(RIGHT);
-		c.handleInput(RIGHT);
-		c.handleInput("a");
-		c.handleInput("b");
-		const lines = c.render(60);
-		const editorLine = lines.find((l) => l.includes("\x1b[7m"));
-		expect(editorLine).toContain("ab");
-		expect(editorLine).not.toContain("\x1b[A"); expect(editorLine).not.toContain("\x1b[B"); expect(editorLine).not.toContain("\x1b[C"); expect(editorLine).not.toContain("\x1b[D");
-	});
-
-	it("C-CSI-R6: backspace still works", () => {
-		const c = openFreeform([singleQ]);
-		c.handleInput("abc");
-		c.handleInput(BKSP);
-		const lines = c.render(60);
-		const editorLine = lines.find((l) => l.includes("\x1b[7m"));
-		expect(editorLine).toContain("ab");
-		expect(editorLine).not.toContain("abc");
-	});
-
-	it("C-CSI-R7: Esc still exits editor", () => {
-		const c = openFreeform([singleQ]);
-		c.handleInput("abc");
-		c.handleInput(ESC);
-		const lines = c.render(60);
-		expect(lines.some((l) => l.includes("\x1b[7m"))).toBe(false);
-	});
 });
 
 // 🐛 = U+1F41B，UTF-16 surrogate pair（占 2 个 code unit，index 1=高代理 / 2=低代理）。
