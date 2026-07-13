@@ -12,8 +12,8 @@ import {
 } from "@xyz-agent/extension-protocol";
 
 import { AskUserComponent } from "./component";
+import { formatAnswer, parseAnswerParts } from "./answer-format";
 import {
-	ANSWER_COMMENT_SEPARATOR,
 	type AskUserDetails,
 	type ErrorDetails,
 	HEADER_MAX_CHARS,
@@ -33,7 +33,7 @@ type ExecuteResult = AgentToolResult<AskUserDetails> & { isError?: boolean };
 
 /**
  * expanded 渲染辅助：展开某问题的全部选项，用 ●/○ 标记是否被选中（spec FR-9）。
- * 选中判定：answer 含该 option label（answer 形如 "Postgres" / "A, B" / "X — comment"）。
+ * 选中判定：用 parseAnswerParts 精确匹配 label（而非子串匹配），避免 "A" 是 "AB" 子串时的误判。
  * 返回 TruncatedText 数组供 box.addChild 展开。
  */
 function renderExpandedOptions(
@@ -41,9 +41,11 @@ function renderExpandedOptions(
 	answer: string,
 	theme: ThemeLike,
 ): TruncatedText[] {
-	const answerTokens = new Set(answer.split(/\s*[,—]\s*|\s*,\s*/).filter(Boolean));
+	const labels = q.options.map((o: Option) => o.label);
+	const { selected } = parseAnswerParts(answer, labels);
+	const selectedSet = new Set(selected);
 	const mark = (opt: Option): string =>
-		answerTokens.has(opt.label) || answer.includes(opt.label)
+		selectedSet.has(opt.label)
 			? theme.fg("success", "●")
 			: theme.fg("dim", "○");
 	// 只展开真实选项（不含自动追加的 Other）；Other 文本单独显示
@@ -90,8 +92,8 @@ function toProtoQuestions(questions: Question[]): AskUserQuestion[] {
  * 协议格式：key=header/question, 单选=string, 多选=JSON数组, Other=__other, comment=__comment
  * ask-user 格式：key=question 全文, value=逗号分隔 label + Other, comment 内联（` — `）
  *
- * 转换语义对齐 TUI 版 getAnswerText + buildResult 的拼装逻辑（parts.join(", ")），
- * 确保 RPC 和 TUI 两条路径产出的 Result.answers 格式一致（renderResult/LLM 看到相同文本）。
+ * 拼装逻辑复用 formatAnswer（与 TUI 版 getAnswerText 共享同一格式函数），
+ * 确保 RPC 和 TUI 两条路径产出的 Result.answers 格式一致。
  */
 function protoAnswersToResult(
 	questions: Question[],
@@ -122,10 +124,8 @@ function protoAnswersToResult(
 			parts.push(selected);
 		}
 		if (other) parts.push(other);
-		if (parts.length === 0) continue;
-
-		const base = parts.join(", ");
-		out[q.question] = comment ? `${base}${ANSWER_COMMENT_SEPARATOR}${comment}` : base;
+		const formatted = formatAnswer(parts, comment);
+		if (formatted !== null) out[q.question] = formatted;
 	}
 	return out;
 }
