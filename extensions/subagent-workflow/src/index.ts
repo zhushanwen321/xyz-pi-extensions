@@ -178,6 +178,7 @@ export default function subagentsWorkflowExtension(pi: ExtensionAPI): void {
         scheduleTimeBudget(runId, deps, budgetTimeMs),
       onWorkflowCall: (name: string, args: Record<string, unknown>, parentRun: WorkflowRun) =>
         executeNestedWorkflow(name, args, parentRun, deps),
+      streamSink: getSubagentService()?.getStreamSink() ?? undefined,
       log,
     };
     return deps;

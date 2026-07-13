@@ -11,7 +11,7 @@
  * 层归属：Engine。零 infra 依赖（AC-1）。
  */
 import type { AgentRegistry } from "../../execution/agent-registry.ts";
-import type { SubagentStream } from "../../execution/stream-sink.ts";
+import type { StreamSink, SubagentStream } from "../../execution/stream-sink.ts";
 import type { AgentEvent } from "../../shared/agent-event.ts";
 import type { WorkerHandle } from "../worker-handle.ts";
 import type { RunSpec } from "./run-spec.ts";
@@ -163,4 +163,13 @@ export interface LifecycleDeps {
     args: Record<string, unknown>,
     parentRun: WorkflowRun,
   ) => Promise<unknown>;
+ /**
+ * UI streaming sink（ctx.ui.setWidget），workflow agent call 创建 SubagentStream 用。
+ *
+ * 由 Interface 层 makeDeps 注入（从 SubagentService.getStreamSink() 取）。
+ * dispatchAgentCall 用它创建 SubagentStream（widgetKey=subagent-stream-<runId>-<stepIndex>），
+ * 使 workflow agent call 的 text_delta 走与 background subagent 相同的 streaming 链路。
+ * 可选——无 UI 模式（TUI/RPC 无 setWidget）时为 undefined，dispatchAgentCall 不创建 stream。
+ */
+  streamSink?: StreamSink;
 }

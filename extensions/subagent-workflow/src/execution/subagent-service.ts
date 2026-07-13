@@ -170,8 +170,9 @@ export class SubagentService {
   private pi: PiLike | null = null;
   /** 当前 Pi session ID（session 隔离过滤用）。initSession 时注入。 */
   private sessionId: string | null = null;
-  /** UI streaming sink（ctx.ui.setWidget），background text_delta 转发用。 */
+  /** UI streaming sink（ctx.ui.setWidget）。workflow 域经 getStreamSink() 取用。 */
   private streamSink: StreamSink | null = null;
+  getStreamSink(): StreamSink | null { return this.streamSink; }
   private _disposed = false;
   private _seq = 0;
   /** background 完成通知器（滑动窗口合并 + 去重）。session_start revive，shutdown dispose。 */

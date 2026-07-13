@@ -27,6 +27,7 @@
 
 import { SLUG_MAX_LENGTH } from "../execution/execute-options-mapper.ts";
 import { createRecord, updateFromEvent } from "../execution/execution-record.ts";
+import { SubagentStream } from "../execution/stream-sink.ts";
 import type { AgentEvent } from "../shared/agent-event.ts";
 import { resolveAgentOpts } from "./agent-opts-resolver.ts";
 import { ConcurrencyGate, DEFAULT_CONCURRENCY } from "./concurrency-gate.ts";
@@ -294,8 +295,23 @@ function dispatchAgentCall(
   const onEvent = (event: AgentEvent): void => {
     updateFromEvent(liveRecord, event);
   };
+  // 创建 streaming sink：widgetKey = subagent-stream-<runId>-<stepIndex>。
+  // 复用 background subagent 的 SubagentStream → setWidget → RPC 链路（agent-call-streaming-extension.md）。
+  // streamSink 缺失（无 UI 模式）时 stream=undefined，executeAgentCall 正常执行不 streaming。
+  const stream = deps.streamSink
+    ? new SubagentStream(`${run.runId}-${msg.callId}`, deps.streamSink)
+    : undefined;
   void runtime.gate
-    .withSlot(() => executeAgentCall(call, deps.runner, run.state.budget, signal, run.state.trace, onEvent), signal)
+    .withSlot(
+      async () => {
+        try {
+          await executeAgentCall(call, deps.runner, run.state.budget, signal, run.state.trace, onEvent, stream);
+        } finally {
+          stream?.dispose();
+        }
+      },
+      signal,
+    )
     .then(() => {
  // pause/abort 后到达的 stale completion 不写 state（pause 是干净快照）
       if (run.state.status !== "running") return;
