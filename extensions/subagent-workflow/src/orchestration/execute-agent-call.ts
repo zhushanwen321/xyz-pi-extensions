@@ -23,6 +23,7 @@
  * 参考：domain-models.md §5 + §失败处理矩阵。
  */
 
+import type { SubagentStream } from "../execution/stream-sink.ts";
 import type { AgentEvent } from "../shared/agent-event.ts";
 import type { AgentCall } from "./models/agent-call.ts";
 import type { Budget } from "./models/budget.ts";
@@ -124,10 +125,11 @@ export async function executeAgentCall(
   signal: AbortSignal,
   trace: Trace,
   onEvent?: (event: AgentEvent) => void,
+  stream?: SubagentStream,
 ): Promise<void> {
   call.markRunning();
 
-  const result = await runner.run(call.opts, signal, onEvent);
+  const result = await runner.run(call.opts, signal, onEvent, stream);
 
  // 累加 usage（加权由 budget.consume 内部按权重常量处理，见 budget.ts）
   if (result.usage) {
@@ -164,7 +166,7 @@ export async function executeAgentCall(
       budget.incrementCallCount();
       return;
     }
-    await executeAgentCall(call, runner, budget, signal, trace, onEvent);
+    await executeAgentCall(call, runner, budget, signal, trace, onEvent, stream);
     return;
   }
 

@@ -14,13 +14,14 @@
 //   D-A2（映射归 adapter）/ D-A8（onEvent 桥接）/ D-A9（timeoutMs 合并 signal）/
 //   D-008（model 填底，不调 resolveModel）/ BC-9（timeoutMs 行为）/ BC-10（live-record 进度）
 
-import type { AgentEvent } from "../shared/agent-event.ts";
 import type { AgentRunner } from "../orchestration/models/ports.ts";
 import type { AgentCallOpts, AgentResult } from "../orchestration/models/types.ts";
+import type { AgentEvent } from "../shared/agent-event.ts";
+import { mapToExecuteOptions, mergeTimeoutSignal } from "./execute-options-mapper.ts";
 import type { ModelInfo } from "./model-resolver.ts";
+import type { SubagentStream } from "./stream-sink.ts";
 import type { SubagentService } from "./subagent-service.ts";
 import type { ExecuteOptions } from "./types.ts";
-import { mapToExecuteOptions, mergeTimeoutSignal } from "./execute-options-mapper.ts";
 
 // ── 构造依赖（per-session 注入）──
 
@@ -75,6 +76,7 @@ export class SubprocessAgentRunner implements AgentRunner {
     opts: AgentCallOpts,
     signal: AbortSignal,
     onEvent?: (event: AgentEvent) => void,
+    stream?: SubagentStream,
   ): Promise<AgentResult> {
     const startedAt = Date.now();
 
@@ -93,7 +95,7 @@ export class SubprocessAgentRunner implements AgentRunner {
       const bridgedOnEvent = onEvent;
 
       // ── 核心委托 ──
-      return await this.subagentService.executeAndAwait(mappedOpts, mergedSignal, bridgedOnEvent);
+      return await this.subagentService.executeAndAwait(mappedOpts, mergedSignal, bridgedOnEvent, stream);
     } catch (err) {
       // executeAndAwait throw（嵌套超限 ForkDepthExceededError，BC-12）或未预期异常 → 不 reject，入 error。
       const message = err instanceof Error ? err.message : String(err);

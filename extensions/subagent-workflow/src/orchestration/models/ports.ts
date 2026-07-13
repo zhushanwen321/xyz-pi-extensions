@@ -10,8 +10,9 @@
  *
  * 层归属：Engine。零 infra 依赖（AC-1）。
  */
-import type { AgentEvent } from "../../shared/agent-event.ts";
 import type { AgentRegistry } from "../../execution/agent-registry.ts";
+import type { SubagentStream } from "../../execution/stream-sink.ts";
+import type { AgentEvent } from "../../shared/agent-event.ts";
 import type { WorkerHandle } from "../worker-handle.ts";
 import type { RunSpec } from "./run-spec.ts";
 import type { AgentCallOpts, AgentResult } from "./types.ts";
@@ -32,7 +33,7 @@ import type { WorkflowRun } from "./workflow-run.ts";
  * raw JSONL 中间层（executeAndAwait 直接出 AgentEvent，session-runner handleSdkEvent 出口）。
  */
 export interface AgentRunner {
-  run(opts: AgentCallOpts, signal: AbortSignal, onEvent?: (event: AgentEvent) => void): Promise<AgentResult>;
+  run(opts: AgentCallOpts, signal: AbortSignal, onEvent?: (event: AgentEvent) => void, stream?: SubagentStream): Promise<AgentResult>;
 }
 
 // ── Port 2: RunStore ──────────────────────────────────────────

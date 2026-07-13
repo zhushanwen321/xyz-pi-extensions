@@ -14,6 +14,11 @@ import { createHash } from "node:crypto";
 import * as fs from "node:fs";
 import * as path from "node:path";
 
+import type { AgentResult as WorkflowAgentResult } from "../orchestration/models/types.ts";
+// D-A10: workflow 侧 AgentResult 映射（executeAndAwait 出口）
+import { mapToWorkflowAgentResult } from "./agent-result-mapper.ts";
+import { removeAliveMarker } from "./alive-store.ts";
+import { bestEffort } from "./best-effort.ts";
 import { type ConcurrencyPool,DefaultConcurrencyPool } from "./concurrency-pool.ts";
 import {
   completeRecord,
@@ -22,10 +27,19 @@ import {
   snapshot,
   tryTransition,
 } from "./execution-record.ts";
+import { writeFinalized } from "./finalized-marker.ts";
+import type { ModelConfigService } from "./model-config-service.ts";
 import type { AgentConfig, ModelInfo, ResolvedModel } from "./model-resolver.ts";
+import type { BgNotifyRecord, NotifierHost } from "./notifier.ts";
+import { BgNotifier } from "./notifier.ts";
 import { getSubagentSessionDir } from "./path-encoding.ts";
+import type { StatusFilter } from "./record-store.ts";
+import { RecordStore } from "./record-store.ts";
 import { MAX_FORK_DEPTH } from "./session-context-resolver.ts";
 import { killAllSpawnedChildren, runSpawn, type SessionRunnerContext } from "./session-runner.ts";
+import type { StreamSink } from "./stream-sink.ts";
+import { SubagentStream } from "./stream-sink.ts";
+import { writeCancelledTombstone } from "./tombstone-store.ts";
 import type { WorktreeHandle } from "./types.ts";
 import type {
   AgentEvent,
@@ -40,22 +54,7 @@ import type {
 } from "./types.ts";
 import { ForkDepthExceededError } from "./types.ts";
 import { DEFAULT_AGENT_NAME } from "./types.ts";
-import { bestEffort } from "./best-effort.ts";
-import { removeAliveMarker } from "./alive-store.ts";
-import { writeFinalized } from "./finalized-marker.ts";
-import type { StatusFilter } from "./record-store.ts";
-import { RecordStore } from "./record-store.ts";
-import { writeCancelledTombstone } from "./tombstone-store.ts";
-
-// D-A10: workflow 侧 AgentResult 映射（executeAndAwait 出口）
-import { mapToWorkflowAgentResult } from "./agent-result-mapper.ts";
-import type { AgentResult as WorkflowAgentResult } from "../orchestration/models/types.ts";
-import type { ModelConfigService } from "./model-config-service.ts";
 import { WorktreeManager } from "./worktree-manager.ts";
-import { BgNotifier } from "./notifier.ts";
-import type { BgNotifyRecord, NotifierHost } from "./notifier.ts";
-import type { StreamSink } from "./stream-sink.ts";
-import { SubagentStream } from "./stream-sink.ts";
 
 /** Pi ExtensionAPI 的最小接口（duck-typed）。
  *  subagent-service 直接调 pi.sendMessage 发 background 完成通知（BgNotifier 滑动窗口合并），
@@ -442,6 +441,7 @@ export class SubagentService {
     opts: ExecuteOptions,
     signal?: AbortSignal,
     onEvent?: (event: AgentEvent) => void,
+    stream?: SubagentStream,
   ): Promise<WorkflowAgentResult> {
     this.assertReady();
 
@@ -467,9 +467,7 @@ export class SubagentService {
     // ── 步骤 4: signal 决议 ──
     const effectiveSignal = signal ?? record.controller?.signal;
 
-    // 步骤 5: runAndFinalize（await，不 detached）。onUpdate=undefined（BC-11），onEvent 独立传。
-    // 双通道（candidate 5）：workflow onEvent 开 → text_delta 经 liveRecord；background 走 stream。
-    // 根因：onEvent 耦合 onUpdate + 透传，background 关 onUpdate 连带关 onEvent。
+    // 步骤 5: runAndFinalize（await，不 detached）。onUpdate=undefined（BC-11），onEvent 独立传，stream 透传。
     const result = await this.runAndFinalize(
       record,
       { ...opts, onUpdate: undefined },
@@ -478,6 +476,7 @@ export class SubagentService {
       effectiveSignal,
       PRIORITY_BACKGROUND,
       onEvent,
+      stream,
     );
 
     // ── 步骤 6: D-A10 AgentResult 映射 ──

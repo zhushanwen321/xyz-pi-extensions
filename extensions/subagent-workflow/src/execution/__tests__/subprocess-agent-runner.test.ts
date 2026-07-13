@@ -15,9 +15,9 @@
 
 import { describe, expect, it, vi } from "vitest";
 
-import { SubprocessAgentRunner } from "../subprocess-agent-runner.ts";
-import type { SubprocessAgentRunnerDeps } from "../subprocess-agent-runner.ts";
 import type { AgentCallOpts, AgentResult } from "../../orchestration/models/types.ts";
+import type { SubprocessAgentRunnerDeps } from "../subprocess-agent-runner.ts";
+import { SubprocessAgentRunner } from "../subprocess-agent-runner.ts";
 
 // ── 测试辅助 ──
 
@@ -42,6 +42,7 @@ function createMockService(impl?: typeof vi.fn) {
       opts: Record<string, unknown>,
       signal?: AbortSignal,
       onEvent?: (e: Record<string, unknown>) => void,
+      stream?: unknown,
     ) => Promise<AgentResult>;
   };
 }
@@ -384,6 +385,44 @@ describe("SubprocessAgentRunner (wave-4 delegate)", () => {
 
       const result = await sar.run(makeBaseOpts(), new AbortController().signal);
       expect(result.error).toBe("raw string error");
+    });
+  });
+
+  // ────────────────────────────────────────────────
+  // U1: stream 透传给 executeAndAwait
+  // ────────────────────────────────────────────────
+  describe("U1 stream 透传", () => {
+    it("SAR.run 传 stream → executeAndAwait 第 4 参收到同一 stream 对象", async () => {
+      let capturedStream: unknown;
+      const mockService = createMockService(
+        vi.fn().mockImplementation((_opts, _sig, _onEvt, stream) => {
+          capturedStream = stream;
+          return Promise.resolve(makeMockResult());
+        }),
+      );
+      const deps: SubprocessAgentRunnerDeps = { subagentService: mockService };
+      const sar = new SubprocessAgentRunner(deps);
+
+      const fakeStream = { onDelta: vi.fn(), dispose: vi.fn() };
+      await sar.run(makeBaseOpts(), new AbortController().signal, undefined, fakeStream as never);
+
+      expect(capturedStream).toBe(fakeStream);
+    });
+
+    it("SAR.run 不传 stream → executeAndAwait 第 4 参为 undefined", async () => {
+      let capturedStream: unknown = "sentinel";
+      const mockService = createMockService(
+        vi.fn().mockImplementation((_opts, _sig, _onEvt, stream) => {
+          capturedStream = stream;
+          return Promise.resolve(makeMockResult());
+        }),
+      );
+      const deps: SubprocessAgentRunnerDeps = { subagentService: mockService };
+      const sar = new SubprocessAgentRunner(deps);
+
+      await sar.run(makeBaseOpts(), new AbortController().signal);
+
+      expect(capturedStream).toBeUndefined();
     });
   });
 });
