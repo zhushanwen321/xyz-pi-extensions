@@ -31,6 +31,50 @@ import { validateInput } from "./validate";
  */
 type ExecuteResult = AgentToolResult<AskUserDetails> & { isError?: boolean };
 
+/** 禁用 ask_user 工具（headless / RPC 通道不可用时调用，防 LLM 反复重试）。 */
+function disableAskUser(pi: ExtensionAPI): void {
+	pi.setActiveTools(
+		pi
+			.getAllTools()
+			.map((t: { name: string }) => t.name)
+			.filter((n: string) => n !== "ask_user"),
+	);
+}
+
+/** 构造 cancelled 结果（用户取消 / abort / 校验失败共用）。 */
+function cancelledResult(questions: Question[], text: string, isError = false): ExecuteResult {
+	return {
+		content: [{ type: "text" as const, text }],
+		isError: isError || undefined,
+		details: { questions, answers: {}, cancelled: true } satisfies Result,
+	};
+}
+
+/** TUI 模式交互（自定义 Component 实时交互）。 */
+async function runTuiInteraction(
+	questions: Question[],
+	signal: AbortSignal | undefined,
+	ctx: ExtensionContext,
+): Promise<Result | null> {
+	return ctx.ui.custom<Result | null>(
+		(tui: unknown, theme: unknown, _kb: unknown, done: (r: Result | null) => void) => {
+			const comp = new AskUserComponent(
+				questions,
+				tui as { requestRender(): void },
+				theme as ThemeLike,
+				done,
+			);
+			// signal abort 监听（spec FR-10）：走组件 cancel() 复用 _resolved 守卫，
+			// 避免用户已 submit/cancel 后 signal 才 abort 二次调 done（FR-12 竞态）
+			if (signal) {
+				signal.addEventListener("abort", () => comp.cancel(), { once: true });
+			}
+			return comp;
+		},
+		// 不传 options → inline 渲染（spec FR-3）
+	);
+}
+
 /**
  * expanded 渲染辅助：展开某问题的全部选项，用 ●/○ 标记是否被选中（spec FR-9）。
  * 选中判定：用 parseAnswerParts 精确匹配 label（而非子串匹配），避免 "A" 是 "AB" 子串时的误判。
@@ -193,105 +237,53 @@ If you recommend an option, prefix its label with "(Recommended)" and list it fi
 		): Promise<ExecuteResult> {
 			const questions = params.questions;
 
-			// 1. 参数校验（spec FR-2）→ isError
+			// 1. 参数校验（spec FR-2）
 			const validationError = validateInput(questions);
 			if (validationError) {
-				return {
-					content: [{ type: "text" as const, text: `Error: ${validationError}` }],
-					isError: true,
-					details: { questions, answers: {}, cancelled: true } satisfies Result,
-				};
+				return cancelledResult(questions, `Error: ${validationError}`, true);
 			}
 
-			// 2. Headless 检查（spec FR-8）→ isError + 禁用工具
-			// mode 非 tui 非 rpc（print/json）= 无交互通道，禁用工具避免 LLM 重试。
-			// RPC 模式（xyz-agent GUI）有 select 通道走富交互，不算 headless。
+			// 2. Headless 检查（spec FR-8）：mode 非 tui 非 rpc = 无交互通道
 			if (ctx.mode !== "tui" && ctx.mode !== "rpc") {
-				pi.setActiveTools(
-					pi
-						.getAllTools()
-						.map((t: { name: string }) => t.name)
-						.filter((n: string) => n !== "ask_user"),
+				disableAskUser(pi);
+				return cancelledResult(
+					questions,
+					"Error: ask_user requires an interactive session. The tool has been disabled for this session. Do not retry — proceed without user input (make a defensible decision and state it) or wait for the user to reconnect.",
+					true,
 				);
-				return {
-					content: [
-						{
-							type: "text" as const,
-							text: "Error: ask_user requires an interactive session. The tool has been disabled for this session. Do not retry — proceed without user input (make a defensible decision and state it) or wait for the user to reconnect.",
-						},
-					],
-					isError: true,
-					details: { questions, answers: {}, cancelled: true } satisfies Result,
-				};
 			}
 
 			// 3. Signal abort 入口检查（spec FR-10）。
 			// abort 是 agent 被外部终止（goal 取消 / context compact / session 切换），
 			// 不是用户意图——文案必须区别于 step 5 的用户取消，避免 LLM 俊等用户。
 			if (signal?.aborted) {
-				return {
-					content: [
-						{
-							type: "text" as const,
-							text: "Agent aborted (goal cancelled, context compacted, or session switched). Do not assume an answer; do not retry ask_user — propagate the abort, or wait for new instructions if the decision is still required.",
-						},
-					],
-					details: { questions, answers: {}, cancelled: true } satisfies Result,
-				};
+				return cancelledResult(
+					questions,
+					"Agent aborted (goal cancelled, context compacted, or session switched). Do not assume an answer; do not retry ask_user — propagate the abort, or wait for new instructions if the decision is still required.",
+				);
 			}
 
-			// 3. 交互执行：TUI 走 ctx.ui.custom，RPC（xyz-agent GUI）走 askUserInteract。
-			// 顶层 try/catch（spec FR-13）。
-			// RPC 分支：askUserInteract 在 select 不可用时抛错（真 headless / print 模式）。
-			// TUI 分支：custom 抛错通常是组件临时故障，不禁用，允许 LLM 重试。
+			// 4. 交互执行：TUI 走 ctx.ui.custom，RPC（xyz-agent GUI）走 askUserInteract。
 			// 注意：hasUI 在 TUI 和 RPC 模式都为 true（dialog-capable），不能用于区分——
-			// 用 ctx.mode === 'rpc' 判定 GUI 渲染通道（与 isGuiCapable 实现一致）。
+			// 用 ctx.mode === 'rpc' 判定 GUI 渲染通道。
 			const useRpc = ctx.mode === "rpc";
 			let result: Result | null;
 			try {
-				if (useRpc) {
-					// RPC 模式（xyz-agent GUI）：select 通道 + marker，前端 AskUserOverlay 渲染
-					result = await runRpcInteraction(questions, signal, ctx);
-				} else {
-					// TUI 模式：自定义 Component 实时交互
-					result = await ctx.ui.custom<Result | null>(
-						(tui: unknown, theme: unknown, _kb: unknown, done: (r: Result | null) => void) => {
-							const comp = new AskUserComponent(
-								questions,
-								tui as { requestRender(): void },
-								theme as ThemeLike,
-								done,
-							);
-							// signal abort 监听（spec FR-10）：走组件 cancel() 复用 _resolved 守卫，
-							// 避免用户已 submit/cancel 后 signal 才 abort 二次调 done（FR-12 竞态）
-							if (signal) {
-								signal.addEventListener("abort", () => comp.cancel(), { once: true });
-							}
-							return comp;
-						},
-						// 不传 options → inline 渲染（spec FR-3）
-					);
-				}
+				result = useRpc
+					? await runRpcInteraction(questions, signal, ctx)
+					: await runTuiInteraction(questions, signal, ctx);
 			} catch (err) {
+				// RPC 通道不可用（真 headless / select 缺失）→ 禁用工具（spec FR-8）。
+				// TUI 分支不禁用——custom 抛错通常是组件临时故障，允许 LLM 重试。
 				const message = err instanceof Error ? err.message : String(err);
-				// RPC 通道不可用（真 headless / select 缺失）→ 禁用工具，避免 LLM 反复重试（spec FR-8）
-				if (useRpc) {
-					pi.setActiveTools(
-						pi
-							.getAllTools()
-							.map((t: { name: string }) => t.name)
-							.filter((n: string) => n !== "ask_user"),
-					);
-				}
+				if (useRpc) disableAskUser(pi);
 				return {
-					content: [
-						{
-							type: "text" as const,
-							text: useRpc
-								? `ask_user failed: ${message}. The tool has been disabled for this session. Do not retry — proceed without user input (make a defensible decision and state it) or wait for the user to reconnect.`
-								: `ask_user failed: ${message}. Treat as cancelled — do not assume an answer; retry the call with corrected parameters, or proceed with a defensible decision if the user cannot be reached.`,
-						},
-					],
+					content: [{
+						type: "text" as const,
+						text: useRpc
+							? `ask_user failed: ${message}. The tool has been disabled for this session. Do not retry — proceed without user input (make a defensible decision and state it) or wait for the user to reconnect.`
+							: `ask_user failed: ${message}. Treat as cancelled — do not assume an answer; retry the call with corrected parameters, or proceed with a defensible decision if the user cannot be reached.`,
+					}],
 					isError: true,
 					details: { error: message } satisfies ErrorDetails,
 				};
@@ -299,15 +291,10 @@ If you recommend an option, prefix its label with "(Recommended)" and list it fi
 
 			// 5. 取消（null / cancelled）
 			if (result === null || result.cancelled) {
-				return {
-					content: [
-						{
-							type: "text" as const,
-							text: "User cancelled. Do not assume an answer or continue the task — wait for new instructions or re-ask with refined options if the decision is still required.",
-						},
-					],
-					details: { questions, answers: {}, cancelled: true } satisfies Result,
-				};
+				return cancelledResult(
+					questions,
+					"User cancelled. Do not assume an answer or continue the task — wait for new instructions or re-ask with refined options if the decision is still required.",
+				);
 			}
 
 			// 6. 正常返回
