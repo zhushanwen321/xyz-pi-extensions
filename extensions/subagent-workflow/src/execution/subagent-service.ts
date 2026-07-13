@@ -55,7 +55,7 @@ import { WorktreeManager } from "./worktree-manager.ts";
 import { BgNotifier } from "./notifier.ts";
 import type { BgNotifyRecord, NotifierHost } from "./notifier.ts";
 import type { StreamSink } from "./stream-sink.ts";
-import { createStreamDeltaSink } from "./stream-sink.ts";
+import { SubagentStream } from "./stream-sink.ts";
 
 /** Pi ExtensionAPI 的最小接口（duck-typed）。
  *  subagent-service 直接调 pi.sendMessage 发 background 完成通知（BgNotifier 滑动窗口合并），
@@ -580,8 +580,7 @@ export class SubagentService {
     signal: AbortSignal | undefined,
     priority: number,
     rawOnEvent?: (event: AgentEvent) => void,
-    onStreamDelta?: (delta: string) => void,
-    onStreamEnd?: () => void,
+    stream?: SubagentStream,
   ): Promise<AgentResult> {
     // 仅 background 进并发池限流，分层配额：每层嵌套 depth 让有效配额 -1（下限 1）。
     // 顶层 depth=0 拿满配额；嵌套越深有效并发越小，防子 agent fan-out 压垮主 agent 的 pool。
@@ -627,7 +626,7 @@ export class SubagentService {
             graceTurns: opts.graceTurns,
             signal,
             onEvent,
-            onStreamDelta, // [PoC] text_delta 分流
+            stream, // [PoC] text_delta streaming
             fork: opts.fork,
             worktree: worktreeHandle,
             parentForkDepth: parentDepth, // [MF#4] 父链深度，不从 opts 读
@@ -644,7 +643,7 @@ export class SubagentService {
     } finally {
       if (pooled) this.pool.release();
       // [PoC] 清除 streaming widget（subagent 终态）
-      onStreamEnd?.();
+      stream?.dispose();
     }
 
     // status 唯一判定点：success ? done : (aborted ? cancelled : failed)
@@ -668,14 +667,14 @@ export class SubagentService {
     signal: AbortSignal | undefined,
     priority: number,
   ): void {
-    // [PoC] 构造 text_delta 合并 sink——仅在 streamSink 可用时启用
-    const streamHandlers = this.streamSink
-      ? createStreamDeltaSink(record.id, this.streamSink)
+    // [PoC] 创建 text_delta streaming 生命周期对象——仅在 streamSink 可用时启用
+    const stream = this.streamSink
+      ? new SubagentStream(record.id, this.streamSink)
       : undefined;
 
     void this.runAndFinalize(
       record, opts, ctx, identity, signal, priority,
-      undefined, streamHandlers?.push, streamHandlers?.clear,
+      undefined, stream,
     )
       .then(() => {
         // background 回注：仅当本路径抢到 CAS（status 已转 done/failed）才 notify。
