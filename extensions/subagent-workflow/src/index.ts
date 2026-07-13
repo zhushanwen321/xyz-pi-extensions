@@ -215,6 +215,10 @@ export default function subagentsWorkflowExtension(pi: ExtensionAPI): void {
     service.initSession({
       pi,
       sessionId: ctx.sessionManager.getSessionId(),
+      // [PoC] 注入 ctx.ui.setWidget 作为 streaming sink（只绑方法，不持有整个 ctx）
+      streamSink: {
+        setWidget: (key, lines) => ctx.ui.setWidget(key, lines),
+      },
     });
 
     if (!existingService) {

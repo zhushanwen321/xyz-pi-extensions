@@ -54,6 +54,8 @@ import type { ModelConfigService } from "./model-config-service.ts";
 import { WorktreeManager } from "./worktree-manager.ts";
 import { BgNotifier } from "./notifier.ts";
 import type { BgNotifyRecord, NotifierHost } from "./notifier.ts";
+import type { StreamSink } from "./stream-sink.ts";
+import { createStreamDeltaSink } from "./stream-sink.ts";
 
 /** Pi ExtensionAPI 的最小接口（duck-typed）。
  *  subagent-service 直接调 pi.sendMessage 发 background 完成通知（BgNotifier 滑动窗口合并），
@@ -66,6 +68,11 @@ interface PiLike {
     options?: { triggerTurn?: boolean; deliverAs?: "steer" | "followUp" | "nextTurn" },
   ): void;
 }
+
+/** [PoC] UI streaming sink 的最小接口（ctx.ui.setWidget 的 duck-typed 子集）。
+ *  session_start 时从 ctx.ui 注入，background 执行期间用于把合并后的 text_delta
+ *  通过 setWidget 通道转发到 RPC stdout（不经 sendMessage 的持久化路径）。 */
+export type { StreamSink } from "./stream-sink.ts";
 
 /** pending-notifications 注册/注销 helper（避免重复代码）。 */
 function emitPendingRegister(pi: PiLike | null, id: string, name?: string): void {
@@ -100,6 +107,8 @@ export interface SubagentServiceInit {
 export interface SubagentServiceSessionInit {
   pi: PiLike;
   sessionId: string;
+  /** [PoC] UI streaming sink（ctx.ui.setWidget），用于 background text_delta 转发。 */
+  streamSink?: StreamSink;
 }
 
 /** background 优先级（保留 priority 排序机制，单一值）。 */
@@ -162,6 +171,8 @@ export class SubagentService {
   private pi: PiLike | null = null;
   /** 当前 Pi session ID（session 隔离过滤用）。initSession 时注入。 */
   private sessionId: string | null = null;
+  /** [PoC] UI streaming sink（ctx.ui.setWidget），background text_delta 转发用。 */
+  private streamSink: StreamSink | null = null;
   private _disposed = false;
   private _seq = 0;
   /** background 完成通知器（滑动窗口合并 + 去重）。session_start revive，shutdown dispose。 */
@@ -198,6 +209,7 @@ export class SubagentService {
   initSession(init: SubagentServiceSessionInit): void {
     this.pi = init.pi;
     this.sessionId = init.sessionId;
+    this.streamSink = init.streamSink ?? null;
     // [SPAWN fork depth 跨进程传递] 子进程被父 spawn 时，父通过 env
     // PI_SUBAGENT_FORK_DEPTH 传入当前 fork 链深度。子进程 session_start 时
     // 读取作为 forkDepthAls 基线，使后续嵌套 spawn fork 能从正确深度递增。
@@ -568,6 +580,8 @@ export class SubagentService {
     signal: AbortSignal | undefined,
     priority: number,
     rawOnEvent?: (event: AgentEvent) => void,
+    onStreamDelta?: (delta: string) => void,
+    onStreamEnd?: () => void,
   ): Promise<AgentResult> {
     // 仅 background 进并发池限流，分层配额：每层嵌套 depth 让有效配额 -1（下限 1）。
     // 顶层 depth=0 拿满配额；嵌套越深有效并发越小，防子 agent fan-out 压垮主 agent 的 pool。
@@ -613,6 +627,7 @@ export class SubagentService {
             graceTurns: opts.graceTurns,
             signal,
             onEvent,
+            onStreamDelta, // [PoC] text_delta 分流
             fork: opts.fork,
             worktree: worktreeHandle,
             parentForkDepth: parentDepth, // [MF#4] 父链深度，不从 opts 读
@@ -628,6 +643,8 @@ export class SubagentService {
       return result;
     } finally {
       if (pooled) this.pool.release();
+      // [PoC] 清除 streaming widget（subagent 终态）
+      onStreamEnd?.();
     }
 
     // status 唯一判定点：success ? done : (aborted ? cancelled : failed)
@@ -651,7 +668,15 @@ export class SubagentService {
     signal: AbortSignal | undefined,
     priority: number,
   ): void {
-    void this.runAndFinalize(record, opts, ctx, identity, signal, priority)
+    // [PoC] 构造 text_delta 合并 sink——仅在 streamSink 可用时启用
+    const streamHandlers = this.streamSink
+      ? createStreamDeltaSink(record.id, this.streamSink)
+      : undefined;
+
+    void this.runAndFinalize(
+      record, opts, ctx, identity, signal, priority,
+      undefined, streamHandlers?.push, streamHandlers?.clear,
+    )
       .then(() => {
         // background 回注：仅当本路径抢到 CAS（status 已转 done/failed）才 notify。
         // cancel 抢先时 status=cancelled，cancelBackground 自己 notify，此处跳过。

@@ -181,6 +181,10 @@ export interface RunOptions {
   signal: AbortSignal | undefined;
   /** event 回流——SessionRunner 内部 updateFromEvent 后，再回调调用方（widget/notify）。 */
   onEvent: ((event: AgentEvent) => void) | undefined;
+  /** [PoC] text_delta 分流回调——在每个 text_delta 到达 onEvent 之前触发。
+   *  background 模式下 onEvent=undefined，但 text_delta 仍可通过此回调被消费。
+   *  由调用方（subagent-service）做时间窗合并后转发。 */
+  onStreamDelta?: ((delta: string) => void) | undefined;
   /** D-A6 bridge: workflow schema JSON 字符串，存在时注入 childEnv.PI_WORKFLOW_SCHEMA。
    *  workflow 编排层通过 ExecuteOptions.schemaEnv 透传此处，
    *  runSpawn 将其注入子进程环境变量，激活 structured-output 扩展注册 tool。
@@ -474,6 +478,8 @@ export async function runSpawn(
   const agentEvent = (event: AgentEvent): void => {
     updateFromEvent(record, event);
     if (event.type === "turn_end") limiter.onTurnEnd(record.turnCount);
+    // [PoC] text_delta 分流到 onStreamDelta（在 onEvent 之前，background 模式 onEvent=undefined）
+    if (event.type === "text_delta") opts.onStreamDelta?.(event.delta);
     opts.onEvent?.(event);
   };
 
