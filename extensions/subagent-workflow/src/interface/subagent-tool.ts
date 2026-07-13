@@ -86,19 +86,29 @@ type SubagentRenderResultCb = (
 // Params schema
 // ============================================================
 
-/** Params schema（模块内消费，未导出）。 */
+// Params schema（模块内消费，未导出）。
+//
+// TODO(long-term, option-A): startParam/listParam/cancelParam 全标 Optional 是 flat
+// JSON Schema 表达「action 分发的条件必填」的妥协——required[] 只能表达静态必填，
+// 无法表达「action:"start" 时 startParam 必填、action:"list" 时不需要」。长期方案是
+// 拆成 3 个独立 tool（subagent_start / subagent_list / subagent_cancel），让每个 tool
+// 的 schema 真实反映必填性，消除全新上下文下的字段误判。当前靠 description 强标记 +
+// runtime guard（subagent-actions.ts startHandler/cancelHandler throw）兜底。
+// 勿在此基础上继续堆 action 条件逻辑——要加就拆 tool。
 const SubagentParams = Type.Object({
   action: StringEnum(["start", "list", "cancel"], {
     description: "Operation: 'start' runs a subagent, 'list' shows running subagents (optional includeFinished), 'cancel' stops a background subagent by id.",
   }),
+  // action:"start" → startParam REQUIRED. Missing/empty task or slug throws at runtime.
+  // (flat JSON Schema can't express conditional requirement — see file-level TODO.)
   startParam: Type.Optional(Type.Object({
     task: Type.String({
-      description: "The task for the subagent to execute (required for action:'start'). Whitespace-only is rejected.",
+      description: "REQUIRED for action:'start'. The task for the subagent to execute. Throws if missing or whitespace-only.",
     }),
     slug: Type.String({
       description:
-        "Short label (max 20 chars) describing what THIS subagent does — e.g. 'extract-urls', 'fix-login-bug'. " +
-        "Shown in the TUI alongside the agent type to distinguish concurrent subagents. Required, non-empty.",
+        "REQUIRED for action:'start'. Short label (max 20 chars) describing what THIS subagent does — e.g. 'extract-urls', 'fix-login-bug'. " +
+        "Shown in the TUI alongside the agent type to distinguish concurrent subagents. Throws if missing or whitespace-only.",
       maxLength: 20,
     }),
     agent: Type.Optional(Type.String({
@@ -127,6 +137,7 @@ const SubagentParams = Type.Object({
       description: 'Override the working directory for the subagent execution. Must be an absolute path. Defaults to the parent session\'s cwd.',
     })),
   })),
+  // action:"list" → listParam OPTIONAL (all fields optional, defaults apply). Ignored by other actions.
   listParam: Type.Optional(Type.Object({
     includeFinished: Type.Optional(Type.Boolean({
       description: "Include finished (done/failed/cancelled) records. Default false (running only).",
@@ -135,9 +146,10 @@ const SubagentParams = Type.Object({
       description: "Max items to return. Default 20, clamped to [1, 100].",
     })),
   })),
+  // action:"cancel" → cancelParam.subagentId REQUIRED. Throws if missing. Ignored by other actions.
   cancelParam: Type.Optional(Type.Object({
     subagentId: Type.String({
-      description: "The subagentId to cancel (required for action:'cancel'). Only background subagents can be cancelled.",
+      description: "REQUIRED for action:'cancel'. The subagentId to cancel. Throws if missing. Only background subagents can be cancelled.",
     }),
   })),
 });
@@ -187,9 +199,9 @@ CRITICAL — this tool is registered with executionMode "sequential": multiple \
 
 ## Actions
 
-- action:"start" — run a subagent. Pass startParam: { task, agent?, ... }. The subagent always runs in background: it returns a subagentId immediately, runs detached, and keeps running even if you stop. On completion a message is auto-injected that triggers a new turn so you can process the result.
-- action:"list" — list subagents. Pass listParam: { includeFinished?: boolean, limit?: number }. Default: running only, limit 20. Each item includes a sessionFile path — read it with the \`read\` tool for full detail (the jsonl is append-only, flushed in real time). Ignores startParam/cancelParam.
-- action:"cancel" — cancel a background subagent. Pass cancelParam: { subagentId }. Only background subagents can be cancelled. Ignores startParam/listParam.
+- action:"start" — run a subagent. REQUIRED: pass startParam: { task, slug, agent?, ... }. Both startParam.task and startParam.slug are REQUIRED (throws if missing or whitespace-only). The subagent always runs in background: it returns a subagentId immediately, runs detached, and keeps running even if you stop. On completion a message is auto-injected that triggers a new turn so you can process the result.
+- action:"list" — list subagents. Pass listParam: { includeFinished?: boolean, limit?: number } (all fields optional, defaults apply). Default: running only, limit 20. Each item includes a sessionFile path — read it with the \`read\` tool for full detail (the jsonl is append-only, flushed in real time). Ignores startParam/cancelParam.
+- action:"cancel" — cancel a background subagent. REQUIRED: pass cancelParam: { subagentId } (throws if missing). Only background subagents can be cancelled. Ignores startParam/listParam.
 
 ## After launching — do NOT wait
 
