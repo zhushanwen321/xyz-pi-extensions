@@ -1,5 +1,5 @@
 /**
- * [PoC] subagent text_delta streaming sink。
+ * subagent text_delta streaming sink。
  *
  * background subagent 执行期间，session-runner 的 agentEvent 出口把每个 text_delta
  * 传到 SubagentStream.onDelta。本模块做 100ms 时间窗合并后，通过 StreamSink.setWidget
@@ -18,10 +18,9 @@
 
 /** UI streaming sink 的最小接口（ctx.ui.setWidget 的 duck-typed 子集）。
  *
- * [hypothetical seam] 当前只有一个 adapter（ctx.ui.setWidget）。
- * 如果未来不出现第二个 sink 实现（如写文件 / 发 websocket），正式实现时应去掉此接口，
- * 直接用函数类型 `(key, lines) => void`。
- */
+ * 当前只有一个 adapter（index.ts session_start 包装 ctx.ui.setWidget）。
+ * 保留接口而非裸函数类型，因为 StreamSink 的语义是「UI sink 契约」——
+ * 测试 mock 和未来可能的第二 sink（如写文件）都走此契约。 */
 export interface StreamSink {
   setWidget(key: string, lines: string[] | undefined): void;
 }

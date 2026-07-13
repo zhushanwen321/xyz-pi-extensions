@@ -69,7 +69,7 @@ interface PiLike {
   ): void;
 }
 
-/** [PoC] UI streaming sink 的最小接口（ctx.ui.setWidget 的 duck-typed 子集）。
+/** UI streaming sink 的最小接口（ctx.ui.setWidget 的 duck-typed 子集）。
  *  session_start 时从 ctx.ui 注入，background 执行期间用于把合并后的 text_delta
  *  通过 setWidget 通道转发到 RPC stdout（不经 sendMessage 的持久化路径）。 */
 export type { StreamSink } from "./stream-sink.ts";
@@ -107,7 +107,7 @@ export interface SubagentServiceInit {
 export interface SubagentServiceSessionInit {
   pi: PiLike;
   sessionId: string;
-  /** [PoC] UI streaming sink（ctx.ui.setWidget），用于 background text_delta 转发。 */
+  /** UI streaming sink（ctx.ui.setWidget），用于 background text_delta 转发。 */
   streamSink?: StreamSink;
 }
 
@@ -171,7 +171,7 @@ export class SubagentService {
   private pi: PiLike | null = null;
   /** 当前 Pi session ID（session 隔离过滤用）。initSession 时注入。 */
   private sessionId: string | null = null;
-  /** [PoC] UI streaming sink（ctx.ui.setWidget），background text_delta 转发用。 */
+  /** UI streaming sink（ctx.ui.setWidget），background text_delta 转发用。 */
   private streamSink: StreamSink | null = null;
   private _disposed = false;
   private _seq = 0;
@@ -467,8 +467,9 @@ export class SubagentService {
     // ── 步骤 4: signal 决议 ──
     const effectiveSignal = signal ?? record.controller?.signal;
 
-    // ── 步骤 5: runAndFinalize（await，不 detached）──
-    // BC-11：onUpdate 置 undefined（不回流 tool UI 细节），onEvent 独立传（AgentEvent 透传 workflow）
+    // 步骤 5: runAndFinalize（await，不 detached）。onUpdate=undefined（BC-11），onEvent 独立传。
+    // 双通道（candidate 5）：workflow onEvent 开 → text_delta 经 liveRecord；background 走 stream。
+    // 根因：onEvent 耦合 onUpdate + 透传，background 关 onUpdate 连带关 onEvent。
     const result = await this.runAndFinalize(
       record,
       { ...opts, onUpdate: undefined },
@@ -626,7 +627,7 @@ export class SubagentService {
             graceTurns: opts.graceTurns,
             signal,
             onEvent,
-            stream, // [PoC] text_delta streaming
+            stream, // text_delta streaming（background 路径有值，workflow 路径 undefined）
             fork: opts.fork,
             worktree: worktreeHandle,
             parentForkDepth: parentDepth, // [MF#4] 父链深度，不从 opts 读
@@ -642,7 +643,7 @@ export class SubagentService {
       return result;
     } finally {
       if (pooled) this.pool.release();
-      // [PoC] 清除 streaming widget（subagent 终态）
+      // 清除 streaming widget（subagent 终态，幂等）
       stream?.dispose();
     }
 
@@ -667,7 +668,7 @@ export class SubagentService {
     signal: AbortSignal | undefined,
     priority: number,
   ): void {
-    // [PoC] 创建 text_delta streaming 生命周期对象——仅在 streamSink 可用时启用
+    // 创建 streaming 生命周期对象——streamSink 为 null（session_start 未注入）时降级为 undefined。
     const stream = this.streamSink
       ? new SubagentStream(record.id, this.streamSink)
       : undefined;

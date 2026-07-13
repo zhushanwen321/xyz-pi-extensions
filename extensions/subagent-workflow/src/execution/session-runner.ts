@@ -182,9 +182,11 @@ export interface RunOptions {
   signal: AbortSignal | undefined;
   /** event 回流——SessionRunner 内部 updateFromEvent 后，再回调调用方（widget/notify）。 */
   onEvent: ((event: AgentEvent) => void) | undefined;
-  /** [PoC] text_delta streaming 生命周期对象——在 text_delta 到达 onEvent 之前分流。
+  /** text_delta streaming 生命周期对象——在 text_delta 到达 onEvent 之前分流。
    *  background 模式下 onEvent=undefined，但 text_delta 仍可通过此对象被消费。
-   *  由调用方（subagent-service）创建，内部做时间窗合并后转发到 setWidget。 */
+   *  由调用方（subagent-service）创建，内部做时间窗合并后转发到 setWidget。
+   *  workflow 路径（executeAndAwait）不传此字段——其 onEvent 是开的，
+   *  text_delta 经 onEvent 到 workflow liveRecord，不走 streaming 通道。 */
   stream?: SubagentStream;
   /** D-A6 bridge: workflow schema JSON 字符串，存在时注入 childEnv.PI_WORKFLOW_SCHEMA。
    *  workflow 编排层通过 ExecuteOptions.schemaEnv 透传此处，
@@ -479,7 +481,9 @@ export async function runSpawn(
   const agentEvent = (event: AgentEvent): void => {
     updateFromEvent(record, event);
     if (event.type === "turn_end") limiter.onTurnEnd(record.turnCount);
-    // [PoC] text_delta 分流到 stream（在 onEvent 之前，background 模式 onEvent=undefined）
+    // text_delta 分流到 stream 通道（在 onEvent 之前）。
+    // 双通道互斥设计：background 路径 stream 有值、onEvent=undefined；
+    // workflow 路径 onEvent 有值、stream=undefined。详见 W3 注释。
     if (event.type === "text_delta") opts.stream?.onDelta(event.delta);
     opts.onEvent?.(event);
   };
