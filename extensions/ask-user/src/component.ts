@@ -1,16 +1,23 @@
 // src/component.ts
 import { type Component, matchesKey, parseKey, truncateToWidth } from "@mariozechner/pi-tui";
 
+import {
+	deleteCharBeforeCursor,
+	handleEditorPaste,
+	insertAtCursor,
+	moveCursorEnd,
+	moveCursorHome,
+	moveCursorLeft,
+	moveCursorRight,
+} from "./editor-ops";
 import { allOptions, renderQuestionView } from "./question-view";
 import { buildResult, renderButtonBar, renderSubmitView } from "./submit-view";
 import {
 	createQuestionState,
 	HEADER_MAX_CHARS,
-	isHighSurrogate,
 	type Question,
 	type QuestionState,
 	type Result,
-	SURROGATE_PAIR_LEN,
 	type ThemeLike,
 } from "./types";
 
@@ -74,6 +81,13 @@ export class AskUserComponent implements Component {
 	invalidate(): void {
 		this.cachedWidth = undefined;
 		this.cachedLines = undefined;
+	}
+
+	/** 状态变更后的标准后续：失效缓存 + 请求重绘。
+	 *  消除散弹式修改——每个 mutation 方法末尾不再需要手写 invalidate + requestRender 两行。 */
+	private rerender(): void {
+		this.invalidate();
+		this.tui.requestRender();
 	}
 
 	// ── 渲染 ──
@@ -173,8 +187,7 @@ export class AskUserComponent implements Component {
 				this.cancel();
 			} else {
 				this.pendingCancel = false;
-				this.invalidate();
-				this.tui.requestRender();
+				this.rerender();
 			}
 			return;
 		}
@@ -221,15 +234,13 @@ export class AskUserComponent implements Component {
 
 		if (matchesKey(data, "up")) {
 			state.cursorIndex = Math.max(0, state.cursorIndex - 1);
-			this.invalidate();
-			this.tui.requestRender();
+			this.rerender();
 			return;
 		}
 		if (matchesKey(data, "down")) {
 			const max = allOptions(q).length - 1;
 			state.cursorIndex = Math.min(max, state.cursorIndex + 1);
-			this.invalidate();
-			this.tui.requestRender();
+			this.rerender();
 			return;
 		}
 
@@ -242,8 +253,7 @@ export class AskUserComponent implements Component {
 			state.mode = "freeform";
 			state.draftText = state.freeTextValue ?? state.freeDraft ?? "";
 			state.cursorIndex = state.draftText.length;
-			this.invalidate();
-			this.tui.requestRender();
+			this.rerender();
 			return;
 		}
 
@@ -288,15 +298,13 @@ export class AskUserComponent implements Component {
 		// Esc → 回退到最后一个问题
 		if (matchesKey(data, "escape")) {
 			this.activeTab = this.questions.length - 1;
-			this.invalidate();
-			this.tui.requestRender();
+			this.rerender();
 			return;
 		}
 		// Tab → Submit ↔ Cancel 循环切焦点（单键双向）
 		if (matchesKey(data, "tab")) {
 			this.submitTabFocus = this.submitTabFocus === "submit" ? "cancel" : "submit";
-			this.invalidate();
-			this.tui.requestRender();
+			this.rerender();
 			return;
 		}
 		// Enter → 触发当前 focus
@@ -318,7 +326,7 @@ export class AskUserComponent implements Component {
 			this.handleEditorKey(data, keyId, state, q);
 			return;
 		}
-		this.handleEditorPaste(data, state);
+		if (handleEditorPaste(state, data)) this.rerender();
 	}
 
 	/** parseKey 命中的键：escape/enter/backspace/光标移动/space/printable 各有语义，
@@ -333,18 +341,24 @@ export class AskUserComponent implements Component {
 			return;
 		}
 		if (matchesKey(data, "backspace")) {
-			this.deleteCharBeforeCursor(state);
+			if (deleteCharBeforeCursor(state)) this.rerender();
 			return;
 		}
-		if (this.moveCursor(data, state)) return;
+		// 光标移动（4 方向 + home/end）
+		if (matchesKey(data, "left")) { moveCursorLeft(state); this.rerender(); return; }
+		if (matchesKey(data, "right")) { moveCursorRight(state); this.rerender(); return; }
+		if (matchesKey(data, "home")) { moveCursorHome(state); this.rerender(); return; }
+		if (matchesKey(data, "end")) { moveCursorEnd(state); this.rerender(); return; }
 		// 空格特判：parseKey(" ") 返回 "space"（非单字符），需显式插入
 		if (matchesKey(data, "space")) {
-			this.insertAtCursor(state, " ");
+			insertAtCursor(state, " ");
+			this.rerender();
 			return;
 		}
 		// 单字符 printable：parseKey("a") 返回 "a"（code 32-126），在光标处插入
 		if (keyId.length === 1 && keyId >= " " && keyId <= "~") {
-			this.insertAtCursor(state, keyId);
+			insertAtCursor(state, keyId);
+			this.rerender();
 			return;
 		}
 		// 其他 special key（功能键/modifier 组合）→ no-op（不泄漏）
@@ -366,8 +380,7 @@ export class AskUserComponent implements Component {
 		state.mode = "options";
 		state.draftText = "";
 		state.cursorIndex = state.savedOptionsCursorIndex;
-		this.invalidate();
-		this.tui.requestRender();
+		this.rerender();
 	}
 
 	/** Enter：freeform 有文本→提交，空文本→回退；comment→保存评论并 advance。 */
@@ -389,8 +402,7 @@ export class AskUserComponent implements Component {
 				if (q.multiSelect ? state.selectedIndices.size === 0 : state.selectedIndex === null) {
 					state.confirmed = false;
 				}
-				this.invalidate();
-				this.tui.requestRender();
+				this.rerender();
 			}
 			return;
 		}
@@ -401,79 +413,13 @@ export class AskUserComponent implements Component {
 		this.advance();
 	}
 
-	/** 在光标处插入文本，光标前移 text.length。 */
-	private insertAtCursor(state: QuestionState, text: string): void {
-		state.draftText = state.draftText.slice(0, state.cursorIndex) + text + state.draftText.slice(state.cursorIndex);
-		state.cursorIndex += text.length;
-		this.invalidate();
-		this.tui.requestRender();
-	}
-
-	/** 删除光标前一个 code point（surrogate pair 时删整个 code point）。 */
-	private deleteCharBeforeCursor(state: QuestionState): void {
-		if (state.cursorIndex <= 0) return;
-		const deleteCount = state.cursorIndex >= SURROGATE_PAIR_LEN && isHighSurrogate(state.draftText, state.cursorIndex - SURROGATE_PAIR_LEN) ? SURROGATE_PAIR_LEN : 1;
-		state.draftText = state.draftText.slice(0, state.cursorIndex - deleteCount) + state.draftText.slice(state.cursorIndex);
-		state.cursorIndex -= deleteCount;
-		this.invalidate();
-		this.tui.requestRender();
-	}
-
-	/** 光标移动（left/right/home/end），surrogate pair 安全跳过代理中间位。
-	 *  返回 true 表示命中了移动键；false 表示非移动键，交由上层处理。 */
-	private moveCursor(data: string, state: QuestionState): boolean {
-		if (matchesKey(data, "left")) {
-			const newLeft = state.cursorIndex - 1;
-			state.cursorIndex = newLeft > 0 && isHighSurrogate(state.draftText, newLeft - 1)
-				? newLeft - 1
-				: Math.max(0, newLeft);
-		} else if (matchesKey(data, "right")) {
-			state.cursorIndex = isHighSurrogate(state.draftText, state.cursorIndex)
-				? Math.min(state.draftText.length, state.cursorIndex + SURROGATE_PAIR_LEN)
-				: Math.min(state.draftText.length, state.cursorIndex + 1);
-		} else if (matchesKey(data, "home")) {
-			state.cursorIndex = 0;
-		} else if (matchesKey(data, "end")) {
-			state.cursorIndex = state.draftText.length;
-		} else {
-			return false;
-		}
-		this.invalidate();
-		this.tui.requestRender();
-		return true;
-	}
-
-	/** 多字符粘贴 chunk → printable 提取（BC-1/BC-2/BC-3 保持）。
-	 *  未识别控制序列（OSC/DA/DCS/APC/unknown CSI）整体丢弃，不提取可见残渣。
-	 *  排除 bracketed paste 标记防 C-PASTE 退化。依赖 StdinBuffer 序列拆分保证 data 整体性。 */
-	private handleEditorPaste(data: string, state: QuestionState): void {
-		if (data.startsWith("\x1b") && !data.includes("\x1b[200~") && !data.includes("\x1b[201~")) {
-			return;
-		}
-		const cleaned = data.replace(/\x1b\[200~|\x1b\[201~/g, "");
-		let changed = false;
-		// 用 Array.from 正确拆分 emoji/surrogate pairs
-		for (const c of Array.from(cleaned)) {
-			if (c >= " ") {
-				state.draftText = state.draftText.slice(0, state.cursorIndex) + c + state.draftText.slice(state.cursorIndex);
-				state.cursorIndex += c.length;
-				changed = true;
-			}
-		}
-		if (changed) {
-			this.invalidate();
-			this.tui.requestRender();
-		}
-	}
-
 	private toggleIndex(state: QuestionState, index: number): void {
 		if (state.selectedIndices.has(index)) state.selectedIndices.delete(index);
 		else state.selectedIndices.add(index);
 		if (state.selectedIndices.size === 0 && state.freeTextValue === null) {
 			state.confirmed = false;
 		}
-		this.invalidate();
-		this.tui.requestRender();
+		this.rerender();
 	}
 
 	private autoConfirmIfAnswered(): void {
@@ -490,21 +436,18 @@ export class AskUserComponent implements Component {
 	private gotoTab(target: number): void {
 		this.autoConfirmIfAnswered();
 		this.activeTab = target;
-		this.invalidate();
-		this.tui.requestRender();
+		this.rerender();
 	}
 
 	/** Esc 语义：有上一个 tab 则回退；已在首个（或单问题）则进入确认取消覆盖层。 */
 	private escBackOrConfirm(): void {
 		if (this.activeTab > 0) {
 			this.activeTab--;
-			this.invalidate();
-			this.tui.requestRender();
+			this.rerender();
 			return;
 		}
 		this.pendingCancel = true;
-		this.invalidate();
-		this.tui.requestRender();
+		this.rerender();
 	}
 
 	/** 选中确认后的处理：若 allowComment，进入评论模式（可重入编辑/清除已有评论）；否则前进。 */
@@ -515,8 +458,7 @@ export class AskUserComponent implements Component {
 			state.mode = "comment";
 			state.draftText = state.commentValue ?? "";
 			state.cursorIndex = state.draftText.length;
-			this.invalidate();
-			this.tui.requestRender();
+			this.rerender();
 			return;
 		}
 		this.advance();
@@ -532,8 +474,7 @@ export class AskUserComponent implements Component {
 		} else {
 			this.activeTab = this.questions.length;
 		}
-		this.invalidate();
-		this.tui.requestRender();
+		this.rerender();
 	}
 
 	private submit(): void {
