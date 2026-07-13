@@ -50,9 +50,9 @@ export class SubagentStream {
     this.sink = sink;
   }
 
-  /** 接收一个 text_delta 增量。 */
+  /** 接收一个 text_delta 增量。空串静默丢弃（不消耗 leading edge）。 */
   onDelta(delta: string): void {
-    if (this.disposed) return;
+    if (this.disposed || delta.length === 0) return;
     this.buffer += delta;
     if (!this.hasFlushed) {
       // leading edge：第一个 delta 立即 flush

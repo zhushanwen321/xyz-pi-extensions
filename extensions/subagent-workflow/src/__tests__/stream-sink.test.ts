@@ -12,9 +12,9 @@
  * SubagentStream 内聚 buffer/timer 状态，通过 StreamSink 接口输出。
  * 测试用 mock sink 收集 setWidget 调用，vi.useFakeTimers 控制合并窗口时序。
  */
-import { afterEach,beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import { type StreamSink,SubagentStream } from "../execution/stream-sink.ts";
+import { type StreamSink, SubagentStream } from "../execution/stream-sink.ts";
 
 /** mock sink：收集所有 setWidget 调用，便于断言。 */
 function createMockSink(): StreamSink & { calls: { key: string; lines: string[] | undefined }[] } {
@@ -173,6 +173,31 @@ describe("SubagentStream", () => {
       stream.onDelta("x");
 
       expect(sink.calls[0]?.key).toBe("subagent-stream-bg-abc123");
+    });
+  });
+
+  // ============================================================
+  // U7: 空 delta 静默丢弃（不消耗 leading edge）
+  // ============================================================
+  describe("空 delta", () => {
+    it("空字符串 onDelta 不触发 setWidget", () => {
+      const sink = createMockSink();
+      const stream = new SubagentStream("bg-empty", sink);
+
+      stream.onDelta("");
+
+      expect(sink.calls).toHaveLength(0);
+    });
+
+    it("空 delta 不消耗 leading edge——后续真实 delta 仍立即 flush", () => {
+      const sink = createMockSink();
+      const stream = new SubagentStream("bg-empty", sink);
+
+      stream.onDelta("");   // 空串，不应消耗 leading
+      stream.onDelta("Hi"); // 首个真实 delta，应立即 flush
+
+      expect(sink.calls).toHaveLength(1);
+      expect(sink.calls[0]?.lines).toEqual(["Hi"]);
     });
   });
 });
