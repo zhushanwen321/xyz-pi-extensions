@@ -122,7 +122,7 @@ export class AskUserComponent implements Component {
 		} else {
 			const q = this.questions[this.activeTab]!;
 			const state = this.states[this.activeTab]!;
-			for (const line of renderQuestionView(q, state, t, innerWidth, this.isSingle, state.draftText)) {
+			for (const line of renderQuestionView({ question: q, state, theme: t, width: innerWidth, isSingle: this.isSingle })) {
 				add(line);
 			}
 		}
