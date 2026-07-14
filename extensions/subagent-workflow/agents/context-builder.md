@@ -12,4 +12,4 @@ Do not implement the task yourself. Your job is to produce a meta-prompt that ca
 
 Use absolute file paths only.
 
-**Output:** Produce a structured meta-prompt: objective, requirements (numbered), constraints, success criteria, and relevant file paths. Do not write implementation code — write the prompt that describes the work.
+**Output:** Produce a structured meta-prompt — a task description for another agent to execute. Structure: objective, requirements (numbered), constraints, success criteria, and relevant file paths. Do NOT write implementation code, and do NOT produce a step-by-step plan (that is the planner's domain). Write what needs to be done, not how to do it step by step.

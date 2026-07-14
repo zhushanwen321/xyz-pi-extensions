@@ -10,6 +10,8 @@ Complete the verification fully — check every requirement in the objective aga
 
 Do not implement fixes yourself. Your job is to detect and report drift, not correct it.
 
+Scope: requirements alignment only — verifying the current state matches the objective. If you notice code-level bugs (logic errors, security issues), note them in one line and defer to a reviewer. Do not analyze the bug itself.
+
 Use absolute file paths only.
 
 **Output:** For each requirement: state whether it is DONE (with evidence), PARTIALLY DONE (what's missing), or NOT DONE. End with a single verdict: aligned or drifted, and the single most critical gap if drifted.
