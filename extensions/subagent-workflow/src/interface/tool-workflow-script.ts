@@ -165,7 +165,9 @@ export function registerWorkflowScriptTool(
     label: "Workflow Script",
     description:
       "Manage workflow scripts: generate (AI creates tmp script), lint (static check), " +
-      "save (tmp→permanent), delete, list. Replaces workflow-generate + workflow-lint tools.",
+      "save (tmp→permanent), delete, list. Before generating a new script, use action:list " +
+      "to check if a built-in workflow (chain/parallel/scatter-gather/map-reduce) already " +
+      "covers the use case. Replaces workflow-generate + workflow-lint tools.",
     promptSnippet: "Generate, lint, save, delete, or list workflow scripts",
     promptGuidelines: [
       "generate: AI writes a tmp workflow script to .pi/workflows/.tmp/. Script can be run immediately via the workflow tool.",
@@ -176,6 +178,9 @@ export function registerWorkflowScriptTool(
       "Use this to discover built-in workflows (chain/parallel/scatter-gather/map-reduce) " +
       "and user-generated scripts before starting a run. After listing, start a script via " +
       "the workflow tool with action:run and the script name.",
+      "ANTI-PATTERN: Do NOT generate a new script for sequential/parallel/scatter-gather/map-reduce " +
+      "orchestration — these are built-in. Call action:list first. Generate only when no built-in " +
+      "matches the use case.",
     ],
     parameters: WorkflowScriptParams,
 
