@@ -348,10 +348,24 @@ function dispatchAgentCall(
     })
     .catch((err: unknown) => {
  // withSlot 在 queued + signal-aborted 时 reject AbortError——预期，不记错。
- // executeAgentCall 本身不 reject（runner.run 不 reject）。
       if (err instanceof Error && err.name === "AbortError") return;
       const message = err instanceof Error ? err.message : String(err);
       console.error(`[workflow] agent call ${msg.callId} failed: ${message}`);
+ // 兜底回发：executeAgentCall 抛非 Abort 异常时（如 runner undefined 的 TypeError、
+ // gate.withSlot 内部 bug）原 catch 仅 console.error，worker 内对 callId 的 pending
+ // Promise 永不 resolve → agent() 永久 await → worker 脚本挂死。构造 failed AgentResult
+ //（与 resolveAgentOpts 失败路径 L262-275 一致的模式）postAgentResult 回 worker，
+ // 让 pending Promise resolve（结果为 error），脚本可继续或失败退出。
+ // 注意：run 可能已进入非 running 终态（stale），此时 run.runtime 为 undefined，
+ // postAgentResult 内部用 optional chaining (run.runtime?.worker) 安全跳过。
+      const errorResult: AgentResult = { content: "", error: message };
+      if (call.status !== "done") {
+ // markDone 要求 status==="running"；若 gate.withSlot 在 markRunning 前 reject
+ // （call 仍 pending），先 markRunning。非 running/done 的意外态防御：跳过 markDone。
+        if (call.status === "pending") call.markRunning();
+        call.markDone(errorResult);
+      }
+      postAgentResult(run, msg.callId, errorResult, false);
     });
 }
 
