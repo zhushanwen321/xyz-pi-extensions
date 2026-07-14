@@ -178,7 +178,7 @@ export function registerWorkflowScriptTool(
       "Use this to discover built-in workflows (chain/parallel/scatter-gather/map-reduce) " +
       "and user-generated scripts before starting a run. After listing, start a script via " +
       "the workflow tool with action:run and the script name.",
-      "ANTI-PATTERN: Do NOT generate a new script for sequential/parallel/scatter-gather/map-reduce " +
+      "ANTI-PATTERN: Do NOT generate a new script for chain/parallel/scatter-gather/map-reduce " +
       "orchestration — these are built-in. Call action:list first. Generate only when no built-in " +
       "matches the use case.",
     ],
