@@ -356,16 +356,26 @@ function dispatchAgentCall(
  // Promise 永不 resolve → agent() 永久 await → worker 脚本挂死。构造 failed AgentResult
  //（与 resolveAgentOpts 失败路径 L262-275 一致的模式）postAgentResult 回 worker，
  // 让 pending Promise resolve（结果为 error），脚本可继续或失败退出。
- // 注意：run 可能已进入非 running 终态（stale），此时 run.runtime 为 undefined，
- // postAgentResult 内部用 optional chaining (run.runtime?.worker) 安全跳过。
       const errorResult: AgentResult = { content: "", error: message };
+ // call 已 done（executeAgentCall 内 finalizeCall 已 markDone）时跳过，避免重复 markDone。
+ // status 理论上必为 running（executeAgentCall L130 markRunning 先于 reject），pending
+ // 分支为防御性保护。非 running/done 意外态：跳过 markDone（markDone 要求 running）。
       if (call.status !== "done") {
- // markDone 要求 status==="running"；若 gate.withSlot 在 markRunning 前 reject
- // （call 仍 pending），先 markRunning。非 running/done 的意外态防御：跳过 markDone。
         if (call.status === "pending") call.markRunning();
         call.markDone(errorResult);
       }
+ // state 一致性三件套（与 resolveAgentOpts 失败 L268-276 / .then L319-325 对等）：
+ // trace 标 failed + 清 live record（防泄漏）+ 持久化（catch 恰是最需留证的场景）。
+ // stale 终态（run 已 paused/done）时 run.runtime 为 undefined，postAgentResult 用
+ // optional chaining 跳过 worker 回发；trace/state 写入仍执行（无害，pause 快照已存）。
+      node.live = undefined;
+      run.state.trace.update(msg.callId, {
+        status: "failed",
+        result: errorResult,
+        completedAt: new Date().toISOString(),
+      });
       postAgentResult(run, msg.callId, errorResult, false);
+      void deps.store.save(run);
     });
 }
 
