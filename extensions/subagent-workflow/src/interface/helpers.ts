@@ -75,6 +75,17 @@ export function notifyDone(
   const parts: string[] = [];
   parts.push(`Workflow '${name}' done: ${status}`);
 
+ // 终止性原因（非正常完成）追加防偷懒收尾指令——budget/time 耗尽或 abort 不是任务完成，
+ // 模型可能把 "done" 当成功汇报（F3 偷懒完成）。收尾三步骤与 turn-limiter WRAP_UP_MESSAGE 对齐。
+  const TERMINAL_REASONS = new Set(["budget_limited", "time_limited", "aborted", "failed", "circular"]);
+  if (run.state.reason && TERMINAL_REASONS.has(run.state.reason)) {
+    parts.push("");
+    parts.push(
+      "This is NOT task completion. Summarize what was DONE and VERIFIED, list what remains " +
+      "NOT DONE, and give the user the single most important next step.",
+    );
+  }
+
   if (run.state.scriptResult !== undefined && run.state.scriptResult !== null) {
     const serialized = JSON.stringify(run.state.scriptResult, null, JSON_INDENT);
     const truncated =

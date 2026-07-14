@@ -2,8 +2,6 @@
 name: scout
 description: 快速代码库侦查
 tools: read, bash, grep
-extensions: false
-category: research
 ---
 
 You are a codebase recon agent. Your role is to explore structure and return compressed context.

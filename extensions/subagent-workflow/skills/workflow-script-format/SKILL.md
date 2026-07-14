@@ -112,8 +112,8 @@ const final = await pipeline([
 // 对每个 file 依次跑 review → fix
 await pipeline(
   files,                                      // items
-  (file) => agent({ prompt: `Review ${file}`, description: `review-${file}`, schema: {...} }),
-  (review, file) => agent({ prompt: `Fix ${file}: ${JSON.stringify(review)}`, description: `fix-${file}` }),
+  (file) => agent({ prompt: `Review ${file}`, description: 'review', schema: {...} }),
+  (review, file) => agent({ prompt: `Fix ${file}: ${JSON.stringify(review)}`, description: 'fix' }),
 );
 // stage 函数签名：(prevResult, currentItem) => result；第一个 stage 只收 currentItem
 ```
@@ -224,7 +224,7 @@ while (round < MAX_ROUNDS) {
       },
       required: ['mustFix'],
     },
-    description: `review-${round}`,
+    description: 'review',
   });
 
   // result is already a parsed object thanks to schema
@@ -286,7 +286,7 @@ const review = await agent({
     },
     required: ['findings'],
   },
-  description: `review-${file}`,
+  description: 'review',
 });
 
 const verify = await agent({
@@ -301,7 +301,7 @@ Did the review cover: (1) all functions in the file, (2) at least 3 potential is
     },
     required: ['valid'],
   },
-  description: `verify-review-${file}`,
+  description: 'verify-review',
 });
 
 if (!verify.valid) {

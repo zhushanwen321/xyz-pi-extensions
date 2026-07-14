@@ -313,7 +313,15 @@ async function actionLint(
   }
   const source = await loadScriptSource(name, registry);
   if (!source) {
-    return textResult(`Workflow '${name}' not found or not available.`, true);
+    const all = await registry.loadAll();
+    const available = all.filter((wf) => wf.available);
+    const suggestions = available
+      .map((wf) => `  - ${wf.name}: ${wf.meta.description || "(no description)"}`)
+      .join("\n");
+    return textResult(
+      `Workflow '${name}' not found or not available.\nAvailable:\n${suggestions || "  (none)"}`,
+      true,
+    );
   }
 
   const result = lintScript(source);

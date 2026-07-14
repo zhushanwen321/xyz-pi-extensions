@@ -50,7 +50,10 @@ export function resolveAgentOpts(
  // Resolve agent system prompt
   if (opts.agent) {
     const discovered = agentRegistry.get(opts.agent);  // 新 API: get() 替代 resolve()，返回 AgentConfig（含 systemPrompt+model）
-    if (!discovered) return { opts, error: `Agent not found: ${opts.agent}` };
+    if (!discovered) {
+      const available = agentRegistry.list().join(", ");
+      return { opts, error: `Agent not found: ${opts.agent}. Available: ${available || "(none)"}` };
+    }
 
     const hasSystemPrompt = discovered.systemPrompt.trim().length > 0;
     if (hasSystemPrompt) {

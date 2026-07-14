@@ -212,7 +212,7 @@ export async function cancelHandler(
 
   // step 1: id 不存在（findRecord 只查内存 running record，不从 session.jsonl 重建）
   const rec = service.findRecord(id);
-  if (!rec) throw new Error(`No subagent record with id "${id}"`);
+  if (!rec) throw new Error(`No subagent record with id "${id}". It may have finished — use action:'list' with includeFinished:true to verify.`);
   // step 2: controller 检查（controller 为 undefined 表示 record 已终态或未启动）
   if (rec.mode !== "background") {
     throw new Error(`Cannot cancel subagent ${id} (unsupported mode: ${rec.mode})`);

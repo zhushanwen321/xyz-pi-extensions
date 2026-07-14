@@ -427,7 +427,10 @@ async function actionLifecycle(
   }
   const run = deps.runs.get(runId);
   if (!run) {
-    return textResult(`Workflow '${runId}' not found`, true);
+    return textResult(
+      `Workflow '${runId}' not found. Use action:status to list active runs and their runIds.`,
+      true,
+    );
   }
   try {
     const oldStatus = run.state.status;
@@ -465,7 +468,10 @@ async function actionRetryNode(params: WorkflowToolParams, deps: LauncherDeps): 
   }
   const run = deps.runs.get(runId);
   if (!run) {
-    return textResult(`Workflow '${runId}' not found`, true);
+    return textResult(
+      `Workflow '${runId}' not found. Use action:status to list active runs and their runIds.`,
+      true,
+    );
   }
   try {
     await retryNode(run, callId, deps);
@@ -489,7 +495,10 @@ async function actionSkipNode(params: WorkflowToolParams, deps: LauncherDeps): P
   }
   const run = deps.runs.get(runId);
   if (!run) {
-    return textResult(`Workflow '${runId}' not found`, true);
+    return textResult(
+      `Workflow '${runId}' not found. Use action:status to list active runs and their runIds.`,
+      true,
+    );
   }
   try {
     await skipNode(run, callId, deps);
