@@ -172,7 +172,10 @@ export function registerWorkflowScriptTool(
       "lint: Statically check a script for common API misuse (outputSchema, result.output, file state).",
       "save: Promote a tmp script to permanent (.pi/workflows/).",
       "delete: Remove a script (blocked if a run is active).",
-      "list: Show all available workflow scripts with source tags.",
+      "list: Show all available workflow scripts with source tags. " +
+      "Use this to discover built-in workflows (chain/parallel/scatter-gather/map-reduce) " +
+      "and user-generated scripts before starting a run. After listing, start a script via " +
+      "the workflow tool with action:run and the script name.",
     ],
     parameters: WorkflowScriptParams,
 

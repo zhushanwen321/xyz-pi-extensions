@@ -227,6 +227,15 @@ export function registerWorkflowTool(
     promptSnippet: "Run, pause, resume, abort, or check workflow status",
     promptGuidelines: [
       "PRIORITY: When user says 'workflow', 'run workflow', try run action FIRST.",
+      "BUILT-IN workflows (ready to use, no script generation needed): " +
+      "chain (analyze→transform→synthesize sequential; args: task), " +
+      "parallel (multi-perspective analysis; args: target, optional perspectives), " +
+      "scatter-gather (split→parallel process→merge; args: task), " +
+      "map-reduce (parallel map→reduce; args: items/itemsJson + operation). " +
+      "Example: workflow run chain --args task=\"<description>\".",
+      "DISCOVERY: If unsure what workflows exist, call the workflow-script tool with " +
+      "action:list first — it returns all available scripts (built-in + user-generated) " +
+      "with source tags and descriptions. Then use this tool's run action to start one.",
       "run: discover by name/description, then start in background (no user confirmation needed).",
       "Do NOT poll status after starting — results appear automatically via notifyDone.",
       "retry-node/skip-node: for specific failed agent calls (requires runId + callId). " +
