@@ -54,8 +54,8 @@ try {
   currentPhase = "transform";
   const plan = await agent({
     prompt:
-      "基于以下分析结果，产出可执行方案：\n\n洞察：" + analysis.insights +
-      "\n关键点：" + JSON.stringify(analysis.keyPoints),
+      "基于以下分析结果，产出可执行方案：\n\n洞察：" + (analysis?.insights ?? "(分析无结果)") +
+      "\n关键点：" + JSON.stringify(analysis?.keyPoints ?? []),
     schema: {
       type: "object",
       properties: {
@@ -76,8 +76,8 @@ try {
   currentPhase = "synthesize";
   const final = await agent({
     prompt:
-      "综合以下方案，输出最终结论和建议：\n\n方案：" + plan.plan +
-      "\n行动步骤：" + JSON.stringify(plan.actions),
+      "综合以下方案，输出最终结论和建议：\n\n方案：" + (plan?.plan ?? "(方案无结果)") +
+      "\n行动步骤：" + JSON.stringify(plan?.actions ?? []),
     schema: {
       type: "object",
       properties: {
@@ -92,7 +92,7 @@ try {
   outcome = {
     status: "ok",
     phases_run: ["analyze", "transform", "synthesize"],
-    final: { summary: final.summary, recommendation: final.recommendation },
+    final: { summary: (final?.summary ?? "(综合无结果)"), recommendation: (final?.recommendation ?? "(综合无结果)") },
     message: "chain 完成：analyze → transform → synthesize 全绿",
   };
 } catch (err) {

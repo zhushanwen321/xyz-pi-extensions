@@ -113,9 +113,9 @@ try {
     perspectives_analyzed: perspectives.length,
     per_perspective: perPerspective,
     aggregate: {
-      overallScore: aggregate.overallScore,
-      topIssues: aggregate.topIssues,
-      consensus: aggregate.consensus,
+      overallScore: (aggregate?.overallScore ?? "(聚合无结果)"),
+      topIssues: (aggregate?.topIssues ?? []),
+      consensus: (aggregate?.consensus ?? "(聚合无结果)"),
     },
     message: "parallel 完成：" + perspectives.length + " 视角（失败 " + failedCount + "）→ 聚合",
   };

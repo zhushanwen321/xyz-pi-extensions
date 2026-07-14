@@ -58,7 +58,7 @@ try {
     description: "scatter-split",
   });
 
-  const subtasks = Array.isArray(split.subtasks) ? split.subtasks : [];
+  const subtasks = Array.isArray(split?.subtasks) ? split.subtasks : [];
   if (subtasks.length === 0) {
     throw new Error("scatter 返回的 subtasks 为空");
   }
@@ -129,8 +129,8 @@ try {
     subtasks_total: subtasks.length,
     subtasks_processed: subtasks.length - failedCount,
     gathered: {
-      mergedResult: gathered.mergedResult,
-      completeness: gathered.completeness,
+      mergedResult: (gathered?.mergedResult ?? "(合并无结果)"),
+      completeness: (gathered?.completeness ?? "(合并无结果)"),
     },
     message: "scatter-gather 完成：split " + subtasks.length + " → process（失败 " + failedCount + "）→ merge",
   };

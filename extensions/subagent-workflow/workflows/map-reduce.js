@@ -127,7 +127,7 @@ try {
     phases_run: ["map", "reduce"],
     items_total: items.length,
     items_mapped: items.length - mapFailed,
-    reduced: { reduced: reduced.reduced, stats: reduced.stats },
+    reduced: { reduced: (reduced?.reduced ?? "(归约无结果)"), stats: (reduced?.stats ?? "(归约无结果)") },
     message: "map-reduce 完成：map " + items.length + " 项（失败 " + mapFailed + "）→ reduce",
   };
 } catch (err) {
