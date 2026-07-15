@@ -26,6 +26,7 @@ import { type Static, Type } from "typebox";
 
 import type { LauncherDeps } from "../orchestration/launcher.ts";
 import { abortRun, pauseRun, resumeRun, runWorkflow } from "../orchestration/lifecycle.ts";
+import type { RunStore } from "../orchestration/models/ports.ts";
 import type { WorkflowRun } from "../orchestration/models/workflow-run.ts";
 import { retryNode, skipNode } from "../orchestration/node-ops.ts";
 import {
@@ -116,6 +117,8 @@ interface RunSummary {
   startedAt?: string;
   completedAt?: string;
   error?: string;
+  /** Run 状态快照文件绝对路径（<sessionDir>/workflow-state/<runId>.jsonl）。 */
+  stateFile?: string;
 }
 
 // ── Tool result types ──
@@ -128,7 +131,7 @@ interface RunSummary {
  * without unsafe casts.
  */
 export type WorkflowToolDetails =
-  | { action: "run"; runId: string; status: "running" | "not_found"; name: string; slug?: string; __gui__?: GuiRenderResult }
+  | { action: "run"; runId: string; status: "running" | "not_found"; name: string; slug?: string; stateFile?: string; __gui__?: GuiRenderResult }
   | { action: "status"; runs: RunSummary[]; __gui__?: GuiRenderResult }
   | { action: "pause" | "resume" | "abort"; runId: string; status: string; reason?: string; __gui__?: GuiRenderResult }
   | { action: "retry-node" | "skip-node"; runId: string; callId: number; __gui__?: GuiRenderResult };
@@ -388,7 +391,7 @@ async function actionRun(
           : `Started workflow '${script.name}' (${runId}). Running in background — do NOT poll status.`,
       },
     ],
-    details: { action: "run", runId, status: "running", name: script.name, slug: params.slug },
+    details: { action: "run", runId, status: "running", name: script.name, slug: params.slug, stateFile: deps.store.stateFilePath(runId) },
   };
 }
 
@@ -402,7 +405,7 @@ function actionStatus(deps: LauncherDeps): ToolResult {
       details: { action: "status", runs: [] },
     };
   }
-  const summaries = runs.map(toRunSummary);
+  const summaries = runs.map((r) => toRunSummary(r, deps.store));
   const lines = summaries.map((s) => {
     const duration = s.startedAt ? ` (${formatElapsed(s.startedAt)})` : "";
     const reasonSuffix = s.reason && s.reason !== "completed" ? ` [${s.reason}]` : "";
@@ -517,7 +520,7 @@ async function actionSkipNode(params: WorkflowToolParams, deps: LauncherDeps): P
 // ── helpers ──────────────────────────────────────────────────
 
 /** WorkflowRun → 摘要（status action 用）。 */
-function toRunSummary(run: WorkflowRun): RunSummary {
+function toRunSummary(run: WorkflowRun, store: RunStore): RunSummary {
   return {
     runId: run.runId,
     name: run.spec.scriptName,
@@ -527,6 +530,7 @@ function toRunSummary(run: WorkflowRun): RunSummary {
     startedAt: run.meta.startedAt,
     completedAt: run.meta.completedAt,
     error: run.state.error,
+    stateFile: store.stateFilePath(run.runId),
   };
 }
 

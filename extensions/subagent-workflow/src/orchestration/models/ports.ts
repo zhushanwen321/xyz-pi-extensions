@@ -43,10 +43,13 @@ export interface AgentRunner {
  *
  * save 在每次状态变更后持久化整个 WorkflowRun（聚合根）；
  * loadAll 在 session_start 时重水合（D-5：JSONL 不向后兼容旧 session，旧格式返回空）。
+ * stateFilePath 返回 run 状态文件的绝对路径（供 overlay/GUI 暴露给用户）。
  */
 export interface RunStore {
   save(run: WorkflowRun): Promise<void>;
   loadAll(): Promise<WorkflowRun[]>;
+  /** 返回 run 状态快照文件的绝对路径：<sessionDir>/workflow-state/<runId>.jsonl */
+  stateFilePath(runId: string): string;
 }
 
 // ── Port 3: WorkerHost ────────────────────────────────────────
