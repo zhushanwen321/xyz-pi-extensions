@@ -10,7 +10,7 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { AgentCall } from "../models/agent-call.ts";
 import { Budget } from "../models/budget.ts";
@@ -123,6 +123,37 @@ describe("W1: JsonlRunStore sessionFile 序列化 round-trip", () => {
     expect(traceNode.sessionFile).toBe(
       "/abs/.pi/agent/subagents/enc/sessions/2026-07-15T_session-abc.jsonl",
     );
+  });
+
+  it("save → loadAll 完整 round-trip: 反序列化后 AgentCall.sessionFile 可读", async () => {
+    // 闭环测试：serialize（save）→ deserialize（loadAll）→ 验证 run.state.calls 的 AgentCall.sessionFile
+    const sessionFilePath = "/abs/.pi/agent/subagents/enc/sessions/2026-07-15T_session-abc.jsonl";
+
+    // mock pi + ctx：save 写 pointer entry，loadAll 读同一组 entries
+    const entries: Array<{ type: string; customType?: string; data?: unknown }> = [];
+    const mockPi = {
+      appendEntry: vi.fn((type: string, data: unknown) => {
+        entries.push({ type: "custom", customType: type, data });
+      }),
+    };
+    const mockCtx = {
+      sessionManager: { getEntries: () => entries },
+    };
+
+    const storeWithCtx = new JsonlRunStore({
+      sessionDir: tmpDir,
+      pi: mockPi as never,
+      ctx: mockCtx as never,
+    });
+
+    const run = makeRunWithDoneCall();
+    await storeWithCtx.save(run);
+
+    const loaded = await storeWithCtx.loadAll();
+    expect(loaded).toHaveLength(1);
+    const restoredCall = loaded[0]!.state.calls.get(0);
+    expect(restoredCall).toBeDefined();
+    expect(restoredCall!.sessionFile).toBe(sessionFilePath);
   });
 });
 
