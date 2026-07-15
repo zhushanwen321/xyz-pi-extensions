@@ -85,11 +85,26 @@ describe("mapToExecuteOptions (D-A2)", () => {
     expect(result.skillPath).toBe("/path/to/skill.md");
   });
 
-  it("忽略 systemPromptFiles（不映射到 ExecuteOptions）", () => {
-    const opts: AgentCallOpts = { ...baseOpts, systemPromptFiles: ["/tmp/a.txt"] };
+  it("thinkingLevel 透传 (M1)", () => {
+    const opts: AgentCallOpts = { ...baseOpts, thinkingLevel: "high" };
     const result = mapToExecuteOptions(opts);
-    // systemPromptFiles 不应在 ExecuteOptions 中出现
-    expect((result as Record<string, unknown>).appendSystemPrompt).toBeUndefined();
+    expect(result.thinkingLevel).toBe("high");
+  });
+
+  it("thinkingLevel 不传 → thinkingLevel undefined", () => {
+    const result = mapToExecuteOptions(baseOpts);
+    expect(result.thinkingLevel).toBeUndefined();
+  });
+
+  it("systemPromptFiles → appendSystemPrompt 映射 (M2)", () => {
+    const opts: AgentCallOpts = { ...baseOpts, systemPromptFiles: ["/tmp/a.md"] };
+    const result = mapToExecuteOptions(opts);
+    expect(result.appendSystemPrompt).toEqual(["/tmp/a.md"]);
+  });
+
+  it("systemPromptFiles 不传 → appendSystemPrompt undefined", () => {
+    const result = mapToExecuteOptions(baseOpts);
+    expect(result.appendSystemPrompt).toBeUndefined();
   });
 });
 

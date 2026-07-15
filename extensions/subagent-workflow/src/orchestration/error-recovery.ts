@@ -101,7 +101,10 @@ function backoffDelay(retryIndex: number): number {
 }
 
 function delay(ms: number): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, ms));
+  return new Promise((resolve) => {
+    const timer = setTimeout(resolve, ms);
+    timer.unref();
+  });
 }
 
 // ── rebuildRuntime（G3-001 整重建） ─────────────────────────
@@ -206,6 +209,16 @@ function dispatchAgentCall(
   msg: AgentCallMsg,
   deps: LifecycleDeps,
 ): void {
+  // M4: IPC 字段校验——畸形 agent-call 消息（opts 非对象/缺失、callId 非数字、prompt 缺失）
+  // 不写 trace / 不 postAgentResult——这类消息通常意味着 worker 模块版本不匹配或内存损坏，
+  // 回发结果给 worker 也没意义（worker 可能已崩）。仅记日志，让 worker timeout/exit 路径接管。
+  if (typeof msg.callId !== "number" || !Number.isFinite(msg.callId) ||
+      typeof msg.opts !== "object" || msg.opts === null ||
+      typeof msg.opts.prompt !== "string") {
+    console.error(`[workflow] malformed agent-call message: callId=${JSON.stringify(msg.callId)}, opts=${JSON.stringify(msg.opts)?.slice(0, 200)}`);
+    return;
+  }
+
  // 已缓存的调用直接 replay（跨 pause/resume）
   const cached = run.state.calls.get(msg.callId);
   if (cached && cached.status === "done") {
@@ -414,6 +427,14 @@ function dispatchWorkflowCall(
   msg: WorkflowCallMsg,
   deps: LifecycleDeps,
 ): void {
+  // M4: IPC 字段校验——畸形 workflow-call 消息
+  if (typeof msg.callId !== "number" || !Number.isFinite(msg.callId) ||
+      typeof msg.name !== "string" ||
+      typeof msg.args !== "object" || msg.args === null) {
+    console.error(`[workflow] malformed workflow-call message: callId=${JSON.stringify(msg.callId)}, name=${JSON.stringify(msg.name)}`);
+    return;
+  }
+
   const postResult = (result: unknown): void => {
     if (run.state.status !== "running") return;
     run.runtime?.worker.postMessage({

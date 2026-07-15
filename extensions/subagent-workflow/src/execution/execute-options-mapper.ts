@@ -31,9 +31,10 @@ export const SLUG_MAX_LENGTH = 20;
  *   model           → model（显式 override 透传，ctxModel 不再压扁为 id 填底）
  *   ctxModel        → ctxModel（完整 ModelInfo 对象透传，让 resolveModel 走第 3 层透明传递）
  *   skillPath       → skillPath
+ *   thinkingLevel   → thinkingLevel（M1: 否则下游 subagent-service 读到 undefined）
+ *   systemPromptFiles → appendSystemPrompt（M2: resolveAgentOpts 写盘的临时文件需被 session-runner 消费）
  *
  * 忽略字段（委托后由 executeAndAwait 内部机制替代）：
- *   systemPromptFiles —— resolveIdentity 从 agentConfig.systemPrompt 读
  *   timeoutMs         —— mergeTimeoutSignal 单独处理
  *   scene             —— subagents 不消费
  *
@@ -55,6 +56,8 @@ export function mapToExecuteOptions(
     model: opts.model,
     ctxModel,
     skillPath: opts.skillPath,
+    thinkingLevel: opts.thinkingLevel,
+    appendSystemPrompt: opts.systemPromptFiles,
   };
 }
 

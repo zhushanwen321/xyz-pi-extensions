@@ -98,7 +98,10 @@ function finalizeCall(call: AgentCall, result: AgentResult, trace: Trace): void 
  * 延迟工具（testable —— 测试可通过 fake timers 推进）。
  */
 function delay(ms: number): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, ms));
+  return new Promise((resolve) => {
+    const timer = setTimeout(resolve, ms);
+    timer.unref();
+  });
 }
 
 // ── executeAgentCall ─────────────────────────────────────────
