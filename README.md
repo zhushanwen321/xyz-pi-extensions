@@ -16,7 +16,6 @@
 | **statusline** | 自定义状态栏（上下文用量、Token 速度、套餐额度） | [→ README](./extensions/statusline/README.md) |
 | **evolve-daily** | 每日进化数据采集 + `/evolve` 分析建议 | [→ README](./extensions/evolve-daily/README.md) |
 | **unified-hooks** | 统一 hooks 管理器（edit 空白自动修复等） | [→ README](./extensions/unified-hooks/README.md) |
-| **claude-rules-loader** | 加载 `.claude/rules/` 到 Pi system prompt | [→ README](./extensions/claude-rules-loader/README.md) |
 | **taste-lint** | 代码品味 ESLint 规则集（5 条自定义规则） | [→ README](./shared/taste-lint/README.md) |
 | **types** | 共享类型定义（私有，不发布） | [→ README](./shared/types/README.md) |
 

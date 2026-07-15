@@ -25,12 +25,11 @@ xyz-pi-extensions 是 Pi coding agent 的扩展工具箱 monorepo。本文档是
 
 | 子系统 | 扩展 | 职责 |
 |--------|------|------|
-| Subagent 执行 | `subagents` | 进程隔离的子 agent 执行（sync / background / poll），agent 发现 + 并发控制 |
+| Subagent + Workflow | `subagent-workflow` | 统一 subagent 执行（进程隔离 spawn）+ workflow 编排（chain/parallel/scatter-gather/map-reduce），ADR-030 |
 | 目标驱动循环 | `goal` | 持久化目标 + 7 态状态机 + 预算管理 |
 | 任务清单 | `todo` | 轻量三态待办 |
-| 编码工作流 | `coding-workflow` | 5-Phase 编码工作流（spec → plan → dev → test → pr），含 ~20 个 harness skills |
+| 编码工作流 | `coding-workflow` | L1/L2/L3 三档编码工作流，含 ~20 个 harness skills + 机器强制测试门 |
 | 上下文压缩 | `context-engineering` | 渐进式压缩（L0 / L1 / L2 / Microcompact / Budget） |
-| DAG 引擎 | `workflow` | 通用多 agent 编排 |
-| 其他 | `vision` / `evolve-daily` / `statusline` / `structured-output` / `model-switch` / `turn-timing` / `plan` / `ask-user` / `unified-hooks` / `claude-rules-loader` | 各自独立功能 |
+| 其他 | `vision` / `evolve-daily` / `statusline` / `structured-output` / `model-switch` / `plan` / `ask-user` / `unified-hooks` / `pending-notifications` | 各自独立功能 |
 
 子系统间通过 extension 依赖声明协作（见根目录 `extension-dependencies.json`）。关键架构决策记录在 [adr/](./adr/)，决策前的方案探索在 [evolution/](./evolution/)。

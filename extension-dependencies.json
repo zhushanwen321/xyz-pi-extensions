@@ -77,11 +77,6 @@
       ]
     },
     {
-      "name": "@zhushanwen/pi-claude-rules-loader",
-      "directory": "extensions/claude-rules-loader",
-      "dependsOn": []
-    },
-    {
       "name": "@zhushanwen/pi-context-engineering",
       "directory": "extensions/context-engineering",
       "dependsOn": []
@@ -94,11 +89,6 @@
     {
       "name": "@zhushanwen/pi-unified-hooks",
       "directory": "extensions/unified-hooks",
-      "dependsOn": []
-    },
-    {
-      "name": "@zhushanwen/pi-turn-timing",
-      "directory": "extensions/turn-timing",
       "dependsOn": []
     },
     {
