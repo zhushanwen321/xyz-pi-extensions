@@ -84,6 +84,12 @@ export interface AgentCallOpts {
  * When omitted, pi's default model is used.
  */
   model?: string;
+ /**
+ * Thinking level override (e.g. "high", "medium", "low").
+ * M2: Added to align with subagent path's ExecuteOptions.thinkingLevel.
+ * When omitted, agent .md frontmatter thinkingLevel is used (via resolveAgentOpts).
+ */
+  thinkingLevel?: string;
  /** Scene name for model-switch advisor recommendation. */
   scene?: string;
  /**
