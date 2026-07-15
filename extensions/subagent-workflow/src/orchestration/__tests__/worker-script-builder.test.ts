@@ -40,3 +40,18 @@ describe("buildWorkerScript — workflow() global injection", () => {
     );
   });
 });
+
+// ── H3: agent() task/agent 分支 skill 字段传递 ──
+
+describe("buildWorkerScript — agent() skill field in task/agent branch", () => {
+  const script = buildWorkerScript("// noop user script");
+
+  it("task/agent branch includes skill in opts whitelist", () => {
+    // H3: agent({task, agent, skill}) 的 skill 在 task/agent 分支被丢弃。
+    // 验证生成的 worker 源码中，task/agent 分支的 opts 构造含 skill 字段。
+    // 找到 task/agent 分支的 opts 构造代码（含 firstArg.task || firstArg.agent）
+    const taskAgentBranch = script.match(/firstArg\.task \|\| firstArg\.agent[\s\S]*?\};/);
+    expect(taskAgentBranch).toBeTruthy();
+    expect(taskAgentBranch![0]).toContain("skill: firstArg.skill");
+  });
+});
