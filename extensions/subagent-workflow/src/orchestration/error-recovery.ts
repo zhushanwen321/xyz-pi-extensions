@@ -160,6 +160,8 @@ export async function handleWorkerMessage(
  // 终态/paused 状态丢弃 stale 消息（P0-1）
   if (isTerminal(run) || run.state.status === "paused") return;
 
+ // M7: 形状校验——防畸形 IPC 消息（worker 崩溃/发非对象）导致下游 TypeError
+  if (typeof raw !== "object" || raw === null) return;
   const msg = raw as WorkerMsg;
   switch (msg.type) {
     case "agent-call":
@@ -313,11 +315,12 @@ function dispatchAgentCall(
       signal,
     )
     .then(() => {
+ // 清除 live record：终态已由 executeAgentCall → finalizeCall 写入 node.result，
+ // live 不再需要（且含可变状态，不保留）。无论 stale 与否都清，避免内存泄漏。
+ // M4: 必须在 stale guard 之前清，否则 pause/resume 循环下 live record 累积。
+      node.live = undefined;
  // pause/abort 后到达的 stale completion 不写 state（pause 是干净快照）
       if (run.state.status !== "running") return;
-      // 清除 live record：终态已由 executeAgentCall → finalizeCall 写入 node.result，
-      // live 不再需要（且含可变状态，不保留）。无论 stale 与否都清，避免内存泄漏。
-      node.live = undefined;
       if (call.result) postAgentResult(run, msg.callId, call.result, false);
  // D-12 regression fix (round-2 #1)：executeAgentCall 内 consume/incrementCallCount
  // 后同步 worker $BUDGET（否则 $BUDGET.spent()/remaining() 恒为 0）

@@ -360,6 +360,7 @@ export function reconstructFromFile(sessionFile: string): ReconstructedRecord | 
       const turn = emptyTurn();
       turns.push(turn);
 
+      if (!Array.isArray(msg.content)) continue;
       for (const block of msg.content) {
         if (block.type === "text") {
           turn.text += block.text;
