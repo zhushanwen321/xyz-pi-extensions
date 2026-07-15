@@ -49,10 +49,15 @@ describe("mapToWorkflowAgentResult (D-A10)", () => {
     expect(result.content).toBe("Hello"); // content 仍保留（可能有部分输出）
   });
 
-  it("映射失败: success=false 但无 error → error=undefined", () => {
+  it("映射失败: success=false 但无 error（abort 路径）→ error 填入 fallback 而非 undefined", () => {
+    // H4: session-runner.ts abort 时 success=false, error=undefined。
+    // 旧代码 error=undefined → executeAgentCall 误判 completed。
+    // 修复后应 synthesize fallback error。
     const r: SubagentsAgentResult = { ...minimalResult, success: false };
     const result = mapToWorkflowAgentResult(r);
-    expect(result.error).toBeUndefined();
+    expect(result.error).toBeDefined();
+    expect(typeof result.error).toBe("string");
+    expect(result.error.length).toBeGreaterThan(0);
   });
 
   it("映射成功: success=true 且 error 存在 → error=undefined（不误填）", () => {

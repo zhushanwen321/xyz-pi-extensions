@@ -17,6 +17,8 @@ import type { AgentResult as SubagentsAgentResult, AgentUsageTotal, ToolCall } f
  *   text                              → content
  *   parsedOutput                      → parsedOutput（structured-output 契约，BC-8）
  *   !success && error                 → error（失败时填，成功时 undefined）
+ *   !success && !error                → error fallback（abort 路径：session-runner 设 success=false,error=undefined，
+ *                                      若直接透传 undefined 则 executeAgentCall 的 `error===undefined` 误判 completed。H4 修复：synthesize fallback）
  *   durationMs                        → durationMs
  *   sessionId                         → sessionId
  *   usage (AgentUsageTotal)           → usage (AgentUsage: input/output/cacheRead/cacheWrite/cost/contextTokens/turns)
@@ -31,7 +33,7 @@ export function mapToWorkflowAgentResult(
   return {
     content: r.text,
     parsedOutput: r.parsedOutput,
-    error: r.success ? undefined : r.error,
+    error: r.success ? undefined : (r.error || "Agent call failed (aborted or unknown error)"),
     durationMs: r.durationMs,
     sessionId: r.sessionId,
     usage: r.usage ? mapUsage(r.usage, r.turns) : undefined,
