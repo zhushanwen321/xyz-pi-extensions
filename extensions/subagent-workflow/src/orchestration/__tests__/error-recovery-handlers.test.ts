@@ -39,6 +39,8 @@ function makeRunningRun(opts: {
     state: {
       status: "running",
       budget: { usedTokens: 50, usedCost: 0.1 },
+      // L9: errorLogs 现在用 push 追加——必须是真实数组，不能省略
+      errorLogs: [],
     },
     meta: {
       startedAt: new Date().toISOString(),

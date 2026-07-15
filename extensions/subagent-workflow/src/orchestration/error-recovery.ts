@@ -42,12 +42,22 @@ import type { WorkerHandle } from "./worker-handle.ts";
 
 // ── 常量 ─────────────────────────────────────────────────────
 
-/** Worker/script 错误最大重试次数（domain-models.md §失败处理矩阵）。 */
+/**
+ * 单类错误最大重试次数（domain-models.md §失败处理矩阵）。
+ *
+ * 注意：workerErrorCount 和 scriptErrorCount 是两个独立计数器，各自上限 MAX_WORKER_RETRIES。
+ * 最坏情况（先连续 worker error 3 次 + 再连续 script error 3 次）= 6 次 rebuild。
+ * 这是有意设计——两类错误的根因不同（worker 崩溃 vs 脚本逻辑），合并计数会导致
+ * 不同根因的失败被过早判 failed。scheduleRebuild 的 retryIndex 取 max(两计数)。
+ */
 const MAX_WORKER_RETRIES = 3;
 
 /** 指数退避基数（ms）。 */
 const RETRY_BACKOFF_BASE_MS = 1000;
 const EXPONENTIAL_BACKOFF_BASE = 2;
+
+/** errorLogs 最大保留条数（防止超长 session 中日志无界增长）。 */
+const MAX_ERROR_LOGS = 500;
 
 // ── Worker 消息类型（与 infra/worker-script-builder.ts WorkerInMsg 对齐） ──
 
@@ -503,8 +513,12 @@ async function handleReturn(
 ): Promise<void> {
   deps.log?.("debug", "workflow:error-recovery", "handleReturn", { runId: run.runId, status: run.state.status });
  // 捕获 worker 诊断日志（P2-2）
+  // L9: 追加而非覆盖——保留重试历史的诊断日志（各 worker 实例的 console 输出）
   if (msg.workerLogs && msg.workerLogs.length > 0) {
-    run.state.errorLogs = msg.workerLogs;
+    run.state.errorLogs.push(...msg.workerLogs);
+    if (run.state.errorLogs.length > MAX_ERROR_LOGS) {
+      run.state.errorLogs = run.state.errorLogs.slice(-MAX_ERROR_LOGS);
+    }
   }
   run.state.scriptResult = msg.result;
   run.transition("done", "completed");
@@ -614,8 +628,12 @@ export async function handleScriptError(
   if (isTerminal(run) || run.state.status === "paused") return;
 
  // P2-2: 捕获 worker 诊断日志
+  // L9: 追加而非覆盖
   if (workerLogs.length > 0) {
-    run.state.errorLogs = workerLogs;
+    run.state.errorLogs.push(...workerLogs);
+    if (run.state.errorLogs.length > MAX_ERROR_LOGS) {
+      run.state.errorLogs = run.state.errorLogs.slice(-MAX_ERROR_LOGS);
+    }
   }
 
   const count = (run.meta.scriptErrorCount ?? 0) + 1;
