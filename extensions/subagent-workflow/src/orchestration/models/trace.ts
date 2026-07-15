@@ -61,6 +61,7 @@ export class Trace {
     if (patch.error !== undefined) node.error = patch.error;
     if (patch.completedAt !== undefined) node.completedAt = patch.completedAt;
     if (patch.sessionId !== undefined) node.sessionId = patch.sessionId;
+    if (patch.sessionFile !== undefined) node.sessionFile = patch.sessionFile;
   }
 
  /** 查找指定 stepIndex 的节点（首个匹配，trace 中 stepIndex 应唯一）。 */

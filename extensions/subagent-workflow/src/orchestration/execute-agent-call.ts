@@ -82,11 +82,15 @@ function backoffDelay(retryIndex: number): number {
 function finalizeCall(call: AgentCall, result: AgentResult, trace: Trace): void {
   call.markDone(result);
   const status = result.error === undefined ? "completed" : "failed";
+  // 同步 AgentCall 的 sessionId/sessionFile（对齐 trace 节点，持久化 + reset 用）
+  if (result.sessionId !== undefined) call.setSessionId(result.sessionId);
+  if (result.sessionFile !== undefined) call.setSessionFile(result.sessionFile);
   trace.update(call.id, {
     status,
     result,
     completedAt: new Date().toISOString(),
     sessionId: result.sessionId,
+    sessionFile: result.sessionFile,
   });
 }
 

@@ -96,6 +96,7 @@ export async function retryNode(
   call.attempts = 0;
   call.result = undefined;
   call.sessionId = undefined;
+  call.sessionFile = undefined;
 
  // 同步 trace 节点：回退到 pending
   run.state.trace.update(callId, {
@@ -104,6 +105,7 @@ export async function retryNode(
     error: undefined,
     completedAt: undefined,
     sessionId: undefined,
+    sessionFile: undefined,
   });
 
  // 主线程重跑（不重启 worker）——executeAgentCall 内部 markRunning + runner.run

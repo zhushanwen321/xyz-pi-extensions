@@ -36,6 +36,7 @@ export function mapToWorkflowAgentResult(
     error: r.success ? undefined : (r.error || "Agent call failed (aborted or unknown error)"),
     durationMs: r.durationMs,
     sessionId: r.sessionId,
+    sessionFile: r.sessionFile,
     usage: r.usage ? mapUsage(r.usage, r.turns) : undefined,
     toolCalls: r.toolCalls ? mapToolCalls(r.toolCalls) : undefined,
   };

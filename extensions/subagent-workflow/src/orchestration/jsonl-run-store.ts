@@ -75,6 +75,7 @@ interface RunSnapshot {
       attempts: number;
       result?: AgentResult;
       sessionId?: string;
+      sessionFile?: string;
       traceNode: ExecutionTraceNode;
     }>;
     trace: ExecutionTraceNode[];
@@ -119,6 +120,7 @@ function serializeRun(run: WorkflowRun): RunSnapshot {
           attempts: c.attempts,
           result: c.result,
           sessionId: c.sessionId,
+          sessionFile: c.sessionFile,
           traceNode: traceNodeRest,
         };
       }),
@@ -161,6 +163,9 @@ function deserializeRun(snapshot: RunSnapshot): WorkflowRun | null {
     }
     if (c.sessionId !== undefined) {
       call.setSessionId(c.sessionId);
+    }
+    if (c.sessionFile !== undefined) {
+      call.setSessionFile(c.sessionFile);
     }
     calls.set(c.id, call);
   }
@@ -222,6 +227,11 @@ export class JsonlRunStore {
  /** State file path for a given runId. */
   private filePathFor(runId: string): string {
     return path.join(this.stateDir, `${runId}.jsonl`);
+  }
+
+ /** Public accessor: run 状态快照文件绝对路径（RunStore port 实现）。 */
+  stateFilePath(runId: string): string {
+    return this.filePathFor(runId);
   }
 
  /**

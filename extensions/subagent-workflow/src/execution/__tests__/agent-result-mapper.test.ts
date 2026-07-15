@@ -33,6 +33,23 @@ describe("mapToWorkflowAgentResult (D-A10)", () => {
     expect(result.toolCalls).toEqual([]);
   });
 
+  // ── sessionFile 透传（方案 A：让 workflow 继承 subagent 的 session jsonl 路径）──
+
+  it("映射 sessionFile: subagents AgentResult.sessionFile → workflow AgentResult.sessionFile 透传", () => {
+    const r: SubagentsAgentResult = {
+      ...minimalResult,
+      sessionFile: "/abs/path/.pi/agent/subagents/enc/sessions/2026-07-15T10-00-00-000Z_session-123.jsonl",
+    };
+    const result = mapToWorkflowAgentResult(r);
+    expect(result.sessionFile).toBe("/abs/path/.pi/agent/subagents/enc/sessions/2026-07-15T10-00-00-000Z_session-123.jsonl");
+  });
+
+  it("映射 sessionFile: 无 sessionFile → workflow AgentResult.sessionFile undefined（窗口期/未回填）", () => {
+    const r: SubagentsAgentResult = { ...minimalResult, sessionFile: undefined };
+    const result = mapToWorkflowAgentResult(r);
+    expect(result.sessionFile).toBeUndefined();
+  });
+
   it("映射 parsedOutput 透传（structured-output 契约 BC-8）", () => {
     const parsedData = { score: 0.95, label: "positive" };
     const r: SubagentsAgentResult = { ...minimalResult, parsedOutput: parsedData };

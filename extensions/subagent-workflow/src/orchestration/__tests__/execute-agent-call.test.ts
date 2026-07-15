@@ -98,6 +98,42 @@ describe("U2: executeAgentCall 透传 stream", () => {
   });
 });
 
+// ── U1: finalizeCall 透传 sessionFile 到 trace 节点（方案 A）──
+
+describe("U1: finalizeCall sessionFile → trace 节点", () => {
+  it("runner.run 返回带 sessionFile 的 result → trace 节点携带 sessionFile", async () => {
+    const sessionFilePath = "/abs/.pi/agent/subagents/enc/sessions/2026-07-15T_session-abc.jsonl";
+    const runner = createMockRunner(
+      vi.fn().mockResolvedValue(
+        makeMockResult({ sessionId: "session-abc", sessionFile: sessionFilePath }),
+      ),
+    );
+    const { call, trace } = makeAgentCallAndTrace();
+    const budget = new Budget();
+
+    await executeAgentCall(call, runner, budget, new AbortController().signal, trace);
+
+    const node = trace.find(0);
+    expect(node).toBeDefined();
+    expect(node!.sessionFile).toBe(sessionFilePath);
+    expect(node!.sessionId).toBe("session-abc");
+  });
+
+  it("runner.run 返回无 sessionFile 的 result → trace 节点 sessionFile undefined", async () => {
+    const runner = createMockRunner(
+      vi.fn().mockResolvedValue(makeMockResult({ sessionId: "session-xyz" })),
+    );
+    const { call, trace } = makeAgentCallAndTrace();
+    const budget = new Budget();
+
+    await executeAgentCall(call, runner, budget, new AbortController().signal, trace);
+
+    const node = trace.find(0);
+    expect(node).toBeDefined();
+    expect(node!.sessionFile).toBeUndefined();
+  });
+});
+
 // ── U3: retry 递归也透传 stream ──
 
 describe("U3: executeAgentCall retry 透传 stream", () => {
