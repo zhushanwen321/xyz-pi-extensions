@@ -176,7 +176,9 @@ describe("SubprocessAgentRunner (wave-4 delegate)", () => {
       const opts = { ...makeBaseOpts(), model: undefined };
       await sar.run(opts, new AbortController().signal);
 
-      expect(capturedOpts!.model).toBe("ctx-model");
+      // 修复后：opts.model 不再从 ctxModel.id 填底，ctxModel 作为完整对象透传
+      expect(capturedOpts!.model).toBeUndefined();
+      expect(capturedOpts!.ctxModel).toBe(ctxModel);
     });
   });
 

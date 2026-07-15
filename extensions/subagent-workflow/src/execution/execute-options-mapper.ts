@@ -28,7 +28,8 @@ export const SLUG_MAX_LENGTH = 20;
  *   schema          → schema
  *   schemaEnv       → schemaEnv（D-A6 bridge）
  *   cwd             → cwd
- *   model           → model ?? ctxModel（D-008 填底）
+ *   model           → model（显式 override 透传，ctxModel 不再压扁为 id 填底）
+ *   ctxModel        → ctxModel（完整 ModelInfo 对象透传，让 resolveModel 走第 3 层透明传递）
  *   skillPath       → skillPath
  *
  * 忽略字段（委托后由 executeAndAwait 内部机制替代）：
@@ -51,7 +52,8 @@ export function mapToExecuteOptions(
     schema: opts.schema,
     schemaEnv: opts.schemaEnv,
     cwd: opts.cwd,
-    model: opts.model ?? ctxModel?.id,
+    model: opts.model,
+    ctxModel,
     skillPath: opts.skillPath,
   };
 }

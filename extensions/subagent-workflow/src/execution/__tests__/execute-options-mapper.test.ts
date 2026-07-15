@@ -45,22 +45,39 @@ describe("mapToExecuteOptions (D-A2)", () => {
     expect((result as unknown as { schemaEnv?: string }).schemaEnv).toBeUndefined();
   });
 
-  it("T3.5 model 填底: opts.model 优先", () => {
+  it("T3.5 model: opts.model 优先（显式 override 透传，不与 ctxModel 混合）", () => {
     const opts: AgentCallOpts = { ...baseOpts, model: "explicit-model" };
     const ctxModel: ModelInfo = { id: "ctx-model", provider: "test", input: [] } as ModelInfo;
     const result = mapToExecuteOptions(opts, ctxModel);
     expect(result.model).toBe("explicit-model");
   });
 
-  it("T3.5 model 填底: opts.model 空 → ctxModel (D-008)", () => {
+  it("T3.5 model: opts.model 空 → model undefined（不再从 ctxModel.id 填底）", () => {
     const ctxModel: ModelInfo = { id: "ctx-model", provider: "test", input: [] } as ModelInfo;
     const result = mapToExecuteOptions(baseOpts, ctxModel);
-    expect(result.model).toBe("ctx-model");
+    expect(result.model).toBeUndefined();
   });
 
-  it("T3.5 model 填底: opts.model 空且 ctxModel 空 → model undefined", () => {
+  it("T3.5 ctxModel 透传: opts.model 空时 ctxModel 作为完整 ModelInfo 对象传入 ExecuteOptions.ctxModel", () => {
+    const ctxModel: ModelInfo = { id: "mimo-v2.5-pro", provider: "router-openai", input: [] } as ModelInfo;
+    const result = mapToExecuteOptions(baseOpts, ctxModel);
+    expect(result.ctxModel).toBe(ctxModel);
+    expect(result.ctxModel?.id).toBe("mimo-v2.5-pro");
+    expect(result.ctxModel?.provider).toBe("router-openai");
+  });
+
+  it("T3.5 ctxModel 透传: opts.model 有值时 ctxModel 仍透传（双层可用）", () => {
+    const opts: AgentCallOpts = { ...baseOpts, model: "explicit-model" };
+    const ctxModel: ModelInfo = { id: "ctx-model", provider: "test", input: [] } as ModelInfo;
+    const result = mapToExecuteOptions(opts, ctxModel);
+    expect(result.model).toBe("explicit-model");
+    expect(result.ctxModel).toBe(ctxModel);
+  });
+
+  it("T3.5 ctxModel: 两层均空 → model/ctxModel 都 undefined", () => {
     const result = mapToExecuteOptions(baseOpts);
     expect(result.model).toBeUndefined();
+    expect(result.ctxModel).toBeUndefined();
   });
 
   it("skillPath 透传", () => {
