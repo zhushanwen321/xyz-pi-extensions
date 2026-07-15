@@ -189,5 +189,5 @@ async function openView(
     resume: (runId: string) => resumeRun(runId, deps),
     abort: (runId: string) => abortRun(runId, deps),
   };
-  await createWorkflowsView(run, theme, ctx, actions);
+  await createWorkflowsView(run, theme, ctx, actions, deps.store.stateFilePath(run.runId));
 }

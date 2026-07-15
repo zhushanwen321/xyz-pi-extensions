@@ -188,6 +188,7 @@ export function createWorkflowsView(
   theme: ThemeLike,
   ctx: ExtensionContext,
   actions: ViewActions,
+  runStateFile?: string,
 ): Promise<void> {
   return ctx.ui.custom<void>((_tui: unknown, _t: unknown, _kb: unknown, done: (result: void) => void) => {
     const state = createInitialState();
@@ -467,7 +468,7 @@ export function createWorkflowsView(
  // 缺陷 #1 修复：每次 render 从 run.state.trace 实时读（toArray 返回内部数组引用，
  // 后续 trace.append 会反映到 view），不再用 factory 时的冻结快照。
         const liveGroups = buildPhaseGroups([...run.state.trace.toArray()]);
-        const raw = renderLayout(run, state, liveGroups, theme, width, height);
+        const raw = renderLayout(run, state, liveGroups, theme, width, height, runStateFile);
  // Pad to terminal height so the overlay fills the screen (matches main 行为）
         const lines = raw.length < height
           ? [...raw, ...Array.from({ length: height - raw.length }, () => "")]
@@ -517,12 +518,13 @@ function renderLayout(
   theme: ThemeLike,
   screenWidth: number,
   screenHeight: number,
+  runStateFile?: string,
 ): string[] {
   const lines: string[] = [];
   const contentWidth = screenWidth - BOX_BORDER_CHARS;
   const mainWidth = contentWidth - SIDEBAR_WIDTH - 1; // -1 for the │ divider
 
-  renderHeader(lines, run, theme, contentWidth);
+  renderHeader(lines, run, theme, contentWidth, runStateFile);
 
   const phase = phaseGroups[state.phaseIdx] ?? phaseGroups[0];
   const agents = phase?.nodes ?? [];
@@ -564,12 +566,13 @@ function renderLayout(
   return lines;
 }
 
-/** Header：╭─╮ + name(bold) + 右侧 status/agents/elapsed/budget。 */
+/** Header：╭─╮ + name(bold) + 右侧 status/agents/elapsed/budget + 可选 state 路径行。 */
 function renderHeader(
   lines: string[],
   run: WorkflowRun,
   theme: ThemeLike,
   contentWidth: number,
+  runStateFile?: string,
 ): void {
   const traceArr = run.state.trace.toArray();
   const completed = traceArr.filter((n) => n.status === "completed").length;
@@ -597,6 +600,10 @@ function renderHeader(
     lines.push(`${b(theme, "│")}${descPart}${" ".repeat(padLen)}${rightPart}${b(theme, "│")}`);
   } else {
     lines.push(walled(theme, rightPart, contentWidth));
+  }
+  // run 状态快照文件路径（可选——无 store 注入时不渲染）
+  if (runStateFile) {
+    lines.push(walled(theme, theme.fg("dim", `state: ${runStateFile}`.slice(0, contentWidth)), contentWidth));
   }
   lines.push(plainBorder(theme, "├", "┤", contentWidth));
 }
