@@ -21,7 +21,7 @@
 pi install npm:@zhushanwen/pi-coding-workflow
 
 # 可选：workflow extension（启用并行审查能力）
-pi install npm:@zhushanwen/pi-workflow
+pi install npm:@zhushanwen/pi-subagent-workflow
 ```
 
 ## 使用
@@ -104,7 +104,7 @@ coding-workflow/
 
 ## 降级策略
 
-Workflow Extension（`@zhushanwen/pi-workflow`）是可选依赖：
+Workflow Extension（`@zhushanwen/pi-subagent-workflow`）是可选依赖：
 
 | 状态 | Review-Gate | Test-Fix Loop |
 |------|------------|---------------|

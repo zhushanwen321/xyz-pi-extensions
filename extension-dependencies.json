@@ -2,17 +2,6 @@
   "$schema": "./extension-dependencies.schema.json",
   "extensions": [
     {
-      "name": "@zhushanwen/pi-workflow",
-      "directory": "extensions/workflow",
-      "dependsOn": [
-        {
-          "package": "@zhushanwen/pi-structured-output",
-          "type": "optional",
-          "reason": "superseded_by @zhushanwen/pi-subagent-workflow（T1 合并，deprecated，ADR-030）。条目保留供已安装用户追溯，新安装请用新包。原依赖说明：schema 结构化输出，缺失时降级为纯文本"
-        }
-      ]
-    },
-    {
       "name": "@zhushanwen/pi-subagent-workflow",
       "directory": "extensions/subagent-workflow",
       "dependsOn": [
@@ -120,17 +109,6 @@
           "package": "@zhushanwen/pi-goal",
           "type": "optional",
           "reason": "complete action 通过 __goalInit 启动 goal，缺失时降级通知用户"
-        }
-      ]
-    },
-    {
-      "name": "@zhushanwen/pi-subagents",
-      "directory": "extensions/subagents",
-      "dependsOn": [
-        {
-          "package": "@zhushanwen/pi-structured-output",
-          "type": "runtime",
-          "reason": "superseded_by @zhushanwen/pi-subagent-workflow（T1 合并，deprecated，ADR-030）。条目保留供已安装用户追溯，新安装请用新包。原依赖说明：schema 契约 enforcement 引用 tool 名（structured-output），运行时需要 extension 已加载，代码层不 import"
         }
       ]
     },
