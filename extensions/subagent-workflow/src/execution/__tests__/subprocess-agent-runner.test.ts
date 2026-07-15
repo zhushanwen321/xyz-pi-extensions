@@ -183,6 +183,34 @@ describe("SubprocessAgentRunner (wave-4 delegate)", () => {
   });
 
   // ────────────────────────────────────────────────
+  // H1: SAR ctxModel 刷新（model_select 后不再 stale）
+  // ────────────────────────────────────────────────
+  describe("H1 ctxModel refresh via updateCtxModel", () => {
+    it("updateCtxModel 后 run() 传入新的 ctxModel 而非旧值", async () => {
+      let capturedOpts: Record<string, unknown> | undefined;
+      const mockService = createMockService(
+        vi.fn().mockImplementation((opts: Record<string, unknown>) => {
+          capturedOpts = opts;
+          return Promise.resolve(makeMockResult());
+        }),
+      );
+      const oldModel = { id: "old-model", provider: "test", input: [] };
+      const newModel = { id: "new-model", provider: "test", input: [] };
+      const deps: SubprocessAgentRunnerDeps = { subagentService: mockService, ctxModel: oldModel };
+      const sar = new SubprocessAgentRunner(deps);
+
+      // 模拟 model_select：刷新 ctxModel
+      sar.updateCtxModel(newModel);
+
+      const opts = { ...makeBaseOpts(), model: undefined };
+      await sar.run(opts, new AbortController().signal);
+
+      expect(capturedOpts!.ctxModel).toBe(newModel);
+      expect(capturedOpts!.ctxModel).not.toBe(oldModel);
+    });
+  });
+
+  // ────────────────────────────────────────────────
   // T3.6: timeoutMs 超时 → signal abort → error
   // ────────────────────────────────────────────────
   describe("T3.6 timeoutMs 超时", () => {

@@ -53,11 +53,21 @@ export interface SubprocessAgentRunnerDeps {
  */
 export class SubprocessAgentRunner implements AgentRunner {
   private readonly subagentService: SubagentService;
-  private readonly ctxModel: ModelInfo | undefined;
+  private ctxModel: ModelInfo | undefined;
 
   constructor(deps: SubprocessAgentRunnerDeps) {
     this.subagentService = deps.subagentService;
     this.ctxModel = deps.ctxModel;
+  }
+
+  /**
+   * 刷新主 agent model 缓存。model_select 事件时由 index.ts 调用。
+   * H1 修复：旧实现 ctxModel 是 readonly，session_start 后固化，
+   * model_select 只刷新 ModelConfigService._ctxModel 不更新 SAR →
+   * workflow 路径用过期模型。
+   */
+  updateCtxModel(model: ModelInfo | undefined): void {
+    this.ctxModel = model;
   }
 
   /**
