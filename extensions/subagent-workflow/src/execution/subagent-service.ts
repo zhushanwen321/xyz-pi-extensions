@@ -583,12 +583,16 @@ export class SubagentService {
     rawOnEvent?: (event: AgentEvent) => void,
     stream?: SubagentStream,
   ): Promise<AgentResult> {
-    // 仅 background 进并发池限流，分层配额：每层嵌套 depth 让有效配额 -1（下限 1）。
-    // 顶层 depth=0 拿满配额；嵌套越深有效并发越小，防子 agent fan-out 压垮主 agent 的 pool。
     const pooled = record.mode === "background";
+    let acquired = false;
     if (pooled) {
       const effectiveMaxConcurrent = Math.max(1, this.pool.maxConcurrent - record.depth);
-      await this.pool.acquire(priority, effectiveMaxConcurrent);
+      try {
+        await this.pool.acquire(priority, effectiveMaxConcurrent, signal);
+        acquired = true;
+      } catch {
+        return this.finalizeFailed(record, new Error("aborted"));
+      }
     }
     // onEvent 包装：AgentEvent → onUpdate(project(record)) 回流调用方
     const onEvent = rawOnEvent
@@ -596,16 +600,12 @@ export class SubagentService {
         ? (event: AgentEvent): void => this.onEventThrottled(record, event, opts.onUpdate!)
         : undefined);
 
-    // 解析 worktree 参数：boolean → WorktreeHandle | undefined
+    // 解析 worktree 参数：boolean → WorktreeHandle | undefined（true/undefined 由 run 内部处理）
     let worktreeHandle: WorktreeHandle | undefined;
     if (typeof opts.worktree === "object") {
       worktreeHandle = opts.worktree;
     }
-    // worktree=true 或 undefined 时不传递 handle，由 run 内部处理
-
-    // [MF#4][MF#2] fork 深度护栏：深度按 async 调用链传递（ALS），不再用共享实例计数器。
-    // parentDepth = 当前调用链的深度（主 session 链上无 store→0）；fork 时推进为 parentDepth+1，
-    // 包进 run() 的 ALS 作用域，使子 agent 在 prompt() 期间发起的嵌套 execute 能读到该深度。
+    // [MF#4][MF#2] fork 深度护栏：ALS 传递深度（主 session 链无 store→0，fork 推进 +1）。
     const parentDepth = this.forkDepthAls.getStore() ?? 0;
     const effectiveDepth = opts.fork ? parentDepth + 1 : parentDepth;
 
@@ -642,7 +642,7 @@ export class SubagentService {
       result = await this.finalizeFailed(record, err);
       return result;
     } finally {
-      if (pooled) this.pool.release();
+      if (pooled && acquired) this.pool.release();
       // 清除 streaming widget（subagent 终态，幂等）
       stream?.dispose();
     }

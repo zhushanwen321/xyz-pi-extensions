@@ -2,17 +2,22 @@
 //
 // 并发控制 + 优先级排队。background=1000（单一优先级，保留 priority 机制供未来扩展）。
 
-/** 队列条目：优先级 + resolver + 入队序号（同优先级 FIFO）。 */
+/** 队列条目：优先级 + resolver + rejecter + 入队序号（同优先级 FIFO）。 */
 interface QueueEntry {
   priority: number;
   resolve: () => void;
+  reject: (err: Error) => void;
   seq: number;
+  /** abort listener（用于 resolve/abort 时清理）。 */
+  onAbort?: () => void;
+  /** 关联的 signal（用于 resolve 时 removeEventListener）。 */
+  signal?: AbortSignal;
 }
 
 /** 并发池接口（可注入，便于测试 mock）。 */
 export interface ConcurrencyPool {
-  /** 按优先级排队获取槽位（0=最高）。可选 effectiveMaxConcurrent 覆盖实例级默认配额。 */
-  acquire(priority: number, effectiveMaxConcurrent?: number): Promise<void>;
+  /** 按优先级排队获取槽位（0=最高）。可选 effectiveMaxConcurrent 覆盖实例级默认配额。可选 AbortSignal 在 abort 时 reject 排队条目。 */
+  acquire(priority: number, effectiveMaxConcurrent?: number, signal?: AbortSignal): Promise<void>;
   /** 归还槽位。必须无条件执行（finally）。 */
   release(): void;
   /** 当前已占用槽位数（诊断/widget 用）。 */
@@ -45,7 +50,7 @@ export class DefaultConcurrencyPool implements ConcurrencyPool {
     this.maxConcurrent = Math.max(1, maxConcurrent);
   }
 
-  acquire(priority: number, effectiveMaxConcurrent?: number): Promise<void> {
+  acquire(priority: number, effectiveMaxConcurrent?: number, signal?: AbortSignal): Promise<void> {
     // effectiveMaxConcurrent 覆盖实例级默认配额（分层配额：调用方传 max(1, maxConcurrent - depth)）。
     // 不修改实例级 maxConcurrent——实例配额是全局共享上限，分层配额是本次 acquire 的局部上限。
     const effective = effectiveMaxConcurrent ?? this.maxConcurrent;
@@ -53,8 +58,25 @@ export class DefaultConcurrencyPool implements ConcurrencyPool {
       this._active += 1;
       return Promise.resolve();
     }
-    return new Promise<void>((resolve) => {
-      this.queue.push({ priority, resolve, seq: this.seqCounter++ });
+    return new Promise<void>((resolve, reject) => {
+      const entry: QueueEntry = { priority, resolve, reject, seq: this.seqCounter++ };
+      // H2: abort 时 reject 排队条目并从 queue 移除，防止永久挂起
+      if (signal) {
+        if (signal.aborted) {
+          reject(new Error("acquire aborted"));
+          return;
+        }
+        entry.signal = signal;
+        entry.onAbort = (): void => {
+          const idx = this.queue.indexOf(entry);
+          if (idx >= 0) {
+            this.queue.splice(idx, 1);
+            reject(new Error("acquire aborted"));
+          }
+        };
+        signal.addEventListener("abort", entry.onAbort, { once: true });
+      }
+      this.queue.push(entry);
     });
   }
 
@@ -70,6 +92,10 @@ export class DefaultConcurrencyPool implements ConcurrencyPool {
         }
       }
       const next = this.queue.splice(bestIdx, 1)[0];
+      // H2: 条目已获槽位——移除 abort listener（防 listener 泄漏到长生命周期 signal）
+      if (next.onAbort && next.signal) {
+        next.signal.removeEventListener("abort", next.onAbort);
+      }
       next.resolve();
       // active 不变（一个离开队列立即进入活跃）
     } else if (this._active > 0) {

@@ -214,4 +214,37 @@ describe("DefaultConcurrencyPool", () => {
       expect(negative.maxConcurrent).toBe(1);
     });
   });
+
+  // ============================================================
+  // H2: acquire 支持 AbortSignal — abort 时排队条目 reject
+  // ============================================================
+  describe("H2 abort support for acquire", () => {
+    it("abort signal rejects queued acquire with AbortError", async () => {
+      const pool = new DefaultConcurrencyPool(1);
+      await pool.acquire(0); // 占满
+
+      const controller = new AbortController();
+      const queued = pool.acquire(0, undefined, controller.signal);
+
+      await new Promise((r) => setTimeout(r, 5));
+      expect(pool.active).toBe(1); // 仍在排队
+
+      controller.abort();
+
+      await expect(queued).rejects.toThrow("aborted");
+    });
+
+    it("non-aborted acquire still resolves normally after release", async () => {
+      const pool = new DefaultConcurrencyPool(1);
+      await pool.acquire(0); // 占满
+
+      const controller = new AbortController();
+      const queued = pool.acquire(0, undefined, controller.signal);
+
+      pool.release(); // 释放 → queued 应被 resolve
+      await queued;   // 不应 reject
+      expect(pool.active).toBe(1);
+      pool.release();
+    });
+  });
 });
