@@ -87,7 +87,13 @@ export function notifyDone(
   }
 
   if (run.state.scriptResult !== undefined && run.state.scriptResult !== null) {
-    const serialized = JSON.stringify(run.state.scriptResult, null, JSON_INDENT);
+    // M10: scriptResult 来自 worker 脚本返回值（用户可控），可能含循环引用导致 JSON.stringify 抛 TypeError
+    let serialized: string;
+    try {
+      serialized = JSON.stringify(run.state.scriptResult, null, JSON_INDENT);
+    } catch {
+      serialized = String(run.state.scriptResult);
+    }
     const truncated =
       serialized.length > MAX_RESULT_LENGTH
         ? serialized.slice(0, MAX_RESULT_LENGTH) + "\n... (truncated)"

@@ -758,10 +758,9 @@ export class SubagentService {
   ): Promise<void> {
     // 终态清节流状态：防 trailing timer 在 record 归档后误发陈旧 onUpdate
     this.clearThrottle(record.id);
-    // ── Step 0: collectPatch（best-effort，D-022 patchOk 守卫）──
+    // ── Step 0: collectPatch（best-effort）──
     // [MF#3] patchFile 写到 worktree 之外（sessionsDir/<branch>.patch），避免被 cleanup 删除；
     //        路径回填 record.patchFile，供调用方（tool result / /subagents list）应用。
-    let patchOk = true;
     if (record.worktreeHandle) {
       try {
         const sessionsDir = getSubagentSessionDir(
@@ -771,12 +770,9 @@ export class SubagentService {
         fs.mkdirSync(sessionsDir, { recursive: true });
         const patchFile = path.join(sessionsDir, `${record.worktreeHandle.branch}.patch`);
         const patch = this.worktreeManager.collectPatch(record.worktreeHandle, patchFile);
-        patchOk = !patch.failed;
-        // 仅 patch 实际写盘（非空 diff 且未失败）才回填，避免指向不存在文件的悬空路径——
-        // 否则 notifier/render/sync 路径会向 LLM 输出 `git apply <不存在>`（纯查询任务命中）。
         if (patch.written) record.patchFile = patchFile;
-      } catch {
-        patchOk = false;
+      } catch (pe: unknown) {
+        bestEffort(pe, "collectPatch (finalizeRecord Step0)");
       }
     }
 
@@ -813,7 +809,7 @@ export class SubagentService {
         bestEffort(err, "writeFinalized/tombstone (finalizeRecord Step3)");
       }
     }
-    if (record.worktreeHandle && patchOk) {
+    if (record.worktreeHandle) {
       try {
         this.worktreeManager.cleanup(record.worktreeHandle);
       } catch (err) {

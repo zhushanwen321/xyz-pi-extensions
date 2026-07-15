@@ -275,7 +275,9 @@ function dispatchAgentCall(
       completedAt: new Date().toISOString(),
     });
     postAgentResult(run, msg.callId, errorResult, false);
-    void deps.store.save(run);
+    deps.store.save(run).catch((e: unknown) => {
+      console.error(`[workflow] store.save failed (resolveAgentOpts): ${e instanceof Error ? e.message : String(e)}`);
+    });
     return;
   }
 
@@ -325,7 +327,10 @@ function dispatchAgentCall(
  // D-12 regression fix (round-2 #1)：executeAgentCall 内 consume/incrementCallCount
  // 后同步 worker $BUDGET（否则 $BUDGET.spent()/remaining() 恒为 0）
       postBudgetUpdate(run);
-      void deps.store.save(run);
+      deps.store.save(run).catch((e: unknown) => {
+        const m = e instanceof Error ? e.message : String(e);
+        console.error(`[workflow] store.save failed (agent call ${msg.callId}): ${m}`);
+      });
 
  // C-2：budget 超限 → 终止整个 run（避免继续 spawn 烧预算）
  // 内联 terminate（不调 lifecycle.abortRun 避免 engine 内循环依赖）：
@@ -334,18 +339,31 @@ function dispatchAgentCall(
       if (run.state.budget.isExceeded()) {
         run.state.error = run.state.error ?? "Budget exceeded";
         deps.log?.("debug", "workflow:error-recovery", "budget exceeded, transition done", { runId: run.runId });
+        // M12: transition 单独 try——并发 abort 导致 illegal-transition 是预期的，可忽略
+        let transitioned = false;
         try {
           run.transition("done", "budget_limited");
-          void deps.store.save(run);
+          transitioned = true;
+        } catch (te: unknown) {
+          // run 可能在 budget 检查后、transition 前被并发 abort——预期，不记错
+          void te;
+        }
+        if (transitioned) {
+          deps.store.save(run).catch((e: unknown) => {
+            const m = e instanceof Error ? e.message : String(e);
+            console.error(`[workflow] store.save failed (budget done): ${m}`);
+          });
           deps.log?.("debug", "workflow:error-recovery", "run saved after budget done", { runId: run.runId, reason: run.state.reason });
- // C-4: budget 终止也触发完成通知
-          deps.log?.("debug", "workflow:error-recovery", "emit pending:unregister", { runId: run.runId, reason: run.state.reason });
-          deps.eventBus?.emit("pending:unregister", { id: run.runId, reason: run.state.reason ?? "completed" });
-          deps.log?.("debug", "workflow:error-recovery", "emit pending:unregister done", { runId: run.runId });
-          deps.onRunDone?.(run);
-        } catch (err) {
- // run 可能在 budget 检查后、transition 前被并发 abort——忽略
-          void err;
+          // M12: onRunDone/emit 单独 try——这些是真实副作用，错误不应被静默吞掉
+          try {
+            deps.log?.("debug", "workflow:error-recovery", "emit pending:unregister", { runId: run.runId, reason: run.state.reason });
+            deps.eventBus?.emit("pending:unregister", { id: run.runId, reason: run.state.reason ?? "completed" });
+            deps.log?.("debug", "workflow:error-recovery", "emit pending:unregister done", { runId: run.runId });
+            deps.onRunDone?.(run);
+          } catch (err) {
+            const m = err instanceof Error ? err.message : String(err);
+            console.error(`[workflow] onRunDone/emit failed (budget done): ${m}`);
+          }
         }
       }
     })
@@ -378,7 +396,9 @@ function dispatchAgentCall(
         completedAt: new Date().toISOString(),
       });
       postAgentResult(run, msg.callId, errorResult, false);
-      void deps.store.save(run);
+      deps.store.save(run).catch((e: unknown) => {
+        console.error(`[workflow] store.save failed (catch fallback): ${e instanceof Error ? e.message : String(e)}`);
+      });
     });
 }
 
