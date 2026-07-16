@@ -591,6 +591,8 @@ export class SubagentService {
         await this.pool.acquire(priority, effectiveMaxConcurrent, signal);
         acquired = true;
       } catch {
+        // S1: 排队中被 abort（signal.aborted）走 cancelled，与已运行被 abort 一致。
+        if (signal?.aborted) return this.finalizeAborted(record);
         return this.finalizeFailed(record, new Error("aborted"));
       }
     }
@@ -838,20 +840,21 @@ export class SubagentService {
   private async finalizeFailed(record: ExecutionRecord, err: unknown): Promise<AgentResult> {
     const errMsg = err instanceof Error ? err.message : String(err);
     // durationMs 用真实耗时（startedAt → now），避免失败统计恒为 0 失真。
-    const failedResult: AgentResult = {
-      text: "",
-      turns: record.turnCount,
-      durationMs: Date.now() - record.startedAt,
-      success: false,
-      error: errMsg,
-      sessionId: record.id,
-      toolCalls: [],
-    };
+    const failedResult: AgentResult = { text: "", turns: record.turnCount, durationMs: Date.now() - record.startedAt, success: false, error: errMsg, sessionId: record.id, toolCalls: [] };
     // CAS 抢锁：抢到（status 仍 running）则完整收尾；没抢到（cancel 已先设 cancelled）跳过。
     if (tryTransition(record, "failed")) {
       await this.finalizeRecord(record, failedResult, "failed");
     }
     return failedResult;
+  }
+
+  /** S1: 排队中被 abort 走 cancelled 终态（对齐已运行被 abort 的 cancelBackground）。 */
+  private async finalizeAborted(record: ExecutionRecord): Promise<AgentResult> {
+    const cancelledResult: AgentResult = { text: "", turns: record.turnCount, durationMs: Date.now() - record.startedAt, success: false, error: "cancelled by user", sessionId: record.id, toolCalls: [] };
+    if (tryTransition(record, "cancelled")) {
+      await this.finalizeRecord(record, cancelledResult, "cancelled");
+    }
+    return cancelledResult;
   }
 
   // onUpdate 节流状态（per-record Map）。每条 record（每条 onUpdate 回流链）独立节流，

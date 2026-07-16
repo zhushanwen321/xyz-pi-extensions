@@ -63,7 +63,10 @@ export class DefaultConcurrencyPool implements ConcurrencyPool {
       // H2: abort 时 reject 排队条目并从 queue 移除，防止永久挂起
       if (signal) {
         if (signal.aborted) {
-          reject(new Error("acquire aborted"));
+          // S1: abort reject 需带 name="AbortError"，对齐 concurrency-gate.ts 的 AbortError 语义
+          const err = new Error("acquire aborted");
+          err.name = "AbortError";
+          reject(err);
           return;
         }
         entry.signal = signal;
@@ -71,7 +74,10 @@ export class DefaultConcurrencyPool implements ConcurrencyPool {
           const idx = this.queue.indexOf(entry);
           if (idx >= 0) {
             this.queue.splice(idx, 1);
-            reject(new Error("acquire aborted"));
+            // S1: abort reject 需带 name="AbortError"，与 pre-aborted 分支一致
+            const err = new Error("acquire aborted");
+            err.name = "AbortError";
+            reject(err);
           }
         };
         signal.addEventListener("abort", entry.onAbort, { once: true });

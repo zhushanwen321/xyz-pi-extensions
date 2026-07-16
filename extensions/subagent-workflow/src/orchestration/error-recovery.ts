@@ -419,6 +419,8 @@ function dispatchAgentCall(
         completedAt: new Date().toISOString(),
       });
       postAgentResult(run, msg.callId, errorResult, false);
+      // S2: 与 .then 对称——catch 路径也同步 worker $BUDGET（幂等）
+      postBudgetUpdate(run);
       deps.store.save(run).catch((e: unknown) => {
         console.error(`[workflow] store.save failed (catch fallback): ${e instanceof Error ? e.message : String(e)}`);
       });
