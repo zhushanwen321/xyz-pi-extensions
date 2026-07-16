@@ -1,5 +1,11 @@
 # @zhushanwen/pi-coding-workflow
 
+## 0.4.1
+
+### Patch Changes
+
+- 96aed1d: Fix test infrastructure broken by workflow directory removal: give plan and structured-output their own self-contained mocks/ dirs (previously aliased the now-deleted ../workflow/mocks/\*). Update coding-workflow README to reference @zhushanwen/pi-subagent-workflow (replacing deprecated @zhushanwen/pi-workflow).
+
 ## 0.4.0
 
 ### Minor Changes

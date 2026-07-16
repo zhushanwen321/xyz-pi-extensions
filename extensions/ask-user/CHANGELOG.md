@@ -1,5 +1,11 @@
 # @zhushanwen/pi-ask-user
 
+## 0.2.0
+
+### Minor Changes
+
+- de5d7a3: Add RPC mode support via @xyz-agent/extension-protocol: ask_user now works in xyz-agent GUI through askUserInteract (select channel + ASK_USER_MARKER), while preserving TUI ctx.ui.custom behavior.
+
 ## 0.1.0
 
 ### Minor Changes

@@ -1,6 +1,6 @@
 {
   "name": "@zhushanwen/pi-coding-workflow",
-  "version": "0.4.0",
+  "version": "0.4.1",
   "description": "Coding workflow tools for Pi — L1/L2/L3 design + execution orchestration with machine-enforced test gates.",
   "type": "module",
   "main": "./index.ts",
