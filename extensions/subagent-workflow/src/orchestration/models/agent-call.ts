@@ -36,6 +36,8 @@ export class AgentCall {
   result?: AgentResult;
  /** Pi subprocess session ID（uuidv7，G-017 归此）。 */
   sessionId?: string;
+ /** Session JSONL 绝对路径（finalizeCall 后从 result.sessionFile 填入，对齐 sessionId 模式）。 */
+  sessionFile?: string;
  /** 与 Trace 共享的节点引用（D-10 单源）。AgentCall 不直接改其字段。 */
   readonly traceNode: ExecutionTraceNode;
 
@@ -72,5 +74,10 @@ export class AgentCall {
  /** 记录 pi subprocess session ID（dispatch 成功后）。 */
   setSessionId(sessionId: string): void {
     this.sessionId = sessionId;
+  }
+
+ /** 记录 session JSONL 绝对路径（finalizeCall 后，对齐 setSessionId 模式）。 */
+  setSessionFile(sessionFile: string): void {
+    this.sessionFile = sessionFile;
   }
 }

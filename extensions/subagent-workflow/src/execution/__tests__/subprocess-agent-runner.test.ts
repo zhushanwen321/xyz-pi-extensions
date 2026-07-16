@@ -15,9 +15,9 @@
 
 import { describe, expect, it, vi } from "vitest";
 
-import { SubprocessAgentRunner } from "../subprocess-agent-runner.ts";
-import type { SubprocessAgentRunnerDeps } from "../subprocess-agent-runner.ts";
 import type { AgentCallOpts, AgentResult } from "../../orchestration/models/types.ts";
+import type { SubprocessAgentRunnerDeps } from "../subprocess-agent-runner.ts";
+import { SubprocessAgentRunner } from "../subprocess-agent-runner.ts";
 
 // ── 测试辅助 ──
 
@@ -42,6 +42,7 @@ function createMockService(impl?: typeof vi.fn) {
       opts: Record<string, unknown>,
       signal?: AbortSignal,
       onEvent?: (e: Record<string, unknown>) => void,
+      stream?: unknown,
     ) => Promise<AgentResult>;
   };
 }
@@ -175,7 +176,37 @@ describe("SubprocessAgentRunner (wave-4 delegate)", () => {
       const opts = { ...makeBaseOpts(), model: undefined };
       await sar.run(opts, new AbortController().signal);
 
-      expect(capturedOpts!.model).toBe("ctx-model");
+      // 修复后：opts.model 不再从 ctxModel.id 填底，ctxModel 作为完整对象透传
+      expect(capturedOpts!.model).toBeUndefined();
+      expect(capturedOpts!.ctxModel).toBe(ctxModel);
+    });
+  });
+
+  // ────────────────────────────────────────────────
+  // H1: SAR ctxModel 刷新（model_select 后不再 stale）
+  // ────────────────────────────────────────────────
+  describe("H1 ctxModel refresh via updateCtxModel", () => {
+    it("updateCtxModel 后 run() 传入新的 ctxModel 而非旧值", async () => {
+      let capturedOpts: Record<string, unknown> | undefined;
+      const mockService = createMockService(
+        vi.fn().mockImplementation((opts: Record<string, unknown>) => {
+          capturedOpts = opts;
+          return Promise.resolve(makeMockResult());
+        }),
+      );
+      const oldModel = { id: "old-model", provider: "test", input: [] };
+      const newModel = { id: "new-model", provider: "test", input: [] };
+      const deps: SubprocessAgentRunnerDeps = { subagentService: mockService, ctxModel: oldModel };
+      const sar = new SubprocessAgentRunner(deps);
+
+      // 模拟 model_select：刷新 ctxModel
+      sar.updateCtxModel(newModel);
+
+      const opts = { ...makeBaseOpts(), model: undefined };
+      await sar.run(opts, new AbortController().signal);
+
+      expect(capturedOpts!.ctxModel).toBe(newModel);
+      expect(capturedOpts!.ctxModel).not.toBe(oldModel);
     });
   });
 
@@ -384,6 +415,44 @@ describe("SubprocessAgentRunner (wave-4 delegate)", () => {
 
       const result = await sar.run(makeBaseOpts(), new AbortController().signal);
       expect(result.error).toBe("raw string error");
+    });
+  });
+
+  // ────────────────────────────────────────────────
+  // U1: stream 透传给 executeAndAwait
+  // ────────────────────────────────────────────────
+  describe("U1 stream 透传", () => {
+    it("SAR.run 传 stream → executeAndAwait 第 4 参收到同一 stream 对象", async () => {
+      let capturedStream: unknown;
+      const mockService = createMockService(
+        vi.fn().mockImplementation((_opts, _sig, _onEvt, stream) => {
+          capturedStream = stream;
+          return Promise.resolve(makeMockResult());
+        }),
+      );
+      const deps: SubprocessAgentRunnerDeps = { subagentService: mockService };
+      const sar = new SubprocessAgentRunner(deps);
+
+      const fakeStream = { onDelta: vi.fn(), dispose: vi.fn() };
+      await sar.run(makeBaseOpts(), new AbortController().signal, undefined, fakeStream as never);
+
+      expect(capturedStream).toBe(fakeStream);
+    });
+
+    it("SAR.run 不传 stream → executeAndAwait 第 4 参为 undefined", async () => {
+      let capturedStream: unknown = "sentinel";
+      const mockService = createMockService(
+        vi.fn().mockImplementation((_opts, _sig, _onEvt, stream) => {
+          capturedStream = stream;
+          return Promise.resolve(makeMockResult());
+        }),
+      );
+      const deps: SubprocessAgentRunnerDeps = { subagentService: mockService };
+      const sar = new SubprocessAgentRunner(deps);
+
+      await sar.run(makeBaseOpts(), new AbortController().signal);
+
+      expect(capturedStream).toBeUndefined();
     });
   });
 });

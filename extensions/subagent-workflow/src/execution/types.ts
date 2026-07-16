@@ -7,6 +7,8 @@
 //   - Runtime 编排 Core，产出 Details/Record 给 TUI
 //   - TUI 只读 Record/Details 快照，永不持有可变引用
 
+import type { GuiRenderResult } from "@xyz-agent/extension-protocol";
+
 import type { ModelInfo, ModelRegistryLike } from "./model-resolver.ts";
 
 // ============================================================
@@ -304,6 +306,11 @@ export interface ExecutionRecord {
   readonly thinkingLevel: string | undefined;
   readonly mode: ExecutionMode;
   readonly task: string;
+  /**
+   * 人类可读的短标签（≤20 字符），简述本次 subagent「在做什么」。
+   * 区别于 agent（类型名）/ task（完整 prompt）。旧持久化 record 反序列化时缺失兜底空串。
+   */
+  readonly slug: string;
   readonly startedAt: number;
   /** 根 Pi session ID（session 隔离过滤用）。递归链上所有层 record 同值。 */
   readonly rootSessionId: string | undefined;
@@ -360,6 +367,8 @@ export interface SubagentToolDetails {
   agent: string;
   model: string;
   thinkingLevel: string | undefined;
+  /** 短标签（≤20 字符），来自 record.slug。旧 record 反序列化时为空串。 */
+  slug: string;
   turns: number;
   totalTokens: number;
   elapsedSeconds: number;
@@ -385,6 +394,11 @@ export interface SubagentToolDetails {
 /** Hub.execute 的入参（sync/bg 共用）。mode 由 Hub 内部判定，不暴露给调用方。 */
 export interface ExecuteOptions {
   task: string;
+  /**
+   * 短标签（≤20 字符），简述本次执行用途，展示在 TUI。必填。
+   * workflow 内 agent() 调用时从 AgentCallOpts.description 透传而来。
+   */
+  slug: string;
   agent?: string;
   model?: string;
   thinkingLevel?: string;
@@ -434,6 +448,8 @@ export type ExecutionHandle = {
 export interface SubagentListItem {
   subagentId: string;
   agent: string;
+  /** 短标签（≤20 字符），来自 record.slug。旧 record 反序列化时为空串。 */
+  slug: string;
   status: ExecutionStatus;
   mode: ExecutionMode;
   /** 运行秒数（running 态实时计算，终态 endedAt-startedAt）。 */
@@ -473,9 +489,9 @@ export interface CancelResponse {
  *   - cancel → cancelResponse（subagentId 有值；sessionFile 无意义，可为 null）
  */
 export type SubagentToolResult =
-  | { action: "start"; subagentId: string; sessionFile: string | null; bgResponse: BgResponse }
-  | { action: "list"; subagentId: null; sessionFile: null; listResponse: ListResponse }
-  | { action: "cancel"; subagentId: string; sessionFile: null; cancelResponse: CancelResponse };
+  | { action: "start"; subagentId: string; sessionFile: string | null; slug: string; bgResponse: BgResponse; __gui__?: GuiRenderResult }
+  | { action: "list"; subagentId: null; sessionFile: null; listResponse: ListResponse; __gui__?: GuiRenderResult }
+  | { action: "cancel"; subagentId: string; sessionFile: null; cancelResponse: CancelResponse; __gui__?: GuiRenderResult };
 
 // ============================================================
 // TUI list 视图的合并 record（4 源 merge 后的形状）
@@ -487,6 +503,8 @@ export interface SubagentRecord {
   agent: string;
   /** 任务提示词（详情面板置顶展示）。磁盘/内存源均有。 */
   task: string;
+  /** 短标签（≤20 字符）。磁盘重建源旧文件可能缺失→兜底空串。 */
+  slug: string;
   status: ExecutionStatus;
   mode: ExecutionMode;
   startedAt: number;
@@ -552,6 +570,8 @@ export interface RecordSnapshot {
   readonly thinkingLevel: string | undefined;
   readonly mode: ExecutionMode;
   readonly task: string;
+  /** 短标签（≤20 字符）。来自 record.slug。 */
+  readonly slug: string;
   readonly status: ExecutionStatus;
   readonly turns: number;
   readonly totalTokens: number;

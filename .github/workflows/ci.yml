@@ -62,4 +62,4 @@ jobs:
           pnpm exec tsc --noEmit
 
       - name: Run SDK contract tests
-        run: pnpm --filter @zhushanwen/pi-subagents test -- src/__tests__/sdk-contract.test.ts
+        run: pnpm --filter @zhushanwen/pi-subagent-workflow test -- src/execution/__tests__/sdk-contract.test.ts

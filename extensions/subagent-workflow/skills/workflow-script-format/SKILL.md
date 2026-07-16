@@ -112,8 +112,8 @@ const final = await pipeline([
 // 对每个 file 依次跑 review → fix
 await pipeline(
   files,                                      // items
-  (file) => agent({ prompt: `Review ${file}`, description: `review-${file}`, schema: {...} }),
-  (review, file) => agent({ prompt: `Fix ${file}: ${JSON.stringify(review)}`, description: `fix-${file}` }),
+  (file) => agent({ prompt: `Review ${file}`, description: 'review', schema: {...} }),
+  (review, file) => agent({ prompt: `Fix ${file}: ${JSON.stringify(review)}`, description: 'fix' }),
 );
 // stage 函数签名：(prevResult, currentItem) => result；第一个 stage 只收 currentItem
 ```
@@ -158,7 +158,7 @@ const results = await parallel(
 );
 ```
 
-> 完整模式模板（chain / parallel / scatter-gather / map-reduce，含 `meta` + `$ARGS` + try-catch 错误处理）见 `extensions/subagent-workflow/examples/`。本段教 API，examples 教模式。
+> 内置通用编排 workflow（chain / parallel / scatter-gather / map-reduce，可直接 `workflow run`，用 `agent()` 自包含实现）见 `extensions/subagent-workflow/workflows/`。本段教 `workflow()` 嵌套 API，workflows 目录是开箱即用的通用编排工具（用 `agent()` 而非 `workflow()` 嵌套）。
 
 ### Other globals
 
@@ -224,7 +224,7 @@ while (round < MAX_ROUNDS) {
       },
       required: ['mustFix'],
     },
-    description: `review-${round}`,
+    description: 'review',
   });
 
   // result is already a parsed object thanks to schema
@@ -286,7 +286,7 @@ const review = await agent({
     },
     required: ['findings'],
   },
-  description: `review-${file}`,
+  description: 'review',
 });
 
 const verify = await agent({
@@ -301,7 +301,7 @@ Did the review cover: (1) all functions in the file, (2) at least 3 potential is
     },
     required: ['valid'],
   },
-  description: `verify-review-${file}`,
+  description: 'verify-review',
 });
 
 if (!verify.valid) {

@@ -1,7 +1,7 @@
 // src/__tests__/question-view.test.ts
 import { describe, expect, it } from "vitest";
 
-import { getSplitPaneWidths, renderQuestionView } from "../question-view";
+import { getSplitPaneWidths, renderQuestionView, type RenderContext } from "../question-view";
 import { createQuestionState, type Question, type QuestionState } from "../types";
 import { stubTheme } from "./fixtures";
 
@@ -18,18 +18,33 @@ const makeState = (over: Partial<QuestionState> = {}): QuestionState => ({
 	...over,
 });
 
+/** 测试辅助：桥接旧的位置参数签名到新的 RenderContext 签名。
+ *  draftText 合并进 state（新 API 从 state.draftText 读）。 */
+function rv(
+	q: Question,
+	state: QuestionState,
+	theme: typeof stubTheme,
+	width: number,
+	isSingle: boolean,
+	draftText: string = "",
+): string[] {
+	const mergedState = { ...state, draftText: draftText || state.draftText };
+	const ctx: RenderContext = { question: q, state: mergedState, theme, width, isSingle };
+	return renderQuestionView(ctx);
+}
+
 // Helper: join all lines for substring search
 const text = (lines: string[]): string => lines.join("\n");
 
 // ── Q-1 ~ Q-6: 基础渲染 ──────────────────────────────────
 describe("renderQuestionView — basics", () => {
 	it("Q-1: renders question text", () => {
-		const lines = renderQuestionView(singleQ, makeState(), stubTheme, 60, true, "");
+		const lines = rv(singleQ, makeState(), stubTheme, 60, true, "");
 		expect(text(lines)).toContain("Which database?");
 	});
 
 	it("Q-2: renders all options + Other", () => {
-		const lines = renderQuestionView(singleQ, makeState(), stubTheme, 60, true, "");
+		const lines = rv(singleQ, makeState(), stubTheme, 60, true, "");
 		const t = text(lines);
 		expect(t).toContain("Postgres");
 		expect(t).toContain("SQLite");
@@ -37,14 +52,14 @@ describe("renderQuestionView — basics", () => {
 	});
 
 	it("Q-3: renders cursor > on first option", () => {
-		const lines = renderQuestionView(singleQ, makeState({ cursorIndex: 0 }), stubTheme, 60, true, "");
+		const lines = rv(singleQ, makeState({ cursorIndex: 0 }), stubTheme, 60, true, "");
 		const t = text(lines);
 		expect(t).toContain(">");
 		expect(t).toContain("Postgres");
 	});
 
 	it("Q-4: renders single-select check on confirmed selection", () => {
-		const lines = renderQuestionView(singleQ, makeState({ selectedIndex: 1 }), stubTheme, 60, true, "");
+		const lines = rv(singleQ, makeState({ selectedIndex: 1 }), stubTheme, 60, true, "");
 		expect(text(lines)).toContain("✓");
 		expect(text(lines)).toContain("SQLite");
 	});
@@ -55,7 +70,7 @@ describe("renderQuestionView — basics", () => {
 			options: [{ label: "Auth" }, { label: "Search" }],
 			multiSelect: true,
 		};
-		const lines = renderQuestionView(
+		const lines = rv(
 			multiQ,
 			makeState({ selectedIndices: new Set([0]) }),
 			stubTheme,
@@ -69,7 +84,7 @@ describe("renderQuestionView — basics", () => {
 	});
 
 	it("Q-6: renders descriptions in muted", () => {
-		const lines = renderQuestionView(singleQ, makeState(), stubTheme, 60, true, "");
+		const lines = rv(singleQ, makeState(), stubTheme, 60, true, "");
 		expect(text(lines)).toContain("Battle-tested");
 	});
 });
@@ -96,7 +111,7 @@ describe("renderQuestionView — split pane", () => {
 	});
 
 	it("Q-9: split-pane left column hides descriptions", () => {
-		const lines = renderQuestionView(singleQ, makeState(), stubTheme, 100, true, "");
+		const lines = rv(singleQ, makeState(), stubTheme, 100, true, "");
 		const t = text(lines);
 		// In split mode, descriptions appear only in the right pane preview of the focused item.
 		// The focused item (cursorIndex=0=Postgres) shows "Battle-tested" in the right pane,
@@ -109,7 +124,7 @@ describe("renderQuestionView — split pane", () => {
 	});
 
 	it("Q-10: split-pane right pane shows focused option detail", () => {
-		const lines = renderQuestionView(singleQ, makeState({ cursorIndex: 1 }), stubTheme, 100, true, "");
+		const lines = rv(singleQ, makeState({ cursorIndex: 1 }), stubTheme, 100, true, "");
 		const t = text(lines);
 		// Focused on SQLite → right pane should show SQLite's description
 		expect(t).toContain("Embedded");
@@ -117,13 +132,13 @@ describe("renderQuestionView — split pane", () => {
 
 	it("Q-11: split-pane right pane on Other shows custom-answer hint", () => {
 		// cursorIndex = last option (Other) = 2
-		const lines = renderQuestionView(singleQ, makeState({ cursorIndex: 2 }), stubTheme, 100, true, "");
+		const lines = rv(singleQ, makeState({ cursorIndex: 2 }), stubTheme, 100, true, "");
 		const t = text(lines);
 		expect(t).toContain("custom");
 	});
 
 	it("Q-14: single-column mode shows indented descriptions", () => {
-		const lines = renderQuestionView(singleQ, makeState(), stubTheme, 60, true, "");
+		const lines = rv(singleQ, makeState(), stubTheme, 60, true, "");
 		// Both descriptions shown inline (single-column mode)
 		const t = text(lines);
 		expect(t).toContain("Battle-tested");
@@ -134,7 +149,7 @@ describe("renderQuestionView — split pane", () => {
 // ── Q-15 ~ Q-17: Other 编辑器模式 ───────────────────────
 describe("renderQuestionView — Other editor mode", () => {
 	it("Q-15: freeform mode renders Other row in-place with draft + cursor + number prefix", () => {
-		const lines = renderQuestionView(
+		const lines = rv(
 			singleQ,
 			makeState({ mode: "freeform", cursorIndex: 2 }),
 			stubTheme,
@@ -161,7 +176,7 @@ describe("renderQuestionView — Other editor mode", () => {
 			multiSelect: true,
 			options: [{ label: "Auth" }, { label: "Search" }],
 		};
-		const lines = renderQuestionView(
+		const lines = rv(
 			multiQ,
 			makeState({ mode: "freeform", cursorIndex: 2 }),
 			stubTheme,
@@ -181,7 +196,7 @@ describe("renderQuestionView — Other editor mode", () => {
 	});
 
 	it("Q-16: Other with saved free-text shows checkmark + preview", () => {
-		const lines = renderQuestionView(
+		const lines = rv(
 			singleQ,
 			makeState({ cursorIndex: 2, freeTextValue: "saved text" }),
 			stubTheme,
@@ -195,7 +210,7 @@ describe("renderQuestionView — Other editor mode", () => {
 	});
 
 	it("Q-17: Other row focused shows Enter hint (Tab now navigates tabs)", () => {
-		const lines = renderQuestionView(
+		const lines = rv(
 			singleQ,
 			makeState({ cursorIndex: 2 }),
 			stubTheme,
@@ -212,7 +227,7 @@ describe("renderQuestionView — Other editor mode", () => {
 		const width = 30;
 		// lead = "> [ ] " (单选 box="  ") = 6 列 → avail = 24
 		const long = "x".repeat(60);
-		const lines = renderQuestionView(
+		const lines = rv(
 			singleQ,
 			makeState({ mode: "freeform", cursorIndex: 2 }),
 			stubTheme,
@@ -245,7 +260,7 @@ describe("renderQuestionView — Other editor mode", () => {
 		// 单选 lead visLen=5 → avail = width - 5 = 95。用 60 字符（< 95）应单行装下。
 		// 修复前若用 split.left≈40，avail≈35 → 60 字符会换 2 行。
 		const input = "a".repeat(60);
-		const lines = renderQuestionView(
+		const lines = rv(
 			singleQ,
 			makeState({ mode: "freeform", cursorIndex: 2 }),
 			stubTheme,
@@ -265,7 +280,7 @@ describe("renderQuestionView — Other editor mode", () => {
 		const width = 30;
 		// avail=24，200 字符 → 9 行，超过 5 行上限
 		const huge = "y".repeat(200);
-		const lines = renderQuestionView(
+		const lines = rv(
 			singleQ,
 			makeState({ mode: "freeform", cursorIndex: 2 }),
 			stubTheme,
@@ -286,7 +301,7 @@ describe("renderQuestionView — Other editor mode", () => {
 		const width = 40;
 		// 预览 lead="     "(5 列) → avail=35；预览文本带引号
 		const long = "z".repeat(80);
-		const lines = renderQuestionView(
+		const lines = rv(
 			singleQ,
 			makeState({ cursorIndex: 2, freeTextValue: long }),
 			stubTheme,
@@ -306,7 +321,7 @@ describe("renderQuestionView — Other editor mode", () => {
 		const width = 30;
 		// 预览 avail = 30-5 = 25，300 字符 → >5 行
 		const huge = "w".repeat(300);
-		const lines = renderQuestionView(
+		const lines = rv(
 			singleQ,
 			makeState({ cursorIndex: 2, freeTextValue: huge }),
 			stubTheme,
@@ -323,7 +338,7 @@ describe("renderQuestionView — Other editor mode", () => {
 // ── Q-18 ~ Q-19: 评论模式 ───────────────────────────────
 describe("renderQuestionView — comment mode", () => {
 	it("Q-18: comment mode renders editor with note text", () => {
-		const lines = renderQuestionView(
+		const lines = rv(
 			singleQ,
 			makeState({ mode: "comment", selectedIndex: 0 }),
 			stubTheme,
@@ -337,7 +352,7 @@ describe("renderQuestionView — comment mode", () => {
 	});
 
 	it("Q-19: comment prompt includes (optional)", () => {
-		const lines = renderQuestionView(
+		const lines = rv(
 			singleQ,
 			makeState({ mode: "comment", selectedIndex: 0 }),
 			stubTheme,
@@ -352,7 +367,7 @@ describe("renderQuestionView — comment mode", () => {
 // ── Q-20 ~ Q-23: 帮助行 ─────────────────────────────────
 describe("renderQuestionView — help line", () => {
 	it("Q-20: single-select help shows 'Enter select'", () => {
-		const lines = renderQuestionView(singleQ, makeState(), stubTheme, 60, true, "");
+		const lines = rv(singleQ, makeState(), stubTheme, 60, true, "");
 		expect(text(lines)).toContain("Enter select");
 	});
 
@@ -362,17 +377,17 @@ describe("renderQuestionView — help line", () => {
 			options: [{ label: "A" }, { label: "B" }],
 			multiSelect: true,
 		};
-		const lines = renderQuestionView(multiQ, makeState(), stubTheme, 60, true, "");
+		const lines = rv(multiQ, makeState(), stubTheme, 60, true, "");
 		expect(text(lines)).toContain("Space toggle");
 	});
 
 	it("Q-22: single question omits tab-switch hint", () => {
-		const lines = renderQuestionView(singleQ, makeState(), stubTheme, 60, true, "");
+		const lines = rv(singleQ, makeState(), stubTheme, 60, true, "");
 		expect(text(lines)).not.toContain("switch tabs");
 	});
 
 	it("Q-23: multi question includes tab-switch hint", () => {
-		const lines = renderQuestionView(singleQ, makeState(), stubTheme, 60, false, "");
+		const lines = rv(singleQ, makeState(), stubTheme, 60, false, "");
 		expect(text(lines)).toContain("switch tabs");
 	});
 });
@@ -381,7 +396,7 @@ describe("renderQuestionView — help line", () => {
 describe("renderQuestionView — Other row alignment", () => {
 	it("Q-32: 单选 Other freeform 编辑行编号与普通选项对齐", () => {
 		// 回归：单选 freeform 占位从 \"  \"(2列) 改为 \" \"(1列)，编号列与普通单选对齐
-		const lines = renderQuestionView(
+		const lines = rv(
 			singleQ,
 			makeState({ mode: "freeform", cursorIndex: 2 }),
 			stubTheme,
@@ -402,7 +417,7 @@ describe("renderQuestionView — Other row alignment", () => {
 			multiSelect: true,
 			options: [{ label: "Auth" }, { label: "Search" }],
 		};
-		const lines = renderQuestionView(
+		const lines = rv(
 			multiQ,
 			makeState({ cursorIndex: 2 }),
 			stubTheme,
@@ -417,7 +432,7 @@ describe("renderQuestionView — Other row alignment", () => {
 
 	it("Q-34: 单选 Other freeText 预览缩进对齐到 label 起始列", () => {
 		// 回归：预览 lead 从硬编码 6 列改为动态计算（单选个位 = 7 列）
-		const lines = renderQuestionView(
+		const lines = rv(
 			singleQ,
 			makeState({ cursorIndex: 2, freeTextValue: "saved" }),
 			stubTheme,
@@ -437,7 +452,7 @@ describe("renderQuestionView — Other row alignment", () => {
 			multiSelect: true,
 			options: [{ label: "Auth" }, { label: "Search" }],
 		};
-		const lines = renderQuestionView(
+		const lines = rv(
 			multiQ,
 			makeState({ cursorIndex: 2, freeTextValue: "saved" }),
 			stubTheme,
@@ -456,7 +471,7 @@ describe("renderQuestionView — Other row alignment", () => {
 			question: "Q",
 			options: Array.from({ length: 10 }, (_, k) => ({ label: `Opt${k + 1}` })),
 		};
-		const lines = renderQuestionView(
+		const lines = rv(
 			bigQ,
 			makeState({ cursorIndex: 10, freeTextValue: "x" }),
 			stubTheme,
@@ -474,12 +489,12 @@ describe("renderQuestionView — Other row alignment", () => {
 describe("renderQuestionView — context", () => {
 	it("Q-24: renders context when present", () => {
 		const q: Question = { ...singleQ, context: "Background info here" };
-		const lines = renderQuestionView(q, makeState(), stubTheme, 60, true, "");
+		const lines = rv(q, makeState(), stubTheme, 60, true, "");
 		expect(text(lines)).toContain("Background info here");
 	});
 
 	it("Q-25: no context field → no extra context text", () => {
-		const lines = renderQuestionView(singleQ, makeState(), stubTheme, 60, true, "");
+		const lines = rv(singleQ, makeState(), stubTheme, 60, true, "");
 		// No "context" label text in output (only question/options/help)
 		expect(text(lines)).toContain("Which database?");
 	});
@@ -488,7 +503,7 @@ describe("renderQuestionView — context", () => {
 // ── Q-26 ~ Q-27: 边界 ───────────────────────────────────
 describe("renderQuestionView — edge cases", () => {
 	it("Q-26: very narrow terminal width=20 does not crash", () => {
-		const lines = renderQuestionView(singleQ, makeState(), stubTheme, 20, true, "");
+		const lines = rv(singleQ, makeState(), stubTheme, 20, true, "");
 		expect(lines.length).toBeGreaterThan(0);
 	});
 
@@ -497,7 +512,7 @@ describe("renderQuestionView — edge cases", () => {
 			question: "Q",
 			options: [{ label: "A".repeat(80), description: "desc" }, { label: "B" }],
 		};
-		const lines = renderQuestionView(q, makeState(), stubTheme, 40, true, "");
+		const lines = rv(q, makeState(), stubTheme, 40, true, "");
 		// Should not contain the full 80-char label on a 40-col terminal
 		const t = text(lines);
 		expect(t).not.toContain("A".repeat(80));

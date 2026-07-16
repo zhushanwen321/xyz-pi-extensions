@@ -10,6 +10,7 @@
 
 import type { AgentToolResult } from "@mariozechner/pi-coding-agent";
 
+import { SLUG_MAX_LENGTH } from "../execution/execute-options-mapper.ts";
 import { computeElapsedSeconds } from "../execution/execution-record.ts";
 import type { ModelInfo } from "../execution/model-resolver.ts";
 import type { SubagentService } from "../execution/subagent-service.ts";
@@ -26,7 +27,8 @@ import {
   type GuiContext,
   guiResult,
   isGuiCapable,
-} from "./gui-adapter.ts";
+} from "@xyz-agent/extension-protocol";
+import { mapRunIcon, mapRunStatus } from "./gui-mappers.ts";
 
 // ============================================================
 // 常量
@@ -44,9 +46,11 @@ const BG_MESSAGE = "detached, will notify on completion";
 // 入参 / 出参类型
 // ============================================================
 
-/** start 入参（从 tool params.startParam 来，task 必填）。 */
+/** start 入参（从 tool params.startParam 来，task + slug 必填）。 */
 export interface StartHandlerInput {
   task?: string;
+  /** 短标签（≤20 字符），必填。 */
+  slug?: string;
   agent?: string;
   model?: string;
   thinkingLevel?: string;
@@ -68,6 +72,8 @@ export type StartHandlerResult = {
   kind: "bg";
   subagentId: string;
   sessionFile: string | undefined;
+  /** 短标签，来自 record（handle.details.slug）。用于 result 行展示。 */
+  slug: string;
   response: BgResponse;
 };
 
@@ -108,6 +114,7 @@ function recordToListItem(r: SubagentRecord): SubagentListItem {
   return {
     subagentId: r.id,
     agent: r.agent,
+    slug: r.slug,
     status: r.status,
     mode: r.mode,
     duration: computeElapsedSeconds(r),
@@ -131,9 +138,14 @@ export async function startHandler(
   // task 必填 + 空白校验（G-008）
   const task = input.task?.trim();
   if (!task) throw new Error("startParam.task is required (and must not be whitespace-only)");
+  // slug 必填 + 空白校验 + 长度校验（≤ SLUG_MAX_LENGTH 字符）
+  const slug = input.slug?.trim();
+  if (!slug) throw new Error("startParam.slug is required (and must not be whitespace-only)");
+  if (slug.length > SLUG_MAX_LENGTH) throw new Error(`startParam.slug must be ≤${SLUG_MAX_LENGTH} chars (got ${slug.length})`);
 
   const handle = await service.execute({
     task,
+    slug,
     agent: input.agent,
     model: input.model,
     thinkingLevel: input.thinkingLevel,
@@ -155,6 +167,7 @@ export async function startHandler(
     kind: "bg",
     subagentId: handle.subagentId,
     sessionFile: handle.sessionFile,
+    slug: handle.details.slug,
     response: {
       status: "running",
       mode: "background",
@@ -199,7 +212,7 @@ export async function cancelHandler(
 
   // step 1: id 不存在（findRecord 只查内存 running record，不从 session.jsonl 重建）
   const rec = service.findRecord(id);
-  if (!rec) throw new Error(`No subagent record with id "${id}"`);
+  if (!rec) throw new Error(`No subagent record with id "${id}". It may have finished — use action:'list' with includeFinished:true to verify.`);
   // step 2: controller 检查（controller 为 undefined 表示 record 已终态或未启动）
   if (rec.mode !== "background") {
     throw new Error(`Cannot cancel subagent ${id} (unsupported mode: ${rec.mode})`);
@@ -239,7 +252,7 @@ export function adapter(
   let result: SubagentToolResult;
   if (action === "start") {
     const d = input.domain;
-    result = { action, subagentId: d.subagentId, sessionFile: d.sessionFile ?? null, bgResponse: d.response };
+    result = { action, subagentId: d.subagentId, sessionFile: d.sessionFile ?? null, slug: d.slug, bgResponse: d.response };
   } else if (action === "list") {
     result = { action, subagentId: null, sessionFile: null, listResponse: input.domain.response };
   } else {
@@ -249,42 +262,42 @@ export function adapter(
   // content JSON：LLM 看的结构化结果（schema 模式 parsedOutput 作为嵌套 JSON 值可接受）。
   const text = JSON.stringify(result);
 
-  // GUI 协议：RPC 模式下附加结构化渲染数据
-  const details: Record<string, unknown> = { ...result };
-  if (ctx && isGuiCapable(ctx)) {
-    details.__gui__ = guiResult(buildGuiComponent(action, input, result));
-  }
+  // GUI 协议：RPC 模式下附加结构化渲染数据（union 各成员已声明 __gui__?，无需强转）
+  const details: SubagentToolResult = ctx && isGuiCapable(ctx)
+    ? { ...result, __gui__: guiResult(buildGuiComponent(action, input, result)) }
+    : result;
 
   return {
     content: [{ type: "text", text }],
-    details: details as unknown as SubagentToolResult,
+    details,
   };
 }
 
 /** 按 action 构造对应的 GuiComponent。 */
-function buildGuiComponent(
+export function buildGuiComponent(
   action: string,
   input: AdapterInput,
   _result: SubagentToolResult,
 ) {
   if (action === "start") {
-    return guiComponent("subagent-trace", {
-      agent: "subagent",
-      status: "running" as const,
+    // subagent-trace 多层语义（agent名+slug+状态）用 card(stats-line) 组合表达。
+    // 利用 input.domain 的身份信息，让并发 subagent 可区分。
+    const d = input.domain as StartHandlerResult;
+    return guiComponent("card", {
+      header: d.slug ? `${d.slug}` : d.subagentId.slice(0, 8),
+      body: [guiComponent("stats-line", {
+        items: [{ value: "running", severity: "ok" }],
+      })],
     });
   }
   if (action === "list") {
     const listResp = input.domain as ListHandlerResult;
-    return guiComponent("task-list", {
-      title: `Subagents (${listResp.response.running} running)`,
+    return guiComponent("list-tree", {
       items: listResp.response.items.map((it) => ({
-        label: `${it.agent} · ${it.subagentId}`,
-        status: it.status === "running" ? "in_progress" as const
-          : it.status === "done" ? "completed" as const
-          : it.status === "failed" ? "failed" as const
-          : "pending" as const,
+        label: it.slug ? `${it.agent} · ${it.slug} · ${it.subagentId}` : `${it.agent} · ${it.subagentId}`,
+        status: mapRunStatus(it.status),
+        icon: mapRunIcon(it.status),
       })),
-      summary: `${listResp.response.running}/${listResp.response.items.length} running`,
     });
   }
   // cancel

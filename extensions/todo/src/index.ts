@@ -7,7 +7,7 @@
  *
  * 文件职责：
  * - state.ts:    TodoSessionState 会话状态接口 + 工厂（闭包内创建，session 隔离）
- * - model.ts:    纯函数数据层（Todo 类型、migrateTodo 兼容迁移、addTodos/updateTodos、format/buildRender）
+ * - model.ts:    纯函数数据层（Todo 类型、migrateTodo 兼容迁移、addTodos/updateTodos、format/buildGui）
  * - tool.ts:     todo tool 注册 — 5 个 action（list/add/update/delete/clear）+ execute dispatcher
  * - handlers.ts: 5 个事件处理器（session_start/session_tree/agent_start/before_agent_start/agent_end）
  *                + reconstructState（回放最后一条 todo toolResult）+ steer 四机制（autoClear/completion/stall/reminder）

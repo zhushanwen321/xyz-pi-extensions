@@ -10,8 +10,9 @@
  *
  * 层归属：Engine。零 infra 依赖（AC-1）。
  */
-import type { AgentEvent } from "../../shared/agent-event.ts";
 import type { AgentRegistry } from "../../execution/agent-registry.ts";
+import type { StreamSink, SubagentStream } from "../../execution/stream-sink.ts";
+import type { AgentEvent } from "../../shared/agent-event.ts";
 import type { WorkerHandle } from "../worker-handle.ts";
 import type { RunSpec } from "./run-spec.ts";
 import type { AgentCallOpts, AgentResult } from "./types.ts";
@@ -32,7 +33,7 @@ import type { WorkflowRun } from "./workflow-run.ts";
  * raw JSONL 中间层（executeAndAwait 直接出 AgentEvent，session-runner handleSdkEvent 出口）。
  */
 export interface AgentRunner {
-  run(opts: AgentCallOpts, signal: AbortSignal, onEvent?: (event: AgentEvent) => void): Promise<AgentResult>;
+  run(opts: AgentCallOpts, signal: AbortSignal, onEvent?: (event: AgentEvent) => void, stream?: SubagentStream): Promise<AgentResult>;
 }
 
 // ── Port 2: RunStore ──────────────────────────────────────────
@@ -42,10 +43,13 @@ export interface AgentRunner {
  *
  * save 在每次状态变更后持久化整个 WorkflowRun（聚合根）；
  * loadAll 在 session_start 时重水合（D-5：JSONL 不向后兼容旧 session，旧格式返回空）。
+ * stateFilePath 返回 run 状态文件的绝对路径（供 overlay/GUI 暴露给用户）。
  */
 export interface RunStore {
   save(run: WorkflowRun): Promise<void>;
   loadAll(): Promise<WorkflowRun[]>;
+  /** 返回 run 状态快照文件的绝对路径：<sessionDir>/workflow-state/<runId>.jsonl */
+  stateFilePath(runId: string): string;
 }
 
 // ── Port 3: WorkerHost ────────────────────────────────────────
@@ -162,4 +166,13 @@ export interface LifecycleDeps {
     args: Record<string, unknown>,
     parentRun: WorkflowRun,
   ) => Promise<unknown>;
+ /**
+ * UI streaming sink（ctx.ui.setWidget），workflow agent call 创建 SubagentStream 用。
+ *
+ * 由 Interface 层 makeDeps 注入（从 SubagentService.getStreamSink() 取）。
+ * dispatchAgentCall 用它创建 SubagentStream（widgetKey=subagent-stream-<runId>-<stepIndex>），
+ * 使 workflow agent call 的 text_delta 走与 background subagent 相同的 streaming 链路。
+ * 可选——无 UI 模式（TUI/RPC 无 setWidget）时为 undefined，dispatchAgentCall 不创建 stream。
+ */
+  streamSink?: StreamSink;
 }

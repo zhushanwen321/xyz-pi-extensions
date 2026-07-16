@@ -1,8 +1,8 @@
 // src/submit-view.ts
 import { truncateToWidth } from "@mariozechner/pi-tui";
 
+import { formatAnswer } from "./answer-format";
 import {
-	ANSWER_COMMENT_SEPARATOR,
 	HEADER_MAX_CHARS,
 	type Question,
 	type QuestionState,
@@ -44,9 +44,7 @@ export function getAnswerText(q: Question, s: QuestionState): string | null {
 		if (label) parts.push(label);
 	}
 	if (s.freeTextValue !== null) parts.push(s.freeTextValue);
-	if (parts.length === 0) return null;
-	const base = parts.join(", ");
-	return s.commentValue ? `${base}${ANSWER_COMMENT_SEPARATOR}${s.commentValue}` : base;
+	return formatAnswer(parts, s.commentValue);
 }
 
 /**

@@ -14,6 +14,11 @@ import { createHash } from "node:crypto";
 import * as fs from "node:fs";
 import * as path from "node:path";
 
+import type { AgentResult as WorkflowAgentResult } from "../orchestration/models/types.ts";
+// D-A10: workflow 侧 AgentResult 映射（executeAndAwait 出口）
+import { mapToWorkflowAgentResult } from "./agent-result-mapper.ts";
+import { removeAliveMarker } from "./alive-store.ts";
+import { bestEffort } from "./best-effort.ts";
 import { type ConcurrencyPool,DefaultConcurrencyPool } from "./concurrency-pool.ts";
 import {
   completeRecord,
@@ -22,10 +27,19 @@ import {
   snapshot,
   tryTransition,
 } from "./execution-record.ts";
+import { writeFinalized } from "./finalized-marker.ts";
+import type { ModelConfigService } from "./model-config-service.ts";
 import type { AgentConfig, ModelInfo, ResolvedModel } from "./model-resolver.ts";
+import type { BgNotifyRecord, NotifierHost } from "./notifier.ts";
+import { BgNotifier } from "./notifier.ts";
 import { getSubagentSessionDir } from "./path-encoding.ts";
+import type { StatusFilter } from "./record-store.ts";
+import { RecordStore } from "./record-store.ts";
 import { MAX_FORK_DEPTH } from "./session-context-resolver.ts";
 import { killAllSpawnedChildren, runSpawn, type SessionRunnerContext } from "./session-runner.ts";
+import type { StreamSink } from "./stream-sink.ts";
+import { SubagentStream } from "./stream-sink.ts";
+import { writeCancelledTombstone } from "./tombstone-store.ts";
 import type { WorktreeHandle } from "./types.ts";
 import type {
   AgentEvent,
@@ -40,20 +54,7 @@ import type {
 } from "./types.ts";
 import { ForkDepthExceededError } from "./types.ts";
 import { DEFAULT_AGENT_NAME } from "./types.ts";
-import { bestEffort } from "./best-effort.ts";
-import { removeAliveMarker } from "./alive-store.ts";
-import { writeFinalized } from "./finalized-marker.ts";
-import type { StatusFilter } from "./record-store.ts";
-import { RecordStore } from "./record-store.ts";
-import { writeCancelledTombstone } from "./tombstone-store.ts";
-
-// D-A10: workflow 侧 AgentResult 映射（executeAndAwait 出口）
-import { mapToWorkflowAgentResult } from "./agent-result-mapper.ts";
-import type { AgentResult as WorkflowAgentResult } from "../orchestration/models/types.ts";
-import type { ModelConfigService } from "./model-config-service.ts";
 import { WorktreeManager } from "./worktree-manager.ts";
-import { BgNotifier } from "./notifier.ts";
-import type { BgNotifyRecord, NotifierHost } from "./notifier.ts";
 
 /** Pi ExtensionAPI 的最小接口（duck-typed）。
  *  subagent-service 直接调 pi.sendMessage 发 background 完成通知（BgNotifier 滑动窗口合并），
@@ -66,6 +67,11 @@ interface PiLike {
     options?: { triggerTurn?: boolean; deliverAs?: "steer" | "followUp" | "nextTurn" },
   ): void;
 }
+
+/** UI streaming sink 的最小接口（ctx.ui.setWidget 的 duck-typed 子集）。
+ *  session_start 时从 ctx.ui 注入，background 执行期间用于把合并后的 text_delta
+ *  通过 setWidget 通道转发到 RPC stdout（不经 sendMessage 的持久化路径）。 */
+export type { StreamSink } from "./stream-sink.ts";
 
 /** pending-notifications 注册/注销 helper（避免重复代码）。 */
 function emitPendingRegister(pi: PiLike | null, id: string, name?: string): void {
@@ -100,6 +106,8 @@ export interface SubagentServiceInit {
 export interface SubagentServiceSessionInit {
   pi: PiLike;
   sessionId: string;
+  /** UI streaming sink（ctx.ui.setWidget），用于 background text_delta 转发。 */
+  streamSink?: StreamSink;
 }
 
 /** background 优先级（保留 priority 排序机制，单一值）。 */
@@ -162,6 +170,9 @@ export class SubagentService {
   private pi: PiLike | null = null;
   /** 当前 Pi session ID（session 隔离过滤用）。initSession 时注入。 */
   private sessionId: string | null = null;
+  /** UI streaming sink（ctx.ui.setWidget）。workflow 域经 getStreamSink() 取用。 */
+  private streamSink: StreamSink | null = null;
+  getStreamSink(): StreamSink | null { return this.streamSink; }
   private _disposed = false;
   private _seq = 0;
   /** background 完成通知器（滑动窗口合并 + 去重）。session_start revive，shutdown dispose。 */
@@ -198,6 +209,7 @@ export class SubagentService {
   initSession(init: SubagentServiceSessionInit): void {
     this.pi = init.pi;
     this.sessionId = init.sessionId;
+    this.streamSink = init.streamSink ?? null;
     // [SPAWN fork depth 跨进程传递] 子进程被父 spawn 时，父通过 env
     // PI_SUBAGENT_FORK_DEPTH 传入当前 fork 链深度。子进程 session_start 时
     // 读取作为 forkDepthAls 基线，使后续嵌套 spawn fork 能从正确深度递增。
@@ -430,6 +442,7 @@ export class SubagentService {
     opts: ExecuteOptions,
     signal?: AbortSignal,
     onEvent?: (event: AgentEvent) => void,
+    stream?: SubagentStream,
   ): Promise<WorkflowAgentResult> {
     this.assertReady();
 
@@ -455,8 +468,7 @@ export class SubagentService {
     // ── 步骤 4: signal 决议 ──
     const effectiveSignal = signal ?? record.controller?.signal;
 
-    // ── 步骤 5: runAndFinalize（await，不 detached）──
-    // BC-11：onUpdate 置 undefined（不回流 tool UI 细节），onEvent 独立传（AgentEvent 透传 workflow）
+    // 步骤 5: runAndFinalize（await，不 detached）。onUpdate=undefined（BC-11），onEvent 独立传，stream 透传。
     const result = await this.runAndFinalize(
       record,
       { ...opts, onUpdate: undefined },
@@ -465,6 +477,7 @@ export class SubagentService {
       effectiveSignal,
       PRIORITY_BACKGROUND,
       onEvent,
+      stream,
     );
 
     // ── 步骤 6: D-A10 AgentResult 映射 ──
@@ -538,6 +551,7 @@ export class SubagentService {
       thinkingLevel: identity.resolved.thinkingLevel,
       mode,
       task: opts.task,
+      slug: opts.slug,
       startedAt: Date.now(),
       rootSessionId: this.sessionId ?? undefined,
       parentRecordId,
@@ -567,13 +581,20 @@ export class SubagentService {
     signal: AbortSignal | undefined,
     priority: number,
     rawOnEvent?: (event: AgentEvent) => void,
+    stream?: SubagentStream,
   ): Promise<AgentResult> {
-    // 仅 background 进并发池限流，分层配额：每层嵌套 depth 让有效配额 -1（下限 1）。
-    // 顶层 depth=0 拿满配额；嵌套越深有效并发越小，防子 agent fan-out 压垮主 agent 的 pool。
     const pooled = record.mode === "background";
+    let acquired = false;
     if (pooled) {
       const effectiveMaxConcurrent = Math.max(1, this.pool.maxConcurrent - record.depth);
-      await this.pool.acquire(priority, effectiveMaxConcurrent);
+      try {
+        await this.pool.acquire(priority, effectiveMaxConcurrent, signal);
+        acquired = true;
+      } catch {
+        // S1: 排队中被 abort（signal.aborted）走 cancelled，与已运行被 abort 一致。
+        if (signal?.aborted) return this.finalizeAborted(record);
+        return this.finalizeFailed(record, new Error("aborted"));
+      }
     }
     // onEvent 包装：AgentEvent → onUpdate(project(record)) 回流调用方
     const onEvent = rawOnEvent
@@ -581,16 +602,12 @@ export class SubagentService {
         ? (event: AgentEvent): void => this.onEventThrottled(record, event, opts.onUpdate!)
         : undefined);
 
-    // 解析 worktree 参数：boolean → WorktreeHandle | undefined
+    // 解析 worktree 参数：boolean → WorktreeHandle | undefined（true/undefined 由 run 内部处理）
     let worktreeHandle: WorktreeHandle | undefined;
     if (typeof opts.worktree === "object") {
       worktreeHandle = opts.worktree;
     }
-    // worktree=true 或 undefined 时不传递 handle，由 run 内部处理
-
-    // [MF#4][MF#2] fork 深度护栏：深度按 async 调用链传递（ALS），不再用共享实例计数器。
-    // parentDepth = 当前调用链的深度（主 session 链上无 store→0）；fork 时推进为 parentDepth+1，
-    // 包进 run() 的 ALS 作用域，使子 agent 在 prompt() 期间发起的嵌套 execute 能读到该深度。
+    // [MF#4][MF#2] fork 深度护栏：ALS 传递深度（主 session 链无 store→0，fork 推进 +1）。
     const parentDepth = this.forkDepthAls.getStore() ?? 0;
     const effectiveDepth = opts.fork ? parentDepth + 1 : parentDepth;
 
@@ -612,6 +629,7 @@ export class SubagentService {
             graceTurns: opts.graceTurns,
             signal,
             onEvent,
+            stream, // text_delta streaming（background 路径有值，workflow 路径 undefined）
             fork: opts.fork,
             worktree: worktreeHandle,
             parentForkDepth: parentDepth, // [MF#4] 父链深度，不从 opts 读
@@ -626,7 +644,9 @@ export class SubagentService {
       result = await this.finalizeFailed(record, err);
       return result;
     } finally {
-      if (pooled) this.pool.release();
+      if (pooled && acquired) this.pool.release();
+      // 清除 streaming widget（subagent 终态，幂等）
+      stream?.dispose();
     }
 
     // status 唯一判定点：success ? done : (aborted ? cancelled : failed)
@@ -650,7 +670,15 @@ export class SubagentService {
     signal: AbortSignal | undefined,
     priority: number,
   ): void {
-    void this.runAndFinalize(record, opts, ctx, identity, signal, priority)
+    // 创建 streaming 生命周期对象——streamSink 为 null（session_start 未注入）时降级为 undefined。
+    const stream = this.streamSink
+      ? new SubagentStream(record.id, this.streamSink)
+      : undefined;
+
+    void this.runAndFinalize(
+      record, opts, ctx, identity, signal, priority,
+      undefined, stream,
+    )
       .then(() => {
         // background 回注：仅当本路径抢到 CAS（status 已转 done/failed）才 notify。
         // cancel 抢先时 status=cancelled，cancelBackground 自己 notify，此处跳过。
@@ -732,10 +760,9 @@ export class SubagentService {
   ): Promise<void> {
     // 终态清节流状态：防 trailing timer 在 record 归档后误发陈旧 onUpdate
     this.clearThrottle(record.id);
-    // ── Step 0: collectPatch（best-effort，D-022 patchOk 守卫）──
+    // ── Step 0: collectPatch（best-effort）──
     // [MF#3] patchFile 写到 worktree 之外（sessionsDir/<branch>.patch），避免被 cleanup 删除；
     //        路径回填 record.patchFile，供调用方（tool result / /subagents list）应用。
-    let patchOk = true;
     if (record.worktreeHandle) {
       try {
         const sessionsDir = getSubagentSessionDir(
@@ -745,12 +772,9 @@ export class SubagentService {
         fs.mkdirSync(sessionsDir, { recursive: true });
         const patchFile = path.join(sessionsDir, `${record.worktreeHandle.branch}.patch`);
         const patch = this.worktreeManager.collectPatch(record.worktreeHandle, patchFile);
-        patchOk = !patch.failed;
-        // 仅 patch 实际写盘（非空 diff 且未失败）才回填，避免指向不存在文件的悬空路径——
-        // 否则 notifier/render/sync 路径会向 LLM 输出 `git apply <不存在>`（纯查询任务命中）。
         if (patch.written) record.patchFile = patchFile;
-      } catch {
-        patchOk = false;
+      } catch (pe: unknown) {
+        bestEffort(pe, "collectPatch (finalizeRecord Step0)");
       }
     }
 
@@ -787,7 +811,7 @@ export class SubagentService {
         bestEffort(err, "writeFinalized/tombstone (finalizeRecord Step3)");
       }
     }
-    if (record.worktreeHandle && patchOk) {
+    if (record.worktreeHandle) {
       try {
         this.worktreeManager.cleanup(record.worktreeHandle);
       } catch (err) {
@@ -816,20 +840,21 @@ export class SubagentService {
   private async finalizeFailed(record: ExecutionRecord, err: unknown): Promise<AgentResult> {
     const errMsg = err instanceof Error ? err.message : String(err);
     // durationMs 用真实耗时（startedAt → now），避免失败统计恒为 0 失真。
-    const failedResult: AgentResult = {
-      text: "",
-      turns: record.turnCount,
-      durationMs: Date.now() - record.startedAt,
-      success: false,
-      error: errMsg,
-      sessionId: record.id,
-      toolCalls: [],
-    };
+    const failedResult: AgentResult = { text: "", turns: record.turnCount, durationMs: Date.now() - record.startedAt, success: false, error: errMsg, sessionId: record.id, toolCalls: [] };
     // CAS 抢锁：抢到（status 仍 running）则完整收尾；没抢到（cancel 已先设 cancelled）跳过。
     if (tryTransition(record, "failed")) {
       await this.finalizeRecord(record, failedResult, "failed");
     }
     return failedResult;
+  }
+
+  /** S1: 排队中被 abort 走 cancelled 终态（对齐已运行被 abort 的 cancelBackground）。 */
+  private async finalizeAborted(record: ExecutionRecord): Promise<AgentResult> {
+    const cancelledResult: AgentResult = { text: "", turns: record.turnCount, durationMs: Date.now() - record.startedAt, success: false, error: "cancelled by user", sessionId: record.id, toolCalls: [] };
+    if (tryTransition(record, "cancelled")) {
+      await this.finalizeRecord(record, cancelledResult, "cancelled");
+    }
+    return cancelledResult;
   }
 
   // onUpdate 节流状态（per-record Map）。每条 record（每条 onUpdate 回流链）独立节流，

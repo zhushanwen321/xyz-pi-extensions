@@ -29,6 +29,9 @@
     "typecheck": "npx tsc --noEmit",
     "test": "vitest run"
   },
+  "dependencies": {
+    "@xyz-agent/extension-protocol": "^0.2.0"
+  },
   "devDependencies": {
     "@earendil-works/pi-tui": "*",
     "@sinclair/typebox": "*",

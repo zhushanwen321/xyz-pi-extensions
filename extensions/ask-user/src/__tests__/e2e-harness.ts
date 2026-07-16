@@ -72,6 +72,7 @@ export function makeE2E(questions: Question[], opts: E2EOptions = {}): E2EApi {
 		controller.signal,
 		undefined,
 		{
+			mode: hasUI ? "tui" : "print",
 			hasUI,
 			signal: controller.signal,
 			ui: {

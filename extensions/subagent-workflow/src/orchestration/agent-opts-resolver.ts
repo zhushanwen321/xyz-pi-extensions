@@ -50,7 +50,10 @@ export function resolveAgentOpts(
  // Resolve agent system prompt
   if (opts.agent) {
     const discovered = agentRegistry.get(opts.agent);  // 新 API: get() 替代 resolve()，返回 AgentConfig（含 systemPrompt+model）
-    if (!discovered) return { opts, error: `Agent not found: ${opts.agent}` };
+    if (!discovered) {
+      const available = agentRegistry.list().join(", ");
+      return { opts, error: `Agent not found: ${opts.agent}. Available: ${available || "(none)"}` };
+    }
 
     const hasSystemPrompt = discovered.systemPrompt.trim().length > 0;
     if (hasSystemPrompt) {
@@ -67,7 +70,13 @@ export function resolveAgentOpts(
       }
     }
 
-    opts = { ...opts, model: opts.model || discovered.model };
+    // M3: 用 === undefined 而非 ||，避免空串被当 falsy 替换成 frontmatter model
+    opts = {
+      ...opts,
+      model: opts.model === undefined ? discovered.model : opts.model,
+      // M2: 传播 agent .md frontmatter 的 thinkingLevel（之前 AgentCallOpts 无此字段导致丢失）
+      thinkingLevel: opts.thinkingLevel ?? discovered.thinkingLevel,
+    };
   }
 
  // Resolve skill name to SKILL.md path

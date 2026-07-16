@@ -26,14 +26,17 @@ import { type Static, Type } from "typebox";
 
 import type { LauncherDeps } from "../orchestration/launcher.ts";
 import { abortRun, pauseRun, resumeRun, runWorkflow } from "../orchestration/lifecycle.ts";
+import type { RunStore } from "../orchestration/models/ports.ts";
 import type { WorkflowRun } from "../orchestration/models/workflow-run.ts";
 import { retryNode, skipNode } from "../orchestration/node-ops.ts";
 import {
   guiComponent,
   type GuiContext,
+  type GuiRenderResult,
   guiResult,
   isGuiCapable,
-} from "./gui-adapter.ts";
+} from "@xyz-agent/extension-protocol";
+import { mapRunIcon, mapRunStatus, toGuiCtx } from "./gui-mappers.ts";
 import {
   acquireReentryGuard,
   REENTRY_BUSY_MESSAGE,
@@ -69,6 +72,14 @@ const WorkflowParams = Type.Object({
   name: Type.Optional(
     Type.String({ description: "Workflow name (run action)" }),
   ),
+  slug: Type.Optional(
+    Type.String({
+      description:
+        "Short label (max 20 chars) for this run, shown in the TUI to distinguish concurrent runs. " +
+        "If omitted, defaults to the script name.",
+      maxLength: 20,
+    }),
+  ),
   runId: Type.Optional(
     Type.String({ description: "Workflow run ID (pause/resume/abort/retry-node/skip-node)" }),
   ),
@@ -99,11 +110,15 @@ const RUNID_SHORT = 8;
 interface RunSummary {
   runId: string;
   name: string;
+  /** Run 级 slug（可选，旧 run 缺失为 undefined）。 */
+  slug?: string;
   status: string;
   reason?: string;
   startedAt?: string;
   completedAt?: string;
   error?: string;
+  /** Run 状态快照文件绝对路径（<sessionDir>/workflow-state/<runId>.jsonl）。 */
+  stateFile?: string;
 }
 
 // ── Tool result types ──
@@ -112,14 +127,14 @@ interface RunSummary {
  * Discriminated union of `workflow` tool `details` payloads.
  *
  * Discriminant: `action`. Each action's details shape is explicitly typed so
- * downstream consumers (GUI task-list renderer, structured-output) can narrow
+ * downstream consumers (GUI list-tree renderer, structured-output) can narrow
  * without unsafe casts.
  */
 export type WorkflowToolDetails =
-  | { action: "run"; runId: string; status: "running" | "not_found"; name: string }
-  | { action: "status"; runs: RunSummary[] }
-  | { action: "pause" | "resume" | "abort"; runId: string; status: string; reason?: string }
-  | { action: "retry-node" | "skip-node"; runId: string; callId: number };
+  | { action: "run"; runId: string; status: "running" | "not_found"; name: string; slug?: string; stateFile?: string; __gui__?: GuiRenderResult }
+  | { action: "status"; runs: RunSummary[]; __gui__?: GuiRenderResult }
+  | { action: "pause" | "resume" | "abort"; runId: string; status: string; reason?: string; __gui__?: GuiRenderResult }
+  | { action: "retry-node" | "skip-node"; runId: string; callId: number; __gui__?: GuiRenderResult };
 
 /** Result returned by the `workflow` tool's execute. */
 export interface ToolResult {
@@ -130,42 +145,57 @@ export interface ToolResult {
 
 // ── GUI 协议 helpers ───────────────────────────────────────
 
-/** 为 details 附加 __gui__（RPC 模式下）。 */
-function withGui<T extends WorkflowToolDetails | undefined>(
-  details: T,
+/** 为 details 附加 __gui__（RPC 模式下）。union 各成员已声明 __gui__?，无需强转。 */
+function withGui(
+  details: WorkflowToolDetails | undefined,
   ctx?: GuiContext,
-): Record<string, unknown> {
-  const out: Record<string, unknown> = details ? { ...details } : {};
-  if (ctx && isGuiCapable(ctx) && details) {
-    out.__gui__ = guiResult(buildWorkflowGui(details));
+): WorkflowToolDetails | undefined {
+  if (!details) return undefined;
+  if (ctx && isGuiCapable(ctx)) {
+    return { ...details, __gui__: guiResult(buildWorkflowGui(details)) };
   }
-  return out;
+  return details;
 }
 
 /** 按 WorkflowToolDetails 构造对应的 GuiComponent。 */
-function buildWorkflowGui(details: WorkflowToolDetails) {
+export function buildWorkflowGui(details: WorkflowToolDetails) {
   if (details.action === "run") {
-    return guiComponent("workflow-runs", {
-      runs: [{ runId: details.runId, name: details.name, status: details.status }],
+    // not_found 是脚本未找到的逻辑错误（isError:true），不能走通用 mapper 的 done/check 成功映射。
+    // 短路为 danger severity 的 stats-line，与 isError 文案一致。
+    if (details.status === "not_found") {
+      return guiComponent("stats-line", {
+        items: [{ label: "run", value: "not found", severity: "danger" as const }],
+      });
+    }
+    const statusStr = details.status;
+    return guiComponent("list-tree", {
+      items: [{
+        label: [details.name, details.slug, details.runId.slice(0, 8)].filter(Boolean).join(" "),
+        status: mapRunStatus(statusStr),
+        icon: mapRunIcon(statusStr),
+      }],
     });
   }
   if (details.action === "status") {
-    return guiComponent("workflow-runs", {
-      runs: details.runs.map((r) => ({
-        runId: r.runId,
-        name: r.name,
-        status: r.status,
-        reason: r.reason,
-        error: r.error,
-      })),
+    return guiComponent("list-tree", {
+      items: details.runs.map((r) => {
+        const statusStr = r.reason ? `${r.status} (${r.reason})` : r.status;
+        return {
+          label: [r.name, r.slug, r.runId.slice(0, 8)].filter(Boolean).join(" "),
+          status: mapRunStatus(statusStr),
+          icon: mapRunIcon(statusStr),
+        };
+      }),
     });
   }
   // pause/resume/abort/retry-node/skip-node
+  // abort 是破坏性终止、pause 是挂起（非成功完成），用 warn 区分；resume/retry/skip 保留 ok
+  const severity = details.action === "abort" || details.action === "pause" ? "warn" as const : "ok" as const;
   return guiComponent("stats-line", {
     items: [{
       label: details.action,
       value: details.runId.slice(0, 8),
-      severity: "ok" as const,
+      severity,
     }],
   });
 }
@@ -200,6 +230,15 @@ export function registerWorkflowTool(
     promptSnippet: "Run, pause, resume, abort, or check workflow status",
     promptGuidelines: [
       "PRIORITY: When user says 'workflow', 'run workflow', try run action FIRST.",
+      "BUILT-IN workflows (ready to use, no script generation needed): " +
+      "chain (analyze→transform→synthesize sequential; args: task), " +
+      "parallel (multi-perspective analysis; args: target, optional perspectives), " +
+      "scatter-gather (split→parallel process→merge; args: task), " +
+      "map-reduce (parallel map→reduce; args: items/itemsJson + operation). " +
+      "Example: workflow run chain --args task=\"<description>\".",
+      "DISCOVERY: If unsure what workflows exist, call the workflow-script tool with " +
+      "action:list first — it returns all available scripts (built-in + user-generated) " +
+      "with source tags and descriptions. Then use this tool's run action to start one.",
       "run: discover by name/description, then start in background (no user confirmation needed).",
       "Do NOT poll status after starting — results appear automatically via notifyDone.",
       "retry-node/skip-node: for specific failed agent calls (requires runId + callId). " +
@@ -260,7 +299,7 @@ export function registerWorkflowTool(
         // GUI 协议：RPC 模式下附加 __gui__ 到 details
         return {
           ...result,
-          details: withGui(result.details, _ctx as GuiContext) as unknown as WorkflowToolDetails,
+          details: withGui(result.details, toGuiCtx(_ctx)),
         };
       } finally {
         releaseReentryGuard(reentryRef);
@@ -270,11 +309,16 @@ export function registerWorkflowTool(
     renderCall(args: Record<string, unknown>, theme: Theme, _context?: unknown) {
       const action = String(args.action ?? "");
       const name = args.name ? ` ${String(args.name)}` : "";
+      // run action 可选 slug：在 name 后追加 · slug（accent 色）
+      const slug = typeof args.slug === "string" && args.slug.trim()
+        ? `${theme.fg("dim", " · ")}${theme.fg("accent", String(args.slug))}`
+        : "";
       const runId = args.runId ? ` ${String(args.runId).slice(0, RUNID_SHORT)}` : "";
       return new Text(
         theme.fg("toolTitle", theme.bold("workflow ")) +
           theme.fg("muted", action) +
           theme.fg("accent", name) +
+          slug +
           theme.fg("dim", runId),
         0,
         0,
@@ -330,6 +374,7 @@ async function actionRun(
       budgetTokens: tokens,
       budgetTimeMs: time,
       scriptName: script.name,
+      slug: params.slug,
       scriptPath: script.path,
       description: script.meta.description,
     },
@@ -341,10 +386,12 @@ async function actionRun(
     content: [
       {
         type: "text",
-        text: `Started workflow '${script.name}' (${runId}). Running in background — do NOT poll status.`,
+        text: params.slug
+          ? `Started workflow '${script.name}' · ${params.slug} (${runId}). Running in background — do NOT poll status.`
+          : `Started workflow '${script.name}' (${runId}). Running in background — do NOT poll status.`,
       },
     ],
-    details: { action: "run", runId, status: "running", name: script.name },
+    details: { action: "run", runId, status: "running", name: script.name, slug: params.slug, stateFile: deps.store.stateFilePath(runId) },
   };
 }
 
@@ -358,7 +405,7 @@ function actionStatus(deps: LauncherDeps): ToolResult {
       details: { action: "status", runs: [] },
     };
   }
-  const summaries = runs.map(toRunSummary);
+  const summaries = runs.map((r) => toRunSummary(r, deps.store));
   const lines = summaries.map((s) => {
     const duration = s.startedAt ? ` (${formatElapsed(s.startedAt)})` : "";
     const reasonSuffix = s.reason && s.reason !== "completed" ? ` [${s.reason}]` : "";
@@ -383,7 +430,10 @@ async function actionLifecycle(
   }
   const run = deps.runs.get(runId);
   if (!run) {
-    return textResult(`Workflow '${runId}' not found`, true);
+    return textResult(
+      `Workflow '${runId}' not found. Use action:status to list active runs and their runIds.`,
+      true,
+    );
   }
   try {
     const oldStatus = run.state.status;
@@ -421,7 +471,10 @@ async function actionRetryNode(params: WorkflowToolParams, deps: LauncherDeps): 
   }
   const run = deps.runs.get(runId);
   if (!run) {
-    return textResult(`Workflow '${runId}' not found`, true);
+    return textResult(
+      `Workflow '${runId}' not found. Use action:status to list active runs and their runIds.`,
+      true,
+    );
   }
   try {
     await retryNode(run, callId, deps);
@@ -445,7 +498,10 @@ async function actionSkipNode(params: WorkflowToolParams, deps: LauncherDeps): P
   }
   const run = deps.runs.get(runId);
   if (!run) {
-    return textResult(`Workflow '${runId}' not found`, true);
+    return textResult(
+      `Workflow '${runId}' not found. Use action:status to list active runs and their runIds.`,
+      true,
+    );
   }
   try {
     await skipNode(run, callId, deps);
@@ -464,15 +520,17 @@ async function actionSkipNode(params: WorkflowToolParams, deps: LauncherDeps): P
 // ── helpers ──────────────────────────────────────────────────
 
 /** WorkflowRun → 摘要（status action 用）。 */
-function toRunSummary(run: WorkflowRun): RunSummary {
+function toRunSummary(run: WorkflowRun, store: RunStore): RunSummary {
   return {
     runId: run.runId,
     name: run.spec.scriptName,
+    slug: run.spec.slug,
     status: run.state.status,
     reason: run.state.reason,
     startedAt: run.meta.startedAt,
     completedAt: run.meta.completedAt,
     error: run.state.error,
+    stateFile: store.stateFilePath(run.runId),
   };
 }
 

@@ -98,7 +98,14 @@ export function renderSubagentCall(
     ? (args as { startParam?: unknown }).startParam
     : undefined;
   const agent = extractAgentName(startParam);
-  const parts = [`${t.fg("toolTitle", t.bold("subagent "))}${t.fg("accent", agent)}`];
+  // slug：从 startParam 提取（必填字段），非空时在 agent 后用 · 分隔展示。
+  const slug = typeof startParam === "object" && startParam !== null && "slug" in startParam
+    ? (startParam as { slug?: unknown }).slug
+    : undefined;
+  const slugStr = typeof slug === "string" ? slug.trim() : "";
+  const parts = slugStr
+    ? [`${t.fg("toolTitle", t.bold("subagent "))}${t.fg("accent", agent)}${t.fg("dim", " · ")}${t.fg("accent", slugStr)}`]
+    : [`${t.fg("toolTitle", t.bold("subagent "))}${t.fg("accent", agent)}`];
 
   // model + thinking——完整 provider/model（accent 色），thinking 保持 dim。
   // 不去 provider 前缀——provider 是模型来源的关键信息，感知「用错模型」需要完整路径。
@@ -210,8 +217,9 @@ function buildCompactLines(d: SubagentToolResult, theme: ThemeLike): string[] {
   }
   // ── start 分支：background ──
   if ("bgResponse" in d) {
+    const slugPart = d.slug ? `${theme.fg("dim", " · ")}${theme.fg("accent", d.slug)}` : "";
     return [truncLine(
-      `${theme.fg("accent", "●")} ${theme.fg("dim", "background: ")}${theme.fg("accent", d.subagentId ?? "?")}`
+      `${theme.fg("accent", "●")} ${theme.fg("dim", "background: ")}${theme.fg("accent", d.subagentId ?? "?")}${slugPart}`
       + ` ${theme.fg("dim", "· running detached · will notify on completion")}`,
       width,
     )];
@@ -238,8 +246,9 @@ function buildExpandedLines(d: SubagentToolResult, theme: ThemeLike): string[] {
   const lines: string[] = [];
   // bg 占位 expanded 与 compact 同（一次性 block 无细节可展开）
   if ("bgResponse" in d) {
+    const slugPart = d.slug ? `${theme.fg("dim", " · ")}${theme.fg("accent", d.slug)}` : "";
     lines.push(truncLine(
-      `${theme.fg("accent", "●")} ${theme.fg("dim", "background: ")}${theme.fg("accent", d.subagentId ?? "?")}`,
+      `${theme.fg("accent", "●")} ${theme.fg("dim", "background: ")}${theme.fg("accent", d.subagentId ?? "?")}${slugPart}`,
       width,
     ));
     return lines;
@@ -302,7 +311,7 @@ function firstLineSanitized(text?: string): string {
 // list 渲染 helper（action:"list" 分支）
 // ============================================================
 
-/** list compact：标题行 + 每行一个 item 摘要（glyph + agent + mode + status + duration）。 */
+/** list compact：标题行 + 每行一个 item 摘要（glyph + agent + slug + mode + status + duration）。 */
 function renderListCompact(resp: ListResponse, theme: ThemeLike, width: number): string[] {
   if (resp.items.length === 0) {
     return [truncLine(theme.fg("dim", `No subagents (running: ${resp.running})`), width)];
@@ -314,7 +323,9 @@ function renderListCompact(resp: ListResponse, theme: ThemeLike, width: number):
     const glyph = statusGlyph(it.status);
     const icon = glyph.icon ?? "●";
     const mode = "bg";
-    const line = `${theme.fg(glyph.color, icon)} ${theme.fg("accent", it.agent)}`
+    // slug 非空时在 agent 后展示（· 分隔），空串时省略。
+    const slugPart = it.slug ? `${theme.fg("dim", " · ")}${theme.fg("accent", it.slug)}` : "";
+    const line = `${theme.fg(glyph.color, icon)} ${theme.fg("accent", it.agent)}${slugPart}`
       + ` ${theme.fg("dim", `· ${mode} · ${it.status} · ${formatElapsedSeconds(it.duration)}`)}`;
     lines.push(truncLine(`${STREAM_PREFIX}${line}`, width));
   }

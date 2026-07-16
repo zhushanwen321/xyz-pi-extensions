@@ -87,6 +87,7 @@ export function buildDetailContent(
   renderPromptSection(rightLines, node, state, theme);
   renderActivitySection(rightLines, node, mainWidth, theme);
   renderOutcomeSection(rightLines, node, mainWidth, theme);
+  renderSessionSection(rightLines, node, mainWidth, theme);
   return rightLines;
 }
 
@@ -295,4 +296,23 @@ function renderOutcomeSection(
       rightLines.push(...tail.map((l) => `  ${l.slice(0, mainWidth - BOX_BORDER_CHARS)}`));
     }
   }
+}
+
+/**
+ * 渲染 session jsonl 路径行（agent 级）。
+ *
+ * 对齐 subagents list-component 的 `session:` 行渲染（dim 色 + 截断）。
+ * sessionFile 是绝对路径，可能很长——截断到 mainWidth 防溢出。
+ * 窗口期（session 尚未创建）sessionFile 为 undefined，整段不渲染。
+ */
+function renderSessionSection(
+  rightLines: string[],
+  node: ExecutionTraceNode,
+  mainWidth: number,
+  theme: ThemeLike,
+): void {
+  if (!node.sessionFile) return;
+  rightLines.push("");
+  const line = `session: ${node.sessionFile}`.slice(0, mainWidth - BOX_BORDER_CHARS);
+  rightLines.push(theme.fg("dim", `  ${line}`));
 }

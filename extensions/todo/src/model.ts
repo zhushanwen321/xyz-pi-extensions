@@ -4,6 +4,8 @@
  * （cancelled 不可恢复；isVerification 标记验证任务，FR-6 completion audit 用）
  */
 
+import { guiComponent, type GuiRenderResult, guiResult, type TreeItem } from "@xyz-agent/extension-protocol";
+
 // ── 数据模型 ─────────────────────────────────────────
 
 export interface Todo {
@@ -18,14 +20,8 @@ export interface TodoDetails {
 	action: "list" | "add" | "update" | "delete" | "clear";
 	todos: Todo[];
 	nextId: number;
-	_render?: {
-		type: "task-list";
-		summary?: string;
-		data: {
-			items: Array<{ id: number; text: string; status: string }>;
-			meta: Record<string, string>;
-		};
-	};
+	/** GUI 渲染结果（仅 RPC 模式填充，前端 list-tree 渲染）。对齐 extension-protocol@0.2.0。 */
+	__gui__?: GuiRenderResult;
 }
 
 export const VALID_STATUSES = ["pending", "in_progress", "completed", "cancelled"] as const;
@@ -64,19 +60,42 @@ export function migrateTodo(raw: Todo): Todo {
 	};
 }
 
-// ── 渲染辅助 ─────────────────────────────────────────
+// ── GUI 渲染辅助 ─────────────────────────────────────
 
-export function buildRender(todoList: Todo[]): TodoDetails["_render"] {
-	const completed = todoList.filter((t) => t.status === "completed").length;
-	const total = todoList.length;
-	return {
-		type: "task-list" as const,
-		summary: `${completed}/${total} completed`,
-		data: {
-			items: todoList.map((t) => ({ id: t.id, text: t.text, status: t.status })),
-			meta: {},
-		},
-	};
+/**
+ * 把 todos 映射为 list-tree GuiRenderResult（对齐 extension-protocol@0.2.0）。
+ * status → icon/status 映射：
+ *   pending      → dot      / 无 status
+ *   in_progress  → circle   / running
+ *   completed    → check    / done
+ *   cancelled    → cross    / failed
+ */
+export function buildGui(todos: Todo[]): GuiRenderResult {
+	const items: TreeItem[] = todos.map((t) => {
+		const icon =
+			t.status === "completed"
+				? "check"
+				: t.status === "in_progress"
+					? "circle"
+					: t.status === "cancelled"
+						? "cross"
+						: "dot"; // pending
+		const status =
+			t.status === "in_progress"
+				? "running"
+				: t.status === "completed"
+					? "done"
+					: t.status === "cancelled"
+						? "failed"
+						: undefined; // pending 无 status
+		return {
+			icon,
+			label: `#${t.id}: ${t.text}`,
+			status,
+			depth: 0,
+		};
+	});
+	return guiResult(guiComponent("list-tree", { items }));
 }
 
 export function getDisplayStatus(t: Todo): string {

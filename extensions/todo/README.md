@@ -98,7 +98,7 @@ todo/
 └── src/
     ├── index.ts          # 工厂入口（创建 state + 注册 tool/command/event）
     ├── state.ts          # TodoSessionState 会话状态接口 + 工厂
-    ├── model.ts          # 纯函数数据层（类型/迁移/addTodos/updateTodos/format/buildRender）
+    ├── model.ts          # 纯函数数据层（类型/迁移/addTodos/updateTodos/format/buildGui）
     ├── tool.ts           # todo tool 注册 — 5 action + execute dispatcher
     ├── handlers.ts       # 5 事件处理器 + reconstructState + steer 四机制
     ├── render.ts         # status line / widget / tool result 三层渲染

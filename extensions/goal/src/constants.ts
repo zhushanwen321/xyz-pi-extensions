@@ -24,6 +24,7 @@ export const BUDGET_PERCENT_LOW = 70;    // widget 颜色变黄
 // ── 长度/数量上限 ───────────────────────────────────
 
 export const UPDATE_PREFIX_LENGTH = 7;        // "update ".length
+export const SHORT_ID_LENGTH = 8;             // goalId 截取前 8 字符作短标识（GUI 显示 fallback）
 
 // ── 百分比换算因子 ──────────────────────────────────
 

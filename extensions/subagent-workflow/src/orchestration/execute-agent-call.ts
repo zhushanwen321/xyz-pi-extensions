@@ -23,6 +23,7 @@
  * 参考：domain-models.md §5 + §失败处理矩阵。
  */
 
+import type { SubagentStream } from "../execution/stream-sink.ts";
 import type { AgentEvent } from "../shared/agent-event.ts";
 import type { AgentCall } from "./models/agent-call.ts";
 import type { Budget } from "./models/budget.ts";
@@ -81,11 +82,15 @@ function backoffDelay(retryIndex: number): number {
 function finalizeCall(call: AgentCall, result: AgentResult, trace: Trace): void {
   call.markDone(result);
   const status = result.error === undefined ? "completed" : "failed";
+  // 同步 AgentCall 的 sessionId/sessionFile（对齐 trace 节点，持久化 + reset 用）
+  if (result.sessionId !== undefined) call.setSessionId(result.sessionId);
+  if (result.sessionFile !== undefined) call.setSessionFile(result.sessionFile);
   trace.update(call.id, {
     status,
     result,
     completedAt: new Date().toISOString(),
     sessionId: result.sessionId,
+    sessionFile: result.sessionFile,
   });
 }
 
@@ -93,7 +98,10 @@ function finalizeCall(call: AgentCall, result: AgentResult, trace: Trace): void 
  * 延迟工具（testable —— 测试可通过 fake timers 推进）。
  */
 function delay(ms: number): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, ms));
+  return new Promise((resolve) => {
+    const timer = setTimeout(resolve, ms);
+    timer.unref();
+  });
 }
 
 // ── executeAgentCall ─────────────────────────────────────────
@@ -124,10 +132,11 @@ export async function executeAgentCall(
   signal: AbortSignal,
   trace: Trace,
   onEvent?: (event: AgentEvent) => void,
+  stream?: SubagentStream,
 ): Promise<void> {
   call.markRunning();
 
-  const result = await runner.run(call.opts, signal, onEvent);
+  const result = await runner.run(call.opts, signal, onEvent, stream);
 
  // 累加 usage（加权由 budget.consume 内部按权重常量处理，见 budget.ts）
   if (result.usage) {
@@ -164,7 +173,7 @@ export async function executeAgentCall(
       budget.incrementCallCount();
       return;
     }
-    await executeAgentCall(call, runner, budget, signal, trace, onEvent);
+    await executeAgentCall(call, runner, budget, signal, trace, onEvent, stream);
     return;
   }
 

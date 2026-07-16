@@ -38,6 +38,7 @@ import { SubprocessAgentRunner } from "./execution/subprocess-agent-runner.ts";
 import { WorktreeManager } from "./execution/worktree-manager.ts";
 import { renderBgNotifyMessage } from "./interface/bg-notify-render.ts";
 import { registerWorkflowsCommand } from "./interface/commands.ts";
+import { toGuiCtx } from "./interface/gui-mappers.ts";
 import { notifyDone } from "./interface/helpers.ts";
 import { registerSubagentTool } from "./interface/subagent-tool.ts";
 // ═══ interface/ 层（tools/commands/tui 合并） ═══
@@ -168,7 +169,7 @@ export default function subagentsWorkflowExtension(pi: ExtensionAPI): void {
       runner: state.runner,
       runs: state.runs,
       registry,
-      onRunDone: (run: WorkflowRun) => notifyDone(pi, run.runId, run, notifiedRunIds, sessionCtx),
+      onRunDone: (run: WorkflowRun) => notifyDone(pi, run.runId, run, notifiedRunIds, toGuiCtx(sessionCtx)),
       agentRegistry: state.agentRegistry,
       sessionDir: state.sessionDir,
       activeTempFiles: state.activeTempFiles,
@@ -177,6 +178,7 @@ export default function subagentsWorkflowExtension(pi: ExtensionAPI): void {
         scheduleTimeBudget(runId, deps, budgetTimeMs),
       onWorkflowCall: (name: string, args: Record<string, unknown>, parentRun: WorkflowRun) =>
         executeNestedWorkflow(name, args, parentRun, deps),
+      streamSink: getSubagentService()?.getStreamSink() ?? undefined,
       log,
     };
     return deps;
@@ -214,6 +216,11 @@ export default function subagentsWorkflowExtension(pi: ExtensionAPI): void {
     service.initSession({
       pi,
       sessionId: ctx.sessionManager.getSessionId(),
+      // 注入 ctx.ui.setWidget 作为 streaming sink（只绑方法，不持有整个 ctx）。
+      // background subagent 执行期间，text_delta 经 SubagentStream 合并后由此通道转发。
+      streamSink: {
+        setWidget: (key, lines) => ctx.ui.setWidget(key, lines),
+      },
     });
 
     if (!existingService) {
@@ -296,10 +303,16 @@ export default function subagentsWorkflowExtension(pi: ExtensionAPI): void {
   // ════════════════════════════════════════════════════════════
   //  model_select：用户切换 model 时刷新缓存
   // ════════════════════════════════════════════════════════════
-  pi.on("model_select", (event: { model: NonNullable<ExtensionContext["model"]> }, _ctx: ExtensionContext) => {
+  pi.on("model_select", (event: { model: NonNullable<ExtensionContext["model"]> }, ctx: ExtensionContext) => {
     const service = getModelConfigService();
     if (service && typeof service.setCtxModel === "function") {
       service.setCtxModel(event.model);
+    }
+    // H1: 同步刷新所有 session 的 SAR ctxModel（旧实现只在 session_start 固化）
+    const sid = ctx.sessionManager.getSessionId();
+    const state = sessionState.get(sid);
+    if (state) {
+      state.runner.updateCtxModel(event.model);
     }
   });
 

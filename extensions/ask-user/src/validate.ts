@@ -55,6 +55,17 @@ export function validateInput(questions: Question[]): string | null {
 				return `Question "${q.question}" requires a non-empty header in multi-question mode (it labels the tab). Provide a header of <=12 chars.`;
 			}
 		}
+
+		// S3: 多问题时 header 唯一——重复 header 会导致 askUserKey 碰撞，
+		// 后一个 question 的 __other/__comment 覆盖前一个（协议 helper 用 header 作 answers 读取 key）。
+		const seenHeaders = new Set<string>();
+		for (const q of questions) {
+			const h = q.header!.trim();
+			if (seenHeaders.has(h)) {
+				return `Duplicate header "${h}" in questions. Headers must be unique in multi-question mode — shared headers cause answer key collisions (one question's Other/comment overwrites another's). Rephrase one header to differ.`;
+			}
+			seenHeaders.add(h);
+		}
 	}
 
 	// 4. header 长度上限（若提供）。单/多问题均校验：超出会在 tab 栏被静默截断，

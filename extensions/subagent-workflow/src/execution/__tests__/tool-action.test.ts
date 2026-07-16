@@ -23,6 +23,7 @@ function makeDetails(over: Partial<SubagentToolDetails> = {}): SubagentToolDetai
     agent: "worker",
     model: "test/model",
     thinkingLevel: undefined,
+    slug: "test-slug",
     turns: 1,
     totalTokens: 10,
     elapsedSeconds: 1,
@@ -40,6 +41,7 @@ function makeSnapshot(over: Partial<RecordSnapshot> = {}): RecordSnapshot {
     thinkingLevel: undefined,
     mode: "background",
     task: "t",
+    slug: "test-slug",
     status: "done",
     eventLog: [],
     turns: 1,
@@ -74,7 +76,24 @@ describe("startHandler", () => {
 
   it("task 空白 → throw", async () => {
     const svc = makeService();
-    await expect(startHandler(svc, { task: "   " }, undefined)).rejects.toThrow(/task is required/);
+    await expect(startHandler(svc, { task: "   ", slug: "x" }, undefined)).rejects.toThrow(/task is required/);
+  });
+
+  it("slug 缺失 → throw", async () => {
+    const svc = makeService();
+    await expect(startHandler(svc, { task: "ok" }, undefined)).rejects.toThrow(/slug is required/);
+  });
+
+  it("slug 空白 → throw", async () => {
+    const svc = makeService();
+    await expect(startHandler(svc, { task: "ok", slug: "   " }, undefined)).rejects.toThrow(/slug is required/);
+  });
+
+  it("slug 超 20 字符 → throw", async () => {
+    const svc = makeService();
+    await expect(
+      startHandler(svc, { task: "ok", slug: "a".repeat(21) }, undefined),
+    ).rejects.toThrow(/≤20 chars/);
   });
 
   it("background 启动 → kind=bg + bgResponse.message 含 detached", async () => {
@@ -86,7 +105,7 @@ describe("startHandler", () => {
         details: makeDetails({ status: "running", mode: "background" }),
       })),
     });
-    const r = await startHandler(svc, { task: "long" }, undefined);
+    const r = await startHandler(svc, { task: "long", slug: "long-running" }, undefined);
     expect(r.kind).toBe("bg");
     if (r.kind !== "bg") return;
     expect(r.subagentId).toBe("bg-1-123");
@@ -297,11 +316,11 @@ describe("cancelHandler", () => {
 // adapter
 // ============================================================
 describe("adapter", () => {
-  it("start bg → SubagentToolResult.bgResponse + content 合法 JSON（C3 回归）", () => {
+  it("start bg → SubagentToolResult.bgResponse + slug 透传 + content 合法 JSON（C3 回归）", () => {
     const r = adapter({
       action: "start",
       domain: {
-        kind: "bg", subagentId: "bg-1", sessionFile: undefined,
+        kind: "bg", subagentId: "bg-1", sessionFile: undefined, slug: "extract-urls",
         response: { status: "running", mode: "background", message: "detached, will notify on completion" },
       },
     });
@@ -309,9 +328,12 @@ describe("adapter", () => {
     expect(r.details.subagentId).toBe("bg-1");
     expect(r.details.bgResponse).toBeDefined();
     expect(r.details.sessionFile).toBeNull();
+    // slug 透传到 result（renderResult 的 background 行展示用）
+    expect(r.details.slug).toBe("extract-urls");
     // content JSON round-trip（bg 序列化回归）
     const parsed = JSON.parse(r.content[0]!.text);
     expect(parsed.bgResponse.message).toMatch(/detached/);
+    expect(parsed.slug).toBe("extract-urls");
   });
 
   it("list → 最外层 subagentId/sessionFile 为 null", () => {

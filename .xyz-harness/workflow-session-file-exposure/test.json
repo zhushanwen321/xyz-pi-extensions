@@ -1,0 +1,93 @@
+{
+  "testCases": [
+    {
+      "id": "U1",
+      "layer": "mock",
+      "priority": "P0",
+      "scenario": "mapToWorkflowAgentResult 透传 sessionFile：subagents AgentResult.sessionFile 绝对路径 → workflow AgentResult.sessionFile",
+      "steps": "构造带 sessionFile 的 SubagentsAgentResult，调 mapToWorkflowAgentResult，断言返回对象的 sessionFile 等于入参的绝对路径",
+      "expected": { "text": "/abs/path/.pi/agent/subagents/enc/sessions/2026-07-15T10-00-00-000Z_session-123.jsonl" },
+      "executor": "vitest",
+      "redCheck": true,
+      "requiresScreenshot": false,
+      "dependsOn": []
+    },
+    {
+      "id": "U2",
+      "layer": "mock",
+      "priority": "P0",
+      "scenario": "finalizeCall 将 result.sessionFile 写入 trace 节点：executeAgentCall 完成后 trace.find(callId).sessionFile === result.sessionFile",
+      "steps": "mock runner.run 返回带 sessionFile + sessionId 的 AgentResult，执行 executeAgentCall，断言 trace 节点 sessionFile 携带绝对路径",
+      "expected": { "text": "/abs/.pi/agent/subagents/enc/sessions/2026-07-15T_session-abc.jsonl" },
+      "executor": "vitest",
+      "redCheck": true,
+      "requiresScreenshot": false,
+      "dependsOn": []
+    },
+    {
+      "id": "U3",
+      "layer": "mock",
+      "priority": "P0",
+      "scenario": "jsonl-run-store 序列化 round-trip：AgentCall.sessionFile 写入快照文件（save 后读磁盘 JSON 验证 calls[].sessionFile 有值）",
+      "steps": "构造带 sessionFile 的 done AgentCall 的 WorkflowRun，调 store.save，读磁盘快照 JSON，断言 calls[0].sessionFile 等于绝对路径",
+      "expected": { "text": "/abs/.pi/agent/subagents/enc/sessions/2026-07-15T_session-abc.jsonl" },
+      "executor": "vitest",
+      "redCheck": true,
+      "requiresScreenshot": false,
+      "dependsOn": []
+    },
+    {
+      "id": "U4",
+      "layer": "mock",
+      "priority": "P0",
+      "scenario": "jsonl-run-store 序列化 round-trip：ExecutionTraceNode.sessionFile 写入快照文件",
+      "steps": "构造带 sessionFile 的 done trace node 的 WorkflowRun，调 store.save，读磁盘快照 JSON，断言 trace[0].sessionFile 等于绝对路径",
+      "expected": { "text": "/abs/.pi/agent/subagents/enc/sessions/2026-07-15T_session-abc.jsonl" },
+      "executor": "vitest",
+      "redCheck": true,
+      "requiresScreenshot": false,
+      "dependsOn": []
+    },
+    {
+      "id": "U5",
+      "layer": "mock",
+      "priority": "P1",
+      "scenario": "RunStore.stateFilePath(runId) 返回 run 状态文件绝对路径 <sessionDir>/workflow-state/<runId>.jsonl",
+      "steps": "构造 JsonlRunStore(sessionDir=tmpDir)，调 stateFilePath('run-xyz')，断言返回 path.join(tmpDir, 'workflow-state', 'run-xyz.jsonl')",
+      "expected": { "text": "workflow-state/run-xyz.jsonl" },
+      "executor": "vitest",
+      "redCheck": true,
+      "requiresScreenshot": false,
+      "dependsOn": []
+    },
+    {
+      "id": "U6",
+      "layer": "mock",
+      "priority": "P1",
+      "scenario": "WorkflowToolDetails / RunSummary 类型声明 + toRunSummary 填充 stateFile（源码断言验证 tool-workflow.ts 含 stateFilePath 调用）",
+      "steps": "读 tool-workflow.ts 源码，断言 RunSummary 含 stateFile?:string 声明、toRunSummary 调用 store.stateFilePath、actionRun details 引用 stateFilePath",
+      "expected": { "text": "stateFilePath" },
+      "executor": "vitest",
+      "redCheck": true,
+      "requiresScreenshot": false,
+      "dependsOn": []
+    },
+    {
+      "id": "E1",
+      "layer": "real",
+      "priority": "P1",
+      "scenario": "全量测试套件绿灯：W1+W2 实现完成后 npx vitest run 全部通过（exit 0）",
+      "steps": "实现 W1（类型+mapper+trace+序列化）+ W2（stateFilePath+details）后跑全量 vitest，确认 0 失败",
+      "expected": { "text": "0" },
+      "executor": "shell",
+      "redCheck": false,
+      "requiresScreenshot": false,
+      "dependsOn": ["U1", "U2", "U3", "U4", "U5", "U6"]
+    }
+  ],
+  "testRunner": {
+    "mode": "nodejs",
+    "command": "npx vitest run",
+    "cwd": "extensions/subagent-workflow"
+  }
+}

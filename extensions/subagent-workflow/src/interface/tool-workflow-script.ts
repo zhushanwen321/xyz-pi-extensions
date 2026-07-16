@@ -23,9 +23,17 @@ import type { ExtensionAPI, ExtensionContext, Theme } from "@mariozechner/pi-cod
 import { Text } from "@mariozechner/pi-tui";
 import { type Static, Type } from "typebox";
 
+import {
+  guiComponent,
+  type GuiContext,
+  type GuiRenderResult,
+  guiResult,
+  isGuiCapable,
+} from "@xyz-agent/extension-protocol";
 import type { WorkflowScriptRegistry } from "../orchestration/models/workflow-script-registry.ts";
 import { lintScript } from "../orchestration/script-lint.ts";
 import { deleteWorkflow, saveWorkflow } from "../orchestration/workflow-files.ts";
+import { toGuiCtx } from "./gui-mappers.ts";
 import { renderTextFallback } from "./views/format.ts";
 
 // ── Parameter schema ─────────────────────────────────────────
@@ -60,17 +68,82 @@ type ScriptParams = Static<typeof WorkflowScriptParams>;
  * can distinguish error shape from success.
  */
 export type WorkflowScriptToolDetails =
-  | { action: "generate"; path: string; name: string; status: "ready" }
-  | { action: "lint"; name: string; valid: boolean; findingCount: number }
-  | { action: "list"; count: number }
-  | { action: "save"; name: string; ok: boolean }
-  | { action: "delete"; name: string; ok: boolean };
+  | { action: "generate"; path: string; name: string; status: "ready"; __gui__?: GuiRenderResult }
+  | { action: "lint"; name: string; valid: boolean; findingCount: number; __gui__?: GuiRenderResult }
+  | { action: "list"; count: number; __gui__?: GuiRenderResult }
+  | { action: "save"; name: string; ok: boolean; __gui__?: GuiRenderResult }
+  | { action: "delete"; name: string; ok: boolean; __gui__?: GuiRenderResult };
 
 /** Result returned by the `workflow-script` tool's execute. */
 export interface TextContent {
   content: Array<{ type: "text"; text: string }>;
   details: WorkflowScriptToolDetails | undefined;
   isError?: boolean;
+}
+
+// ── GUI 协议 helpers ───────────────────────────────────────
+
+/**
+ * 为 details 附加 __gui__（RPC 模式下）。
+ *
+ * 所有 5 个 action 都映射到 stats-line（单行统计，无复杂结构）：
+ *   - generate: 显示生成的脚本名
+ *   - lint: passed / N findings
+ *   - list: 脚本数量
+ *   - save/delete: ok/warn
+ */
+function withScriptGui(
+  result: TextContent,
+  ctx?: GuiContext,
+): TextContent {
+  if (!ctx || !isGuiCapable(ctx) || !result.details) return result;
+  const details = result.details;
+  // union 各成员已声明 __gui__?，spread + 补字段类型安全，无需强转
+  return {
+    ...result,
+    details: { ...details, __gui__: guiResult(buildScriptGui(details)) },
+  };
+}
+
+/** 按 WorkflowScriptToolDetails 构造 stats-line GuiComponent。 */
+export function buildScriptGui(details: WorkflowScriptToolDetails) {
+  switch (details.action) {
+    case "generate":
+      return guiComponent("stats-line", {
+        items: [{ label: "generated", value: details.name, severity: "ok" }],
+      });
+    case "lint":
+      return guiComponent("stats-line", {
+        items: [
+          {
+            label: "lint",
+            value: details.valid ? "passed" : `${details.findingCount} findings`,
+            severity: details.valid ? "ok" : "warn",
+          },
+        ],
+      });
+    case "list":
+      return guiComponent("stats-line", {
+        items: [{ label: "scripts", value: String(details.count), severity: "ok" }],
+      });
+    case "save":
+    case "delete":
+      return guiComponent("stats-line", {
+        items: [
+          {
+            label: details.action,
+            value: details.name,
+            severity: details.ok ? "ok" : "warn",
+          },
+        ],
+      });
+    default:
+      // 防御性兜底：action 是有限联合类型，理论不可达。
+      // 若未来新增 action 忘了更新此 switch，返回中性 stats-line 而非 undefined。
+      return guiComponent("stats-line", {
+        items: [{ label: "action", value: String((details as { action: string }).action), severity: "warn" }],
+      });
+  }
 }
 
 // ── Tool registration ────────────────────────────────────────
@@ -92,14 +165,22 @@ export function registerWorkflowScriptTool(
     label: "Workflow Script",
     description:
       "Manage workflow scripts: generate (AI creates tmp script), lint (static check), " +
-      "save (tmp→permanent), delete, list. Replaces workflow-generate + workflow-lint tools.",
+      "save (tmp→permanent), delete, list. Before generating a new script, use action:list " +
+      "to check if a built-in workflow (chain/parallel/scatter-gather/map-reduce) already " +
+      "covers the use case. Replaces workflow-generate + workflow-lint tools.",
     promptSnippet: "Generate, lint, save, delete, or list workflow scripts",
     promptGuidelines: [
       "generate: AI writes a tmp workflow script to .pi/workflows/.tmp/. Script can be run immediately via the workflow tool.",
       "lint: Statically check a script for common API misuse (outputSchema, result.output, file state).",
       "save: Promote a tmp script to permanent (.pi/workflows/).",
       "delete: Remove a script (blocked if a run is active).",
-      "list: Show all available workflow scripts with source tags.",
+      "list: Show all available workflow scripts with source tags. " +
+      "Use this to discover built-in workflows (chain/parallel/scatter-gather/map-reduce) " +
+      "and user-generated scripts before starting a run. After listing, start a script via " +
+      "the workflow tool with action:run and the script name.",
+      "ANTI-PATTERN: Do NOT generate a new script for chain/parallel/scatter-gather/map-reduce " +
+      "orchestration — these are built-in. Call action:list first. Generate only when no built-in " +
+      "matches the use case.",
     ],
     parameters: WorkflowScriptParams,
 
@@ -108,22 +189,31 @@ export function registerWorkflowScriptTool(
       params: ScriptParams,
       signal: AbortSignal | undefined,
       _onUpdate: unknown,
-      _ctx: ExtensionContext,
+      ctx: ExtensionContext,
     ): Promise<TextContent> {
+      let result: TextContent;
       switch (params.action) {
         case "generate":
-          return actionGenerate(params, signal);
+          result = actionGenerate(params, signal);
+          break;
         case "lint":
-          return actionLint(params, registry);
+          result = await actionLint(params, registry);
+          break;
         case "save":
-          return actionSave(params);
+          result = await actionSave(params);
+          break;
         case "delete":
-          return actionDelete(params, registry, isRunning);
+          result = actionDelete(params, registry, isRunning);
+          break;
         case "list":
-          return await actionList(registry);
+          result = await actionList(registry);
+          break;
         default:
-          return textResult(`Unknown action: ${String(params.action)}`, true);
+          result = textResult(`Unknown action: ${String(params.action)}`, true);
+          break;
       }
+      // GUI 协议：RPC 模式下附加 __gui__ 到 details
+      return withScriptGui(result, toGuiCtx(ctx));
     },
 
     renderCall(args: ScriptParams, theme: Theme, _context?: unknown) {
@@ -228,7 +318,15 @@ async function actionLint(
   }
   const source = await loadScriptSource(name, registry);
   if (!source) {
-    return textResult(`Workflow '${name}' not found or not available.`, true);
+    const all = await registry.loadAll();
+    const available = all.filter((wf) => wf.available);
+    const suggestions = available
+      .map((wf) => `  - ${wf.name}: ${wf.meta.description || "(no description)"}`)
+      .join("\n");
+    return textResult(
+      `Workflow '${name}' not found or not available.\nAvailable:\n${suggestions || "  (none)"}`,
+      true,
+    );
   }
 
   const result = lintScript(source);

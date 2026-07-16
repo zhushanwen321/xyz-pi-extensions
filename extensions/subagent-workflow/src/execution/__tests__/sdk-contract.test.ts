@@ -174,13 +174,14 @@ describe("subagent tool contract [MANDATORY]", () => {
       mode: "background",
       subagentId: "bg-test",
       sessionFile: "/test/session.jsonl",
+      details: { slug: "test-slug" },
     });
     const ctxModel = { id: "test-model", name: "Test", provider: "test", reasoning: false };
     const ctx = { model: ctxModel } as object;
 
     await capturedExecute!(
       "call-1",
-      { action: "start", startParam: { task: "test task" } },
+      { action: "start", startParam: { task: "test task", slug: "test-slug" } },
       undefined,
       undefined,
       ctx,
@@ -188,7 +189,7 @@ describe("subagent tool contract [MANDATORY]", () => {
 
     expect(mockServiceExecute).toHaveBeenCalledTimes(1);
     expect(mockServiceExecute).toHaveBeenCalledWith(
-      expect.objectContaining({ ctxModel }),
+      expect.objectContaining({ ctxModel, slug: "test-slug" }),
     );
   });
 
@@ -212,6 +213,7 @@ describe("subagent tool contract [MANDATORY]", () => {
       mode: "background",
       subagentId: "bg-fork-wt",
       sessionFile: "/test/session.jsonl",
+      details: { slug: "iso-work" },
     });
 
     await capturedExecute!(
@@ -220,6 +222,7 @@ describe("subagent tool contract [MANDATORY]", () => {
         action: "start",
         startParam: {
           task: "isolated work",
+          slug: "iso-work",
           fork: true,
           worktree: true,
           cwd: "/x",

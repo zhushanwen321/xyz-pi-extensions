@@ -11,22 +11,17 @@ xyz-pi-extensions/
 ├── extensions/                  # Pi 扩展（可发布的 npm 包，@zhushanwen/pi-*）
 │   ├── goal/                → @zhushanwen/pi-goal
 │   ├── todo/                → @zhushanwen/pi-todo
-│   ├── design-status/       → @zhushanwen/pi-design-status (design 工作流 7 阶段状态/进度追踪 tool)
 │   ├── vision/             → @zhushanwen/pi-vision
 │   ├── coding-workflow/     → @zhushanwen/pi-coding-workflow (含 ~20 个 harness skills + L1/L2/L3 三档编码工作流：共享阶段 coding-init/coding-execute/coding-retrospect/coding-closeout + coding-visualizer 渲染工具 + lite-shared/mid-shared/full-shared 躯体；L1 lite-plan；L2 mid-plan/mid-detail-plan；L3 full-clarity/full-architecture/full-issues/full-nfr/full-code-arch/full-execution-plan；含 test-orchestrator tool 机器强制 E2E 测试门 + lib/gates 机器门控 ReviewGate/TestFixLoopGate)
-│   ├── claude-rules-loader/ → @zhushanwen/pi-claude-rules-loader
 │   ├── context-engineering/ → @zhushanwen/pi-context-engineering
 │   ├── evolve-daily/        → @zhushanwen/pi-evolve-daily (含 evolve skills + tracker 框架)
 │   ├── statusline/          → @zhushanwen/pi-statusline
 │   ├── structured-output/   → @zhushanwen/pi-structured-output
 │   ├── unified-hooks/       → @zhushanwen/pi-unified-hooks
 │   ├── subagent-workflow/ → @zhushanwen/pi-subagent-workflow (合并 subagents + workflow，单包统一执行链 + workflow() 嵌套编排 + 分层配额；ADR-030；含统一资源发现模块 src/shared/resource-discovery.ts，agent .md 与 workflow .js 共享扫描逻辑 + manifest 校验，ADR-031)
-│   ├── workflow/            → @zhushanwen/pi-workflow (⚠️ deprecated, superseded by pi-subagent-workflow, ADR-030)
 │   ├── model-switch/        → @zhushanwen/pi-model-switch
-│   ├── turn-timing/         → @zhushanwen/pi-turn-timing
 │   ├── plan/                → @zhushanwen/pi-plan
 │   ├── ask-user/            → @zhushanwen/pi-ask-user
-│   ├── subagents/           → @zhushanwen/pi-subagents (⚠️ deprecated, superseded by pi-subagent-workflow, ADR-030)
 │   └── pending-notifications/ → @zhushanwen/pi-pending-notifications
 ├── shared/                      # 内部共享包（private，不独立发布）
 │   ├── quota-providers/     → @zhushanwen/pi-quota-providers
@@ -55,7 +50,7 @@ xyz-pi-extensions/
 
 | 功能 | 归属目录 | 示例 |
 |------|---------|------|
-| Pi 扩展（产品） | `extensions/` | goal, todo, design-status, vision, statusline |
+| Pi 扩展（产品） | `extensions/` | goal, todo, vision, statusline |
 | 内部共享依赖 | `shared/` | quota-providers, types, taste-lint |
 | 独立 skills | `skills/` | vision-analysis, zcommit, create-worktree, remove-worktree, lightmerge-branch |
 | 共享脚本 | `scripts/` | publish.sh（运维）；gate 脚本见 `.githooks/` |
@@ -246,7 +241,7 @@ bash .githooks/check-structure
 
 - 扩展在 Pi 进程内执行，**不是独立进程**
 - 同一进程可能有多个 session。模块级 `let` 变量会被所有 session 共享，必须用闭包或 session_start 重建
-- 扩展不能依赖 fs 之外的 Node.js 原生模块（网络、child_process 等由 Pi 核心控制）。已知例外：`@zhushanwen/pi-subagent-workflow` 合并后走单执行链——SubprocessAgentRunner 委托 SubagentService.executeAndAwait（`executeAndAwait` → `runSpawn` → `spawn("pi", ["--mode","json"])` 子进程，进程隔离），`session-runner.runSpawn` 是唯一的 Pi 子进程 spawn 点（ADR-030 决策 2）；另在 `execFileSync("git", ...)` 等只读子进程调用上使用 child_process。旧包 `pi-workflow`/`pi-subagents` 的双 spawn 路径已 superseded（ADR-030）；旧包 `pi-subagents` 曾用的进程内 `createAgentSession()` 路径在合并时被有意回退为 spawn（进程隔离优先，见 ADR-025 Status 更新）
+- 扩展不能依赖 fs 之外的 Node.js 原生模块（网络、child_process 等由 Pi 核心控制）。已知例外：`@zhushanwen/pi-subagent-workflow` 走单执行链——SubprocessAgentRunner 委托 SubagentService.executeAndAwait（`executeAndAwait` → `runSpawn` → `spawn("pi", ["--mode","json"])` 子进程，进程隔离），`session-runner.runSpawn` 是唯一的 Pi 子进程 spawn 点（ADR-030 决策 2）；另在 `execFileSync("git", ...)` 等只读子进程调用上使用 child_process。已删除的旧包 `pi-workflow`/`pi-subagents` 的双 spawn 路径历史见 ADR-030；旧包 `pi-subagents` 曾用的进程内 `createAgentSession()` 路径在合并时被有意回退为 spawn（进程隔离优先，见 ADR-025 Status 更新）
 
 ### 资源自包含
 
@@ -294,7 +289,7 @@ bash .githooks/check-structure
 >
 > `_render` 协议已废弃，**禁止在新代码中使用**。新扩展不要在 `details` 中输出 `_render` 字段。
 >
-> - 现有实现（`extensions/todo`、`extensions/workflow`）作为遗留代码保留，待后续迭代中逐步清理
+> - 现有实现（`extensions/todo`）作为遗留代码保留，待后续迭代中逐步清理
 > - `extensions/goal` 已于 2026-06 清除，作为参考范例
 > - xyz-agent 侧不再实现/维护对应的消费组件
 > - 下方文档保留仅作历史参考，不代表当前推荐做法
@@ -554,7 +549,7 @@ GUI 组件（`TaskListWidget` 等）是 xyz-agent 的工作，扩展侧不需要
 凡调用 `pi.on(...)`、`pi.registerTool(...)`、`pi.registerCommand(...)`、读 `ctx.*` 的代码：
 
 - **ExtensionHandler 签名是 `(event, ctx) => ...`（两个参数）**。`modelRegistry`/`cwd`/`ui`/`sessionManager` 在第二个参数 `ExtensionContext` 上，不在 event 上。核对时打开真实 SDK 的 `types.d.ts`，不能只看 `shared/types/mariozechner/index.d.ts` 的 stub
-- 新增/修改 SDK 调用必须有契约测试覆盖（模板：`extensions/subagents/src/__tests__/sdk-contract.test.ts`）
+- 新增/修改 SDK 调用必须有契约测试覆盖（模板：`extensions/subagent-workflow/src/execution/__tests__/sdk-contract.test.ts`）
 - `registerTool` 的 schema 必填字段在所有执行模式下都必须真的必填；条件必填用 Optional + 运行时校验，避免 schema 与描述矛盾
 
 ### 行数
@@ -773,20 +768,15 @@ ln -s /path/to/xyz-pi-extensions/skills/<name> ~/.agents/skills/<name>
 | `extensions/todo/` | `@zhushanwen/pi-todo` | 轻量三态任务清单 | — |
 | `extensions/vision/` | `@zhushanwen/pi-vision` | 图片分析（vision model + memory session） | — |
 | `extensions/coding-workflow/` | `@zhushanwen/pi-coding-workflow` | L1/L2/L3 三档编码工作流 + 机器强制测试门 | 共享 5 (coding-init/execute/retrospect/closeout + coding-visualizer) + L1 lite-plan + L2 mid-plan/mid-detail-plan + L3 full-* 6 + 躯体 lite/mid/full-shared；含 test-orchestrator tool（4 action 机器重算 E2E 测试状态机）+ lib/gates（ReviewGate/TestFixLoopGate 机器门控） |
-| `extensions/design-status/` | `@zhushanwen/pi-design-status` | design 工作流 7 阶段状态/进度追踪 tool | — |
-| `extensions/claude-rules-loader/` | `@zhushanwen/pi-claude-rules-loader` | 加载 CLAUDE.md 规则 | — |
 | `extensions/context-engineering/` | `@zhushanwen/pi-context-engineering` | 渐进式上下文压缩 | — |
 | `extensions/evolve-daily/` | `@zhushanwen/pi-evolve-daily` | 每日数据收集 + Tracker 框架 | evolve, evolve-apply, evolve-report |
 | `extensions/statusline/` | `@zhushanwen/pi-statusline` | Pi 状态栏 | — |
 | `extensions/structured-output/` | `@zhushanwen/pi-structured-output` | Schema 结构化输出（tool call 机制） | — |
 | `extensions/unified-hooks/` | `@zhushanwen/pi-unified-hooks` | Hook 管理 | — |
 | `extensions/subagent-workflow/` | `@zhushanwen/pi-subagent-workflow` | 合并 subagents + workflow，单包统一执行链 + workflow() 嵌套编排（chain/parallel/scatter-gather/map-reduce）+ 分层配额（ADR-030） | workflow-script-format |
-| `extensions/workflow/` | `@zhushanwen/pi-workflow` | ⚠️ deprecated，superseded by pi-subagent-workflow（ADR-030）。通用 DAG 执行引擎 | — |
 | `extensions/model-switch/` | `@zhushanwen/pi-model-switch` | 模型切换 | — |
-| `extensions/turn-timing/` | `@zhushanwen/pi-turn-timing` | Turn 各阶段耗时记录 | — |
 | `extensions/plan/` | `@zhushanwen/pi-plan` | 轻量级 Plan Mode（brainstorming + writing-plans） | — |
 | `extensions/ask-user/` | `@zhushanwen/pi-ask-user` | 内联自适应 ask_user 工具（单/多问题、分屏预览、内联编辑器） | — |
-| `extensions/subagents/` | `@zhushanwen/pi-subagents` | ⚠️ deprecated，superseded by pi-subagent-workflow（ADR-030）。进程内 subagent 执行运行时（agent 发现、模型解析、并发控制） | — |
 | `extensions/pending-notifications/` | `@zhushanwen/pi-pending-notifications` | 异步操作注册表（EventBus + session entries 跟踪 workflow/subagent） | — |
 
 **`shared/`** — 内部共享包（private）

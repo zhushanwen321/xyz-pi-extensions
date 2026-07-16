@@ -25,27 +25,39 @@
  * 参考：domain-models.md §失败处理矩阵。
  */
 
+import { SLUG_MAX_LENGTH } from "../execution/execute-options-mapper.ts";
+import { createRecord, updateFromEvent } from "../execution/execution-record.ts";
+import { SubagentStream } from "../execution/stream-sink.ts";
 import type { AgentEvent } from "../shared/agent-event.ts";
 import { resolveAgentOpts } from "./agent-opts-resolver.ts";
 import { ConcurrencyGate, DEFAULT_CONCURRENCY } from "./concurrency-gate.ts";
-import type { WorkerHandle } from "./worker-handle.ts";
 import { executeAgentCall } from "./execute-agent-call.ts";
-import { createRecord, updateFromEvent } from "../execution/execution-record.ts";
 import { AgentCall } from "./models/agent-call.ts";
 import type { LifecycleDeps, WorkerHandlers } from "./models/ports.ts";
 import { RunRuntime } from "./models/run-runtime.ts";
 import type { WorkerLogEntry } from "./models/types.ts";
 import type { AgentCallOpts, AgentResult, ExecutionTraceNode } from "./models/types.ts";
 import type { WorkflowRun } from "./models/workflow-run.ts";
+import type { WorkerHandle } from "./worker-handle.ts";
 
 // ── 常量 ─────────────────────────────────────────────────────
 
-/** Worker/script 错误最大重试次数（domain-models.md §失败处理矩阵）。 */
+/**
+ * 单类错误最大重试次数（domain-models.md §失败处理矩阵）。
+ *
+ * 注意：workerErrorCount 和 scriptErrorCount 是两个独立计数器，各自上限 MAX_WORKER_RETRIES。
+ * 最坏情况（先连续 worker error 3 次 + 再连续 script error 3 次）= 6 次 rebuild。
+ * 这是有意设计——两类错误的根因不同（worker 崩溃 vs 脚本逻辑），合并计数会导致
+ * 不同根因的失败被过早判 failed。scheduleRebuild 的 retryIndex 取 max(两计数)。
+ */
 const MAX_WORKER_RETRIES = 3;
 
 /** 指数退避基数（ms）。 */
 const RETRY_BACKOFF_BASE_MS = 1000;
 const EXPONENTIAL_BACKOFF_BASE = 2;
+
+/** errorLogs 最大保留条数（防止超长 session 中日志无界增长）。 */
+const MAX_ERROR_LOGS = 500;
 
 // ── Worker 消息类型（与 infra/worker-script-builder.ts WorkerInMsg 对齐） ──
 
@@ -99,7 +111,10 @@ function backoffDelay(retryIndex: number): number {
 }
 
 function delay(ms: number): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, ms));
+  return new Promise((resolve) => {
+    const timer = setTimeout(resolve, ms);
+    timer.unref();
+  });
 }
 
 // ── rebuildRuntime（G3-001 整重建） ─────────────────────────
@@ -158,6 +173,8 @@ export async function handleWorkerMessage(
  // 终态/paused 状态丢弃 stale 消息（P0-1）
   if (isTerminal(run) || run.state.status === "paused") return;
 
+ // M7: 形状校验——防畸形 IPC 消息（worker 崩溃/发非对象）导致下游 TypeError
+  if (typeof raw !== "object" || raw === null) return;
   const msg = raw as WorkerMsg;
   switch (msg.type) {
     case "agent-call":
@@ -202,6 +219,16 @@ function dispatchAgentCall(
   msg: AgentCallMsg,
   deps: LifecycleDeps,
 ): void {
+  // M4: IPC 字段校验——畸形 agent-call 消息（opts 非对象/缺失、callId 非数字、prompt 缺失）
+  // 不写 trace / 不 postAgentResult——这类消息通常意味着 worker 模块版本不匹配或内存损坏，
+  // 回发结果给 worker 也没意义（worker 可能已崩）。仅记日志，让 worker timeout/exit 路径接管。
+  if (typeof msg.callId !== "number" || !Number.isFinite(msg.callId) ||
+      typeof msg.opts !== "object" || msg.opts === null ||
+      typeof msg.opts.prompt !== "string") {
+    console.error(`[workflow] malformed agent-call message: callId=${JSON.stringify(msg.callId)}, opts=${JSON.stringify(msg.opts)?.slice(0, 200)}`);
+    return;
+  }
+
  // 已缓存的调用直接 replay（跨 pause/resume）
   const cached = run.state.calls.get(msg.callId);
   if (cached && cached.status === "done") {
@@ -209,8 +236,10 @@ function dispatchAgentCall(
     return;
   }
 
- // 构建 trace 节点 + live record（TUI 实时进度）
+  // 构建 trace 节点 + live record（TUI 实时进度）
   const agentName = msg.opts.description ?? msg.opts.agent ?? "unknown";
+  // slug 复用 agentName（超长截断），live record 的 slug 仅用于 TUI 展示。
+  const liveSlug = agentName.length > SLUG_MAX_LENGTH ? agentName.slice(0, SLUG_MAX_LENGTH) : agentName;
   const now = new Date().toISOString();
   // live record：收口 agent 执行过程中的 text/thinking/toolCalls/usage，
   // 供 TUI 在 agent 运行期间显示进度（getEventLog/getCurrentActivity）。
@@ -220,6 +249,7 @@ function dispatchAgentCall(
     model: msg.opts.model ?? "default",
     mode: "background",
     task: msg.opts.prompt,
+    slug: liveSlug,
     startedAt: Date.now(),
   });
   const node: ExecutionTraceNode = {
@@ -268,7 +298,9 @@ function dispatchAgentCall(
       completedAt: new Date().toISOString(),
     });
     postAgentResult(run, msg.callId, errorResult, false);
-    void deps.store.save(run);
+    deps.store.save(run).catch((e: unknown) => {
+      console.error(`[workflow] store.save failed (resolveAgentOpts): ${e instanceof Error ? e.message : String(e)}`);
+    });
     return;
   }
 
@@ -290,19 +322,38 @@ function dispatchAgentCall(
   const onEvent = (event: AgentEvent): void => {
     updateFromEvent(liveRecord, event);
   };
+  // 创建 streaming sink：widgetKey = subagent-stream-<runId>-<stepIndex>。
+  // 复用 background subagent 的 SubagentStream → setWidget → RPC 链路（agent-call-streaming-extension.md）。
+  // streamSink 缺失（无 UI 模式）时 stream=undefined，executeAgentCall 正常执行不 streaming。
+  const stream = deps.streamSink
+    ? new SubagentStream(`${run.runId}-${msg.callId}`, deps.streamSink)
+    : undefined;
   void runtime.gate
-    .withSlot(() => executeAgentCall(call, deps.runner, run.state.budget, signal, run.state.trace, onEvent), signal)
+    .withSlot(
+      async () => {
+        try {
+          await executeAgentCall(call, deps.runner, run.state.budget, signal, run.state.trace, onEvent, stream);
+        } finally {
+          stream?.dispose();
+        }
+      },
+      signal,
+    )
     .then(() => {
+ // 清除 live record：终态已由 executeAgentCall → finalizeCall 写入 node.result，
+ // live 不再需要（且含可变状态，不保留）。无论 stale 与否都清，避免内存泄漏。
+ // M4: 必须在 stale guard 之前清，否则 pause/resume 循环下 live record 累积。
+      node.live = undefined;
  // pause/abort 后到达的 stale completion 不写 state（pause 是干净快照）
       if (run.state.status !== "running") return;
-      // 清除 live record：终态已由 executeAgentCall → finalizeCall 写入 node.result，
-      // live 不再需要（且含可变状态，不保留）。无论 stale 与否都清，避免内存泄漏。
-      node.live = undefined;
       if (call.result) postAgentResult(run, msg.callId, call.result, false);
  // D-12 regression fix (round-2 #1)：executeAgentCall 内 consume/incrementCallCount
  // 后同步 worker $BUDGET（否则 $BUDGET.spent()/remaining() 恒为 0）
       postBudgetUpdate(run);
-      void deps.store.save(run);
+      deps.store.save(run).catch((e: unknown) => {
+        const m = e instanceof Error ? e.message : String(e);
+        console.error(`[workflow] store.save failed (agent call ${msg.callId}): ${m}`);
+      });
 
  // C-2：budget 超限 → 终止整个 run（避免继续 spawn 烧预算）
  // 内联 terminate（不调 lifecycle.abortRun 避免 engine 内循环依赖）：
@@ -311,27 +362,68 @@ function dispatchAgentCall(
       if (run.state.budget.isExceeded()) {
         run.state.error = run.state.error ?? "Budget exceeded";
         deps.log?.("debug", "workflow:error-recovery", "budget exceeded, transition done", { runId: run.runId });
+        // M12: transition 单独 try——并发 abort 导致 illegal-transition 是预期的，可忽略
+        let transitioned = false;
         try {
           run.transition("done", "budget_limited");
-          void deps.store.save(run);
+          transitioned = true;
+        } catch (te: unknown) {
+          // run 可能在 budget 检查后、transition 前被并发 abort——预期，不记错
+          void te;
+        }
+        if (transitioned) {
+          deps.store.save(run).catch((e: unknown) => {
+            const m = e instanceof Error ? e.message : String(e);
+            console.error(`[workflow] store.save failed (budget done): ${m}`);
+          });
           deps.log?.("debug", "workflow:error-recovery", "run saved after budget done", { runId: run.runId, reason: run.state.reason });
- // C-4: budget 终止也触发完成通知
-          deps.log?.("debug", "workflow:error-recovery", "emit pending:unregister", { runId: run.runId, reason: run.state.reason });
-          deps.eventBus?.emit("pending:unregister", { id: run.runId, reason: run.state.reason ?? "completed" });
-          deps.log?.("debug", "workflow:error-recovery", "emit pending:unregister done", { runId: run.runId });
-          deps.onRunDone?.(run);
-        } catch (err) {
- // run 可能在 budget 检查后、transition 前被并发 abort——忽略
-          void err;
+          // M12: onRunDone/emit 单独 try——这些是真实副作用，错误不应被静默吞掉
+          try {
+            deps.log?.("debug", "workflow:error-recovery", "emit pending:unregister", { runId: run.runId, reason: run.state.reason });
+            deps.eventBus?.emit("pending:unregister", { id: run.runId, reason: run.state.reason ?? "completed" });
+            deps.log?.("debug", "workflow:error-recovery", "emit pending:unregister done", { runId: run.runId });
+            deps.onRunDone?.(run);
+          } catch (err) {
+            const m = err instanceof Error ? err.message : String(err);
+            console.error(`[workflow] onRunDone/emit failed (budget done): ${m}`);
+          }
         }
       }
     })
     .catch((err: unknown) => {
  // withSlot 在 queued + signal-aborted 时 reject AbortError——预期，不记错。
- // executeAgentCall 本身不 reject（runner.run 不 reject）。
       if (err instanceof Error && err.name === "AbortError") return;
       const message = err instanceof Error ? err.message : String(err);
       console.error(`[workflow] agent call ${msg.callId} failed: ${message}`);
+ // 兜底回发：executeAgentCall 抛非 Abort 异常时（如 runner undefined 的 TypeError、
+ // gate.withSlot 内部 bug）原 catch 仅 console.error，worker 内对 callId 的 pending
+ // Promise 永不 resolve → agent() 永久 await → worker 脚本挂死。构造 failed AgentResult
+ //（与 resolveAgentOpts 失败路径 L262-275 一致的模式）postAgentResult 回 worker，
+ // 让 pending Promise resolve（结果为 error），脚本可继续或失败退出。
+      const errorResult: AgentResult = { content: "", error: message };
+ // call 已 done（executeAgentCall 内 finalizeCall 已 markDone）时跳过，避免重复 markDone。
+ // status 理论上必为 running（executeAgentCall L130 markRunning 先于 reject），pending
+ // 分支为防御性保护。非 running/done 意外态：跳过 markDone（markDone 要求 running）。
+      if (call.status !== "done") {
+        if (call.status === "pending") call.markRunning();
+        call.markDone(errorResult);
+      }
+ // state 一致性三件套（与 resolveAgentOpts 失败 L268-276 / .then L319-325 对等）：
+ // trace 标 failed + 清 live record（防泄漏）+ 持久化（catch 恰是最需留证的场景）。
+ // stale 终态（run 已 paused/done）时 run.runtime 为 undefined，postAgentResult 用
+ // optional chaining 跳过 worker 回发；trace/state 写入仍执行（无害，pause 快照已存）。
+      node.live = undefined;
+      run.state.trace.update(msg.callId, {
+        status: "failed",
+        result: errorResult,
+        completedAt: new Date().toISOString(),
+      });
+      postAgentResult(run, msg.callId, errorResult, false);
+      // S2: 与 .then 对称——catch 路径也同步 worker $BUDGET（幂等）
+      postBudgetUpdate(run);
+      deps.store.save(run).catch((e: unknown) => {
+        console.error(`[workflow] store.save failed (catch fallback): ${e instanceof Error ? e.message : String(e)}`);
+      });
     });
 }
 
@@ -347,6 +439,14 @@ function dispatchWorkflowCall(
   msg: WorkflowCallMsg,
   deps: LifecycleDeps,
 ): void {
+  // M4: IPC 字段校验——畸形 workflow-call 消息
+  if (typeof msg.callId !== "number" || !Number.isFinite(msg.callId) ||
+      typeof msg.name !== "string" ||
+      typeof msg.args !== "object" || msg.args === null) {
+    console.error(`[workflow] malformed workflow-call message: callId=${JSON.stringify(msg.callId)}, name=${JSON.stringify(msg.name)}`);
+    return;
+  }
+
   const postResult = (result: unknown): void => {
     if (run.state.status !== "running") return;
     run.runtime?.worker.postMessage({
@@ -415,8 +515,12 @@ async function handleReturn(
 ): Promise<void> {
   deps.log?.("debug", "workflow:error-recovery", "handleReturn", { runId: run.runId, status: run.state.status });
  // 捕获 worker 诊断日志（P2-2）
+  // L9: 追加而非覆盖——保留重试历史的诊断日志（各 worker 实例的 console 输出）
   if (msg.workerLogs && msg.workerLogs.length > 0) {
-    run.state.errorLogs = msg.workerLogs;
+    run.state.errorLogs.push(...msg.workerLogs);
+    if (run.state.errorLogs.length > MAX_ERROR_LOGS) {
+      run.state.errorLogs = run.state.errorLogs.slice(-MAX_ERROR_LOGS);
+    }
   }
   run.state.scriptResult = msg.result;
   run.transition("done", "completed");
@@ -526,8 +630,12 @@ export async function handleScriptError(
   if (isTerminal(run) || run.state.status === "paused") return;
 
  // P2-2: 捕获 worker 诊断日志
+  // L9: 追加而非覆盖
   if (workerLogs.length > 0) {
-    run.state.errorLogs = workerLogs;
+    run.state.errorLogs.push(...workerLogs);
+    if (run.state.errorLogs.length > MAX_ERROR_LOGS) {
+      run.state.errorLogs = run.state.errorLogs.slice(-MAX_ERROR_LOGS);
+    }
   }
 
   const count = (run.meta.scriptErrorCount ?? 0) + 1;

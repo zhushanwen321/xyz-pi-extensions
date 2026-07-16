@@ -40,6 +40,12 @@ export interface RunSpec {
   readonly budgetRef?: Budget;
  /** 脚本名（meta.name 或文件名 stem）。 */
   readonly scriptName: string;
+ /**
+ * Run 级简短标签（≤20 字符），区别于 scriptName（脚本身份名）。
+ * 区分同脚本的不同 run 实例（如 'migrate-users-batch1' vs 'migrate-users-batch2'）。
+ * 旧持久化 run 缺失时为 undefined，渲染时回落 scriptName。
+ */
+  readonly slug?: string;
  /** 脚本文件绝对路径（用于诊断/日志）。 */
   readonly scriptPath: string;
  /** 人类可读描述（meta.description）。 */

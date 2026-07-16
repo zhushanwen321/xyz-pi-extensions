@@ -170,6 +170,7 @@ export function buildWorkerScript(userScript: string): string {
     '          schema: firstArg.schema,',
     '          model: firstArg.model,',
     '          scene: firstArg.scene,',
+    '          skill: firstArg.skill,',
     '          timeoutMs: firstArg.timeoutMs,',
     '          cwd: firstArg.cwd,',
     '        };',

@@ -26,6 +26,17 @@ export interface DisplayOption {
 	isOther?: boolean;
 }
 
+/** 渲染上下文——收拢 q/state/theme/width 四个总是成对出现的参数。
+ *  draftText 从 state.draftText 取（不再重复传递）。 */
+export interface RenderContext {
+	question: Question;
+	state: QuestionState;
+	theme: ThemeLike;
+	width: number;
+	/** 单问题模式（无 Tab 提示）。 */
+	isSingle: boolean;
+}
+
 /** Other 自由输入 / 已保存预览的软换行行数上限。超出则截断并加省略号。 */
 const MAX_EDITOR_LINES = 5;
 
@@ -112,14 +123,10 @@ const EDITOR_HINT = " ←/→ Home/End move · Backspace deletes · Enter submit
  *  freeform 模式下，Other 行**原地**变 [ ] <input> 反色光标（多选）/ <input> 反色光标（单选），
  *  不再依赖 buildEditorBlock 的下方独立编辑块。 */
 function buildOptionLines(
-	q: Question,
-	state: QuestionState,
-	theme: ThemeLike,
-	width: number,
+	ctx: RenderContext,
 	hideDescriptions: boolean,
-	draftText: string = "",
 ): string[] {
-	const t = theme;
+	const { question: q, state, theme: t, width } = ctx;
 	const opts = allOptions(q);
 	const lines: string[] = [];
 	const add = (s: string): void => {
@@ -145,7 +152,7 @@ function buildOptionLines(
 				const lead = `${prefix} ${marker} `;
 				const avail = Math.max(1, width - visibleWidth(lead));
 				// 编号 + 文本，光标用反色高亮当前字符（surrogate pair 安全，不占额外位置）
-				const cursorText = renderCursorText(draftText, state.cursorIndex);
+				const cursorText = renderCursorText(state.draftText, state.cursorIndex);
 				const styled = `${t.fg("muted", `${num}. `)}${t.fg("text", cursorText)}`;
 				addWrappedInput(add, lead, styled, avail, MAX_EDITOR_LINES);
 			} else {
@@ -195,13 +202,10 @@ function buildOptionLines(
 
 /** 构建分屏右侧 Markdown 详情预览。 */
 function buildPreviewLines(
-	q: Question,
-	state: QuestionState,
-	theme: ThemeLike,
-	width: number,
+	ctx: RenderContext,
 	maxLines: number,
 ): string[] {
-	const t = theme;
+	const { question: q, state, theme: t, width } = ctx;
 	const opts = allOptions(q);
 	const opt = opts[state.cursorIndex];
 	if (!opt) return [t.fg("dim", "—")];
@@ -226,16 +230,12 @@ function buildPreviewLines(
  * comment 模式：保留独立编辑块（与 normal help 行解耦：comment 行有更长的 prompt）。
  */
 function buildEditorBlock(
-	theme: ThemeLike,
-	width: number,
-	mode: "freeform" | "comment",
-	draftText: string,
-	cursorIndex?: number,
+	ctx: RenderContext,
 ): string[] {
-	if (mode === "freeform") {
+	const { state, theme: t, width } = ctx;
+	if (state.mode === "freeform") {
 		return [""];
 	}
-	const t = theme;
 	const lines: string[] = [];
 	const add = (s: string): void => {
 		lines.push(truncateToWidth(s, width));
@@ -244,8 +244,7 @@ function buildEditorBlock(
 	const prompt = t.fg("muted", " Your comment (optional):");
 	add(prompt);
 	// 渲染当前编辑器文本，光标用反色高亮当前字符（surrogate pair 安全）
-	const pos = cursorIndex ?? draftText.length;
-	const cursorText = renderCursorText(draftText, pos);
+	const cursorText = renderCursorText(state.draftText, state.cursorIndex);
 	add(` ${t.fg("text", cursorText)}`);
 	add("");
 	add(t.fg("dim", EDITOR_HINT));
@@ -254,20 +253,18 @@ function buildEditorBlock(
 
 /** 渲染分屏模式下的左右双列（选项列表 + 详情预览）。 */
 function buildSplitPane(
-	q: Question,
-	state: QuestionState,
-	theme: ThemeLike,
+	ctx: RenderContext,
 	split: { left: number; right: number },
-	width: number,
-	draftText: string = "",
 ): string[] {
-	const t = theme;
+	const { theme: t, width } = ctx;
 	const lines: string[] = [];
 	const add = (s: string): void => {
 		lines.push(truncateToWidth(s, width));
 	};
-	const leftLines = buildOptionLines(q, state, theme, split.left, true, draftText);
-	const rightLines = buildPreviewLines(q, state, theme, split.right, Math.max(leftLines.length, 8));
+	const leftCtx: RenderContext = { ...ctx, width: split.left };
+	const rightCtx: RenderContext = { ...ctx, width: split.right };
+	const leftLines = buildOptionLines(leftCtx, true);
+	const rightLines = buildPreviewLines(rightCtx, Math.max(leftLines.length, 8));
 	const rowCount = Math.max(leftLines.length, rightLines.length);
 	const sep = t.fg("dim", SPLIT_PANE_SEPARATOR);
 	for (let i = 0; i < rowCount; i++) {
@@ -280,18 +277,9 @@ function buildSplitPane(
 
 /**
  * 渲染单个问题视图（spec FR-4）。
- * isSingle: 单问题模式（无 Tab 提示）。
- * draftText: freeform/comment 模式下当前编辑器草稿（来自 QuestionState.draftText）。
  */
-export function renderQuestionView(
-	q: Question,
-	state: QuestionState,
-	theme: ThemeLike,
-	width: number,
-	isSingle: boolean,
-	draftText: string,
-): string[] {
-	const t = theme;
+export function renderQuestionView(ctx: RenderContext): string[] {
+	const { question: q, state, theme: t, width, isSingle } = ctx;
 	const lines: string[] = [];
 	const add = (s: string): void => {
 		lines.push(truncateToWidth(s, width));
@@ -323,10 +311,8 @@ export function renderQuestionView(
 	// 且右侧详情预览在输入自定义内容时无意义。隐藏 descriptions 以避免行数爆炸。
 	if (state.mode === "freeform" || state.mode === "comment") {
 		add("");
-		const optionLines = buildOptionLines(q, state, theme, width, false, draftText);
-		for (const line of optionLines) add(line);
-		const editorBlock = buildEditorBlock(theme, width, state.mode, draftText, state.cursorIndex);
-		lines.push(...editorBlock);
+		for (const line of buildOptionLines(ctx, false)) add(line);
+		lines.push(...buildEditorBlock(ctx));
 		if (state.mode === "freeform") {
 			// freeform 模式 help 行：光标锁在 Other 上，正在输入
 			add(t.fg("dim", EDITOR_HINT));
@@ -336,11 +322,10 @@ export function renderQuestionView(
 
 	if (!split) {
 		// 单列模式
-		const optionLines = buildOptionLines(q, state, theme, width, false, draftText);
-		for (const line of optionLines) add(line);
+		for (const line of buildOptionLines(ctx, false)) add(line);
 	} else {
 		// 分屏模式
-		lines.push(...buildSplitPane(q, state, theme, split, width, draftText));
+		lines.push(...buildSplitPane(ctx, split));
 	}
 
 	add("");

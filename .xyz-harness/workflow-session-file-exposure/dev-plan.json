@@ -1,0 +1,68 @@
+{
+  "format": "lite",
+  "objective": "让 workflow overlay 能拿到自身 run 状态文件路径 + 内部 agent 的 session jsonl 绝对路径（透传 sessionFile，方案 A）",
+  "waves": [
+    {
+      "id": "W1",
+      "changes": [
+        {
+          "file": "extensions/subagent-workflow/src/orchestration/models/types.ts",
+          "description": "workflow AgentResult 加 sessionFile?: string 字段；ExecutionTraceNode 加 sessionFile?: string 字段（与 sessionId 同位置，持久化到快照）"
+        },
+        {
+          "file": "extensions/subagent-workflow/src/execution/agent-result-mapper.ts",
+          "description": "mapToWorkflowAgentResult 透传 r.sessionFile（不再丢弃），加到返回对象"
+        },
+        {
+          "file": "extensions/subagent-workflow/src/orchestration/execute-agent-call.ts",
+          "description": "finalizeCall 的 trace.update patch 加 sessionFile: result.sessionFile，与 sessionId 并列透传到 trace 节点"
+        },
+        {
+          "file": "extensions/subagent-workflow/src/orchestration/models/trace.ts",
+          "description": "TracePatch 接口加 sessionFile?: string；update 方法加 if (patch.sessionFile !== undefined) node.sessionFile = patch.sessionFile"
+        },
+        {
+          "file": "extensions/subagent-workflow/src/orchestration/models/types.ts",
+          "description": "RunSnapshot.state.calls 序列化加 sessionFile 字段（与 sessionId 并列）；deserializeRun 重建时透传 sessionFile 到 AgentCall（需 AgentCall 加 sessionFile 字段或从 traceNode 读）"
+        },
+        {
+          "file": "extensions/subagent-workflow/src/orchestration/models/agent-call.ts",
+          "description": "AgentCall 加 sessionFile?: string 字段 + setSessionFile 方法（对齐 sessionId 模式）；node-ops reset 时清除"
+        },
+        {
+          "file": "extensions/subagent-workflow/src/orchestration/jsonl-run-store.ts",
+          "description": "serializeRun: calls 数组加 sessionFile（与 sessionId 并列）；deserializeRun: 重建 AgentCall 时 setSessionFile"
+        },
+        {
+          "file": "extensions/subagent-workflow/src/orchestration/node-ops.ts",
+          "description": "reset call 时 call.sessionFile = undefined（对齐 call.sessionId = undefined，L98）"
+        }
+      ],
+      "dependsOn": [],
+      "priority": "P0"
+    },
+    {
+      "id": "W2",
+      "changes": [
+        {
+          "file": "extensions/subagent-workflow/src/orchestration/models/ports.ts",
+          "description": "RunStore port 加 stateFilePath(runId: string): string 方法——返回 run 状态文件绝对路径（<sessionDir>/workflow-state/<runId>.jsonl）"
+        },
+        {
+          "file": "extensions/subagent-workflow/src/orchestration/jsonl-run-store.ts",
+          "description": "JsonlRunStore 实现 stateFilePath(runId)：复用 filePathFor 逻辑（提升为 public 或新增 public 方法）"
+        },
+        {
+          "file": "extensions/subagent-workflow/src/interface/tool-workflow.ts",
+          "description": "WorkflowToolDetails 的 status action 的 RunSummary 加 stateFile?: string；run action 加 stateFile?: string。actionStatus/actionRun 从 deps.store.stateFilePath(runId) 取值填入"
+        },
+        {
+          "file": "extensions/subagent-workflow/src/interface/views/detail-content.ts",
+          "description": "workflow run 详情视图（detail content）展示 run 自身 stateFile 路径 + 选中 trace 节点的 agent sessionFile 路径（dim 色，对齐 subagents list-component 的 session: 行渲染）"
+        }
+      ],
+      "dependsOn": ["W1"],
+      "priority": "P1"
+    }
+  ]
+}

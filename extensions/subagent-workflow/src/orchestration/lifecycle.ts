@@ -208,7 +208,7 @@ export async function runWorkflow(
   deps.eventBus?.emit("pending:register", {
     id: runId,
     type: "workflow",
-    name: spec.scriptName || runId,
+    name: spec.slug || spec.scriptName || runId,
   });
   deps.log?.("debug", "workflow:lifecycle", "emit pending:register done", { runId });
 

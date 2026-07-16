@@ -84,6 +84,12 @@ export interface AgentCallOpts {
  * When omitted, pi's default model is used.
  */
   model?: string;
+ /**
+ * Thinking level override (e.g. "high", "medium", "low").
+ * M2: Added to align with subagent path's ExecuteOptions.thinkingLevel.
+ * When omitted, agent .md frontmatter thinkingLevel is used (via resolveAgentOpts).
+ */
+  thinkingLevel?: string;
  /** Scene name for model-switch advisor recommendation. */
   scene?: string;
  /**
@@ -181,6 +187,13 @@ export interface AgentResult {
  * Can be used to locate the session JSONL file for post-run inspection (G-017)。
  */
   sessionId?: string;
+ /**
+ * Session JSONL 绝对路径（不含目录的文件名在 subagents 侧 AgentResult.sessionFile）。
+ * 由 mapToWorkflowAgentResult 从 subagents AgentResult 透传——让 workflow 编排层
+ * 继承 subagent 执行管道产出的 session 文件路径，overlay/GUI 可直接定位。
+ * 窗口期内可能 undefined（session 尚未创建成功）。
+ */
+  sessionFile?: string;
  /** All tool calls collected from JSONL stream (FR-7). */
   toolCalls?: ToolCallEntry[];
 }
@@ -208,6 +221,11 @@ export interface ExecutionTraceNode {
  */
   sessionId?: string;
  /**
+ * Session JSONL 绝对路径。finalizeCall 从 result.sessionFile 透传。
+ * 持久化到快照（serializeRun），pause/resume + 跨 session 重水合后保留。
+ */
+  sessionFile?: string;
+ /**
  * Live 执行进度对象（running 时存在，done 时由 dispatchAgentCall 清除）。
  *
  * 挂在 node 上（D-10 单源延伸：AgentCall.traceNode 与 Trace.nodes 共享同一引用）。
@@ -229,6 +247,7 @@ export interface TracePatch {
   error?: string;
   completedAt?: string;
   sessionId?: string;
+  sessionFile?: string;
 }
 
 // ── Worker 诊断 ───────────────────────────────────────────────

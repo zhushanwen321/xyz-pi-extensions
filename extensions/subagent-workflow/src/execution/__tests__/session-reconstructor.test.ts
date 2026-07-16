@@ -167,6 +167,26 @@ describe("reconstructFromFile", () => {
       expect(rec!.rootSessionId).toBeUndefined();
     });
 
+    it("读出 identity 里的 slug", () => {
+      writeJsonl([
+        headerLine(),
+        identityEntry({ id: "bg-1", agent: "w", mode: "background", task: "t", slug: "extract-urls", startedAt: 100 }),
+        assistantEntry([{ type: "text", text: "ok" }]),
+      ]);
+      const rec = reconstructFromFile(filePath);
+      expect(rec!.slug).toBe("extract-urls");
+    });
+
+    it("旧文件 identity 无 slug → 兜底空串（向后兼容）", () => {
+      writeJsonl([
+        headerLine(),
+        identityEntry({ id: "bg-1", agent: "w", mode: "background", task: "t", startedAt: 100 }),
+        assistantEntry([{ type: "text", text: "ok" }]),
+      ]);
+      const rec = reconstructFromFile(filePath);
+      expect(rec!.slug).toBe("");
+    });
+
     it("读出 identity 里的 parentRecordId/depth（递归层级）", () => {
       writeJsonl([
         headerLine(),

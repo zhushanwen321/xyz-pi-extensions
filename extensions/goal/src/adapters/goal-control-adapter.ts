@@ -24,13 +24,15 @@
  * 错误处理：用 throw new Error（CLAUDE.md Tool 设计规范），不返回错误成功模式。
  */
 
-import { StringEnum } from "@mariozechner/pi-ai";
+import { StringEnum } from "@earendil-works/pi-ai";
 import type { ExtensionAPI, ExtensionContext, Theme } from "@mariozechner/pi-coding-agent";
 import { Text } from "@mariozechner/pi-tui";
+import { type GuiComponent, guiComponent, type GuiRenderResult,guiResult } from "@xyz-agent/extension-protocol";
 import { type Static, Type } from "typebox";
 
+import { BUDGET_RATIO_HIGH, BUDGET_RATIO_LOW, SECONDS_PER_MINUTE, SHORT_ID_LENGTH } from "../constants";
 import { isActiveStatus, isTerminalStatus, transitionStatus } from "../engine/goal";
-import type { BudgetConfig, GoalStatus } from "../engine/types";
+import type { BudgetConfig, GoalRuntimeState, GoalStatus } from "../engine/types";
 import { updateWidget } from "../projection/widget";
 import { createGoal, finalizeAndPersist, persistState, type ServicePorts, tickState } from "../service";
 import type { GoalSession } from "../session";
@@ -90,6 +92,8 @@ export interface GoalControlDetails {
 	goalId: string;
 	status: GoalStatus;
 	slug?: string;
+	/** RPC 模式下的 GUI 渲染描述符（progress-bar 预算进度）。TUI 模式无此字段。 */
+	__gui__?: GuiRenderResult;
 }
 
 // ── 业务 handler（契约对齐 §3，可测：fake ports）──────
@@ -221,6 +225,115 @@ export function handleReportBlocked(
 	return { action: "report_blocked", goalId: state.goalId, status: state.status };
 }
 
+// ── GUI 渲染描述符构造 ───────────────────────────────
+
+/**
+ * 按 GoalStatus 映射 stats-line severity（S#2）。
+ *
+ *   active/complete → ok（正常运行/成功完成）
+ *   paused          → warn（暂停可恢复）
+ *   blocked         → danger（阻塞需干预）
+ *   budget_limited/time_limited/cancelled → danger（预算耗尽/取消，错误终态）
+ *
+ * 对齐 projection/widget.ts 的 getBudgetColor 语义——终态预算耗尽渲染为 error。
+ */
+function goalStatusSeverity(status: GoalStatus): "ok" | "warn" | "danger" {
+	switch (status) {
+		case "active":
+		case "complete":
+			return "ok";
+		case "paused":
+			return "warn";
+		case "blocked":
+		case "budget_limited":
+		case "time_limited":
+		case "cancelled":
+			return "danger";
+	}
+}
+
+/**
+ * 构造 goal 的 GUI 渲染描述符（RPC 模式下放进 details.__gui__）。
+ *
+ * 逻辑参考 projection/widget.ts 的 renderWidgetLines 预算计算，但此处只构造
+ * 结构化数据（GuiComponent），不做 ANSI 渲染。
+ *
+ * - 有 tokenBudget 或 timeBudgetMinutes → card(progress-bar + stats-line) 展示预算消耗
+ * - 无 budget → stats-line 展示状态摘要
+ */
+export function buildGoalGui(state: GoalRuntimeState): GuiRenderResult {
+	const slug = state.slug ?? state.goalId.slice(0, SHORT_ID_LENGTH);
+	// statusSeverity 按 GoalStatus 完整覆盖（S#2）：
+	//   active/complete → ok；blocked → danger；paused → warn；
+	//   budget_limited/time_limited/cancelled → danger（预算耗尽/取消是错误终态）
+	const statusSeverity = goalStatusSeverity(state.status);
+
+	// hasBudget 与进度条判定统一口径：用 > 0 而非 truthy（I#1：tokenBudget=0 不应触发 card 容器）
+	const hasBudget = (state.budget.tokenBudget ?? 0) > 0 || (state.budget.timeBudgetMinutes ?? 0) > 0;
+
+	if (hasBudget) {
+		const body: GuiComponent[] = [];
+		// token 进度条（>0 判定，与 hasBudget 口径一致）
+		const tokenBudget = state.budget.tokenBudget;
+		if ((tokenBudget ?? 0) > 0) {
+			const tb = tokenBudget!;
+			const tokenPct = state.tokensUsed / tb;
+			body.push(
+				guiComponent("progress-bar", {
+					label: "tokens",
+					current: state.tokensUsed,
+					total: tb,
+					unit: "tok",
+					severity: tokenPct >= BUDGET_RATIO_HIGH ? "danger" : tokenPct >= BUDGET_RATIO_LOW ? "warn" : "ok",
+				}),
+			);
+		}
+		// time 进度条（>0 判定，与 hasBudget 口径一致）
+		const timeBudgetMinutes = state.budget.timeBudgetMinutes;
+		if ((timeBudgetMinutes ?? 0) > 0) {
+			const timeBudgetSec = timeBudgetMinutes! * SECONDS_PER_MINUTE;
+			const timePct = state.timeUsedSeconds / timeBudgetSec;
+			body.push(
+				guiComponent("progress-bar", {
+					label: "time",
+					current: state.timeUsedSeconds,
+					total: timeBudgetSec,
+					unit: "s",
+					severity: timePct >= BUDGET_RATIO_HIGH ? "danger" : timePct >= BUDGET_RATIO_LOW ? "warn" : "ok",
+				}),
+			);
+		}
+		// 状态 + turn 统计行
+		body.push(
+			guiComponent("stats-line", {
+				items: [
+					{ label: "status", value: state.status, severity: statusSeverity },
+					{ label: "turn", value: String(state.currentTurnIndex) },
+				],
+			}),
+		);
+		return guiResult(
+			guiComponent("card", {
+				variant: state.status === "blocked" ? "danger" : state.status === "complete" ? "success" : "default",
+				header: slug,
+				body,
+			}),
+		);
+	}
+
+	// 无 budget：stats-line 摘要
+	return guiResult(
+		guiComponent("stats-line", {
+			items: [
+				{ label: "goal", value: slug },
+				{ label: "status", value: state.status, severity: statusSeverity },
+				{ label: "turn", value: String(state.currentTurnIndex) },
+				{ label: "tokens", value: String(state.tokensUsed) },
+			],
+		}),
+	);
+}
+
 // ── Tool 注册 ────────────────────────────────────────
 
 export function registerGoalControlTool(pi: ExtensionAPI, session: GoalSession): void {
@@ -262,6 +375,11 @@ export function registerGoalControlTool(pi: ExtensionAPI, session: GoalSession):
 					: details.action === "complete"
 						? `Goal completed.\nGoal ID: ${details.goalId}`
 						: `Goal reported blocked.\nGoal ID: ${details.goalId}\nReason: ${params.reason?.trim() ?? ""}`;
+
+			// RPC 模式下附加 __gui__（用展开避免 details 来自 frozen 对象时加字段失败）
+			if (ctx.mode === "rpc" && session.state) {
+				return { content: [{ type: "text", text }], details: { ...details, __gui__: buildGoalGui(session.state) } };
+			}
 			return { content: [{ type: "text", text }], details };
 		},
 
