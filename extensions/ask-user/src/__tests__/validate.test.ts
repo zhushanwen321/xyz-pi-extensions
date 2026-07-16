@@ -80,13 +80,15 @@ describe("validateInput", () => {
 		expect(result).toBeNull();
 	});
 
-	// V-10: 不同 question 可以有相同 header（header 不要求唯一）
-	it("allows duplicate headers across different questions", () => {
+	// V-10/S3: 多 question 时 header 必须唯一——重复 header 会导致 askUserKey 碰撞
+	// （协议 helper 用 header 作 answers 读取 key，后一个覆盖前一个的 Other/comment）
+	it("rejects duplicate headers across different questions", () => {
 		const result = validateInput([
 			q({ question: "Q1", header: "Same" }),
 			q({ question: "Q2", header: "Same" }),
 		]);
-		expect(result).toBeNull();
+		expect(result).not.toBeNull();
+		expect(result).toContain("Duplicate header");
 	});
 
 	// V-11: option description 不参与唯一性校验
