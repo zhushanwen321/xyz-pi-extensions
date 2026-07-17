@@ -20,10 +20,10 @@ describe("buildSpawnArgs", () => {
     skillPaths: undefined as string[] | undefined,
   };
 
-  it("基础参数：--mode json -p --session-dir + task", () => {
+  it("基础参数：--mode rpc -p --session-dir + task", () => {
     const args = buildSpawnArgs(baseParams, "Task: do something");
     expect(args).toEqual([
-      "--mode", "json", "-p", "--session-dir", "/sessions/dir",
+      "--mode", "rpc", "-p", "--session-dir", "/sessions/dir",
       "Task: do something",
     ]);
   });

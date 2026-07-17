@@ -348,7 +348,7 @@ export function buildSpawnArgs(
   },
   task: string,
 ): string[] {
-  const args: string[] = ["--mode", "json", "-p", "--session-dir", params.sessionDir];
+  const args: string[] = ["--mode", "rpc", "-p", "--session-dir", params.sessionDir];
   if (params.model) args.push("--model", params.model);
   if (params.thinkingLevel && params.model) {
     // thinking level 通过 model 后缀 :level 传递（pi CLI 约定）
@@ -556,7 +556,7 @@ export async function runSpawn(
     const child = spawn(invocation.command, invocation.args, {
       cwd: spawnCwd,
       shell: false,
-      stdio: ["ignore", "pipe", "pipe"],
+      stdio: ["pipe", "pipe", "pipe"],
       env: childEnv,
     });
     proc = child;

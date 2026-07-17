@@ -34,6 +34,8 @@ export interface SpawnSessionHeader {
 export type ParsedSpawnLine =
   | { kind: "header"; header: SpawnSessionHeader }
   | { kind: "event"; event: SdkEvent }
+  | { kind: "response"; id: string; result?: unknown; error?: unknown }
+  | { kind: "extension_ui_request"; id: string; params: Record<string, unknown> }
   | { kind: "invalid"; raw: string; error: string };
 
 /**
@@ -49,6 +51,37 @@ function isSessionHeader(obj: unknown): obj is SpawnSessionHeader {
     typeof r.id === "string" &&
     typeof r.timestamp === "string" &&
     typeof r.cwd === "string"
+  );
+}
+
+/**
+ * 判断解析出的 JSON 是否为 JSON-RPC 2.0 response（有 jsonrpc + id，无 method）。
+ * RPC response 有两种：成功（有 result）或失败（有 error）。
+ */
+function isRpcResponse(obj: unknown): obj is { id: string; result?: unknown; error?: unknown } {
+  if (typeof obj !== "object" || obj === null) return false;
+  const r = obj as Record<string, unknown>;
+  return (
+    r.jsonrpc === "2.0" &&
+    typeof r.id === "string" &&
+    !("method" in r) &&
+    ("result" in r || "error" in r)
+  );
+}
+
+/**
+ * 判断解析出的 JSON 是否为 extension_ui_request（JSON-RPC 2.0 request，method 固定）。
+ * 子进程通过 stdout 发出 UI 交互请求（如 ask_user），父进程处理后通过 stdin 回写响应。
+ */
+function isExtensionUiRequest(obj: unknown): obj is { id: string; params: Record<string, unknown> } {
+  if (typeof obj !== "object" || obj === null) return false;
+  const r = obj as Record<string, unknown>;
+  return (
+    r.jsonrpc === "2.0" &&
+    typeof r.id === "string" &&
+    r.method === "extension_ui_request" &&
+    typeof r.params === "object" &&
+    r.params !== null
   );
 }
 
@@ -85,6 +118,18 @@ export function parseSpawnLine(line: string): ParsedSpawnLine | null {
 
   if (isSessionHeader(obj)) {
     return { kind: "header", header: obj };
+  }
+
+  // RPC response：JSON-RPC 2.0 response（有 jsonrpc + id + result/error，无 method）
+  if (isRpcResponse(obj)) {
+    const r = obj as Record<string, unknown>;
+    return { kind: "response", id: r.id as string, result: r.result, error: r.error };
+  }
+
+  // extension_ui_request：JSON-RPC 2.0 request（jsonrpc + id + method:extension_ui_request + params）
+  if (isExtensionUiRequest(obj)) {
+    const r = obj as Record<string, unknown>;
+    return { kind: "extension_ui_request", id: r.id as string, params: r.params as Record<string, unknown> };
   }
 
   // 事件行：必须有 type 字段（SdkEvent 契约）
