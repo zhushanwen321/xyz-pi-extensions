@@ -90,6 +90,35 @@ function computeWatchdogMs(maxTurns: number | undefined | null): number {
 const STDERR_MAX_CHARS = 64 * 1024;
 
 // ============================================================
+// W4: ask_user RPC 系统提示词
+// ============================================================
+
+/**
+ * ask_user 工具的 RPC 使用指引。当子进程配置了 ask_user tool 时注入 appendParts，
+ * 告知 LLM：ask_user 的问题会通过 RPC 转发到主 agent UI，用户在主 agent 界面回答。
+ *
+ * 背景：spawn 模式下子进程没有 TUI 交互通道，ask_user 走 extension_ui_request RPC 协议
+ * 转发到父进程，父进程调用 uiRequestHandler 将问题呈现给用户，收到回答后通过 stdin
+ * 回写 JSON-RPC response。LLM 需要知道这个机制存在，才能正确使用 ask_user。
+ */
+export const ASK_USER_RPC_PROMPT = `
+## ask_user Tool Availability
+
+The \`ask_user\` tool is available in this session. When you call \`ask_user\`, your questions are forwarded via RPC to the main agent's UI, where the user will see them and provide answers. The response is delivered back to you automatically.
+
+**How it works:**
+1. You call \`ask_user\` with structured questions (each with options)
+2. The questions are forwarded to the main agent's UI via RPC
+3. The user sees the questions and selects answers in the main agent interface
+4. The answers are returned to you as the tool result
+
+**Important:**
+- The user may take some time to respond — this is normal
+- If the user cancels or the request times out, you'll receive a cancellation notice
+- Use ask_user only when you genuinely cannot resolve ambiguity yourself (see tool description for guidelines)
+`.trim();
+
+// ============================================================
 // 孤儿进程兜底（C1）
 // ============================================================
 //
@@ -626,6 +655,11 @@ export async function runSpawn(
   // 改为启动时预置 wrap-up 提示——agent 感知接近上限时主动收尾。
   // 长期方案：切到 pi --mode rpc（支持运行时 steer），见 follow-up。
   if (opts.maxTurns && opts.maxTurns > 0) appendParts.push(WRAP_UP_HINT);
+  // W4: ask_user RPC 使用指引——当子进程配置了 ask_user tool 时，告知 LLM
+  // ask_user 的问题会通过 RPC 转发到主 agent UI，用户在主 agent 界面回答。
+  if (opts.agentConfig?.tools?.includes("ask_user")) {
+    appendParts.push(ASK_USER_RPC_PROMPT);
+  }
   if (appendParts.length > 0) {
     tempPromptFile = await writePromptToTempFile(record.agent, appendParts.join("\n\n"));
   }
