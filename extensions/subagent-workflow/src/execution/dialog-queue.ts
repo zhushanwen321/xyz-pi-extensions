@@ -1,0 +1,280 @@
+// src/execution/dialog-queue.ts
+//
+// L2 跨子进程全局 dialog 串行队列。
+//
+// 进程单例语义：跨所有子进程共享，串行所有 dialog 类 UI 请求
+//（isDialogMethod(method)===true，即 select/confirm/input/editor）。
+//
+// 设计动机（.fix-plans/00-master-summary.md §一 冲突 3）：
+//   - L1 per-child 队列（session-runner.createUiRequestQueue）只解决同一子进程内的串行，
+//     多个并行子进程仍可同时把 dialog 请求涌向父 UI（争输入焦点）。
+//   - L2 全局队列在主 agent handler 入口前再串行一次，保证同一时刻主 agent 只呈现一个 dialog。
+//   - 排队绑定 method 交互模型（dialog 才排队），不绑定 channel——排队是 Pi 协议固有属性。
+//
+// SR-4（child close reject）：入队项带 child 引用，child close 时把该 child 的 pending dialog
+//   全部 resolve 为 {cancelled:true}，防 Promise 永挂 + 内存泄漏。
+//
+// handler 抛错兜底：catch → 回 {cancelled:true} → 继续处理下一个。不能让一个失败卡死队列。
+//
+// fire-and-forget method 不入队：调用方在 enqueue 前应用 isDialogMethod 判断（dialog 入队，
+//   fire-and-forget 直接调 handler）。本队列内不重复判断 method，由调用方负责。
+
+import { isDialogMethod } from "./ui-interaction-model.ts";
+
+// ── 类型定义（本模块是 UiRequest/UiResponse/UiRequestHandler 的规范来源） ──
+// session-runner.ts 和 ui-channels.ts 复用这些类型（session-runner 再导出供测试 import）。
+
+/** Pi extension_ui_request 的方法枚举（dialog + fire-and-forget 两类）。
+ *  dialog 类：select/confirm/input/editor（占输入焦点，等响应）。
+ *  fire-and-forget 类：notify/setStatus/setWidget/setTitle/set_editor_text（纯展示/写入）。
+ *  (string & {}) 兜底：Pi 未来新增 method 或未知 method 走字符串字面量类型。 */
+export type UiMethod =
+  | "select"
+  | "confirm"
+  | "input"
+  | "editor"
+  | "notify"
+  | "setStatus"
+  | "setWidget"
+  | "setTitle"
+  | "set_editor_text"
+  | (string & {});
+
+/** UI 请求（session-runner 构造后传给 handler）。
+ *
+ *  method 是判别字段，决定排队策略（dialog 排队）和业务路由（channel 分发）。
+ *  method 特定字段按 method 可选出现（与 ExtensionUiRequest 1:1，由 session-runner 从
+ *  ExtensionUiRequest 平铺构造）。channel/channelPayload 由 parseChannel 填充。
+ *
+ *  契约来源：.fix-plans/00-master-summary.md §二 2.2。 */
+export interface UiRequest {
+  /** Pi rpc-types.ts 的 method（select/confirm/input/editor 为 dialog 类）。 */
+  method: UiMethod;
+  /** 请求 id（从 extension_ui_request envelope 顶层提取，用于 response 关联）。 */
+  id: string;
+  // method 特定字段（按 method 可选，与 ExtensionUiRequest 1:1）
+  title?: string;
+  options?: string[];
+  message?: string;
+  placeholder?: string;
+  prefill?: string;
+  notifyType?: string;
+  statusKey?: string;
+  statusText?: string | undefined;
+  widgetKey?: string;
+  widgetLines?: string[] | undefined;
+  widgetPlacement?: "aboveEditor" | "belowEditor";
+  text?: string;
+  timeout?: number;
+  /** channel 名（从 method 对应字段的 NUL 前缀解析）。
+   *  select → 从 title 解析；setWidget → 从 widgetLines[0] 解析；其他 → undefined。
+   *  已知值："ask_user"（select）、"gui_widget"（setWidget）。handler 按 channel 分发。 */
+  channel?: string;
+  /** channel 解析后的结构化 payload（已 JSON.parse）。
+   *  ask_user: {questions, allowCancel}；gui_widget: {component}；无 channel: undefined。 */
+  channelPayload?: unknown;
+}
+
+/** UI 响应（handler 返回，session-runner 按 shape 回写 stdin）。
+ *  - {value}: select/input/editor 的答案
+ *  - {confirmed}: confirm 的答案
+ *  - {cancelled}: 取消（child close / handler 抛错 / 用户取消）
+ *  - {ack}: fire-and-forget（当前不透传到 TUI，留作协议完整） */
+export type UiResponse =
+  | { value: string }
+  | { confirmed: boolean }
+  | { cancelled: true }
+  | { ack: true };
+
+/** UI 请求 handler 签名（单函数，按 req.method 内部路由）。
+ *  实现方负责：channel 业务路由（ask_user → AskUserComponent）+ 默认转发（ctx.ui.*）。
+ *  抛错由调用方（DialogGlobalQueue / session-runner）兜底为 {cancelled:true}。 */
+export type UiRequestHandler = (req: UiRequest) => Promise<UiResponse>;
+
+// ── DialogGlobalQueue 实现 ──
+
+/** 入队项的 child 引用形状（只取 pid 用于 rejectChildDialogs 匹配）。 */
+export interface DialogChildRef {
+  pid: number;
+}
+
+/** enqueue 的可选项。child 用于 rejectChildDialogs 关联（child close 时批量 reject）。 */
+export interface EnqueueOptions {
+  child?: DialogChildRef;
+}
+
+/** 队列内一项：请求 + handler + resolve + 所属 child。
+ *  pending 状态持有 resolve，handler 完成 / rejectChildDialogs 时调它 settle Promise。
+ *  settled 标志保证只 settle 一次（rejectChildDialogs 与 handler 完成可能竞争）。 */
+interface QueueItem {
+  req: UiRequest;
+  handler: UiRequestHandler;
+  resolve: (resp: UiResponse) => void;
+  childPid: number | undefined;
+  /** 是否已 settle（防 handler 完成 / rejectChildDialogs 重复 resolve）。 */
+  settled: boolean;
+}
+
+/**
+ * L2 跨子进程全局 dialog 串行队列（进程单例）。
+ *
+ * 用法（createUiRequestHandlerForMode 返回的总 handler 内）：
+ * ```ts
+ * const dialogQueue = new DialogGlobalQueue();
+ * return async (req: UiRequest) => {
+ *   // 调用方负责判断：dialog 入队，fire-and-forget 直接调 realHandler
+ *   if (isDialogMethod(req.method)) return dialogQueue.enqueue(req, realHandler);
+ *   return realHandler(req);
+ * };
+ * ```
+ *
+ * 语义保证：
+ *   - FIFO 串行：前一个 handler settle 后才处理下一个
+ *   - SR-4：rejectChildDialogs(child) 把该 child 的 pending 全部 resolve 为 {cancelled:true}
+ *   - handler 抛错兜底：catch → {cancelled:true} → 继续下一个（队列不卡死）
+ *   - fire-and-forget 不入队（调用方判断 isDialogMethod 后才 enqueue）
+ *
+ * 线程模型：纯 Promise + 微任务驱动，无锁。Node 单线程 event loop 保证队列状态一致。
+ */
+export class DialogGlobalQueue {
+  /** 等待处理的队列（FIFO）。正在处理的项从 queue shift 出后由 current 持有。 */
+  private queue: QueueItem[] = [];
+  /** 正在处理的项（handler 已调、未 settle）。用于 rejectChildDialogs 取消占位中的 dialog。 */
+  private current: QueueItem | undefined;
+  private processing = false;
+
+  /**
+   * 入队一个 UI 请求，返回 Promise<UiResponse>。
+   *
+   * 内部按 method 交互模型分流（TC-E4 case 4）：
+   *   - dialog 类（select/confirm/input/editor，isDialogMethod===true）：进队列 FIFO 串行，
+   *     等前一个 settle 后才调 handler（争输入焦点，防并发弹窗）
+   *   - fire-and-forget 类（notify/setStatus/...）：不入队，立即直接调 handler（不阻塞）
+   *
+   * handler 抛错兜底：catch → 回 {cancelled:true}（dialog 路径，队列不卡死）。
+   * SR-4：opts.child 用于 rejectChildDialogs 关联（dialog 项会被批量 reject，含 current）。
+   *
+   * @param req UI 请求（dialog 或 fire-and-forget）
+   * @param handler 真正执行请求的 handler（TUI/GUI 模式分流后的 realHandler）
+   * @param opts 可选 child 引用（用于 rejectChildDialogs 关联）
+   * @returns handler 的响应；dialog 抛错时回 {cancelled:true}；child close 时回 {cancelled:true}
+   */
+  enqueue(
+    req: UiRequest,
+    handler: UiRequestHandler,
+    opts?: EnqueueOptions,
+  ): Promise<UiResponse> {
+    // fire-and-forget：不入队，立即直接调 handler（不阻塞，TC-E4 case 4）
+    if (!isDialogMethod(req.method)) {
+      return handler(req).catch(() => ({ cancelled: true } as UiResponse));
+    }
+    // dialog：入队 FIFO 串行
+    return new Promise<UiResponse>((resolve) => {
+      this.queue.push({
+        req,
+        handler,
+        resolve,
+        childPid: opts?.child?.pid,
+        settled: false,
+      });
+      void this.processNext();
+    });
+  }
+
+  /**
+   * settle 一个 item（幂等）。handler 完成 / rejectChildDialogs 都通过本方法，
+   * settled 标志保证只 settle 一次（防竞争）。
+   * settle current 时清空 current 并推进队列（解阻塞）。
+   */
+  private settleItem(item: QueueItem, resp: UiResponse): void {
+    if (item.settled) return;
+    item.settled = true;
+    item.resolve(resp);
+    // 若是正在处理的项，清空 current 并推进（rejectChildDialogs 取消 current 后队列不卡死）
+    if (this.current === item) {
+      this.current = undefined;
+      this.processing = false;
+      void this.processNext();
+    }
+  }
+
+  /**
+   * SR-4：把指定 child 的所有 pending dialog resolve 为 {cancelled:true}。
+   *
+   * 触发场景：子进程 close（用户取消 / crash / 超时 kill）时，其 pending dialog 的 handler
+   * 可能永不 settle（等用户输入），导致 Promise 永挂 + 内存泄漏。本方法批量清理。
+   *
+   * 处理范围（TC-E4 case 2）：
+   *   - 正在处理中（current）的该 child 项：settle {cancelled:true}，解阻塞队列推进下一个
+   *     （关键：handler 可能永不 settle，必须由这里打破死锁）
+   *   - 队列中等待处理的该 child 项：settle {cancelled:true} 并移除
+   *
+   * 不影响其他 child 的 pending dialog（TC-E4 case 2 子测试 2）。
+   */
+  rejectChildDialogs(child: DialogChildRef): void {
+    // 先处理正在处理的项（可能永不 settle，必须由这里解阻塞）
+    if (this.current && this.current.childPid === child.pid) {
+      this.settleItem(this.current, { cancelled: true });
+    }
+    // 再处理队列中等待的项
+    if (this.queue.length === 0) return;
+    const remaining: QueueItem[] = [];
+    for (const item of this.queue) {
+      if (item.childPid === child.pid) {
+        // settle 该 child 的 pending Promise 为 cancelled
+        this.settleItem(item, { cancelled: true });
+      } else {
+        remaining.push(item);
+      }
+    }
+    this.queue = remaining;
+  }
+
+  /**
+   * 处理队列下一项（FIFO）。
+   *
+   * processing 标志保证串行：handler 运行期间 processing=true，新的 processNext 调用直接返回；
+   * handler settle 后 processing=false 并递归处理下一项。
+   *
+   * handler 抛错兜底（TC-E4 case 3）：catch → settle {cancelled:true} → 继续。
+   * 不能让一个失败卡死队列（processing 永远 true）。
+   */
+  private async processNext(): Promise<void> {
+    if (this.processing) return;
+    if (this.queue.length === 0) return;
+    this.processing = true;
+    const item = this.queue.shift()!;
+    this.current = item;
+    try {
+      const resp = await item.handler(item.req);
+      // handler 完成：settle（若已被 rejectChildDialogs 抢先 settle 则 noop）
+      this.settleItem(item, resp);
+    } catch {
+      // handler 抛错兜底：回 cancelled，不向上抛（队列不能卡死）
+      this.settleItem(item, { cancelled: true });
+    } finally {
+      // settleItem 已处理 current/processing 清理（reject 路径）；
+      // 这里兜底处理 handler 正常完成路径（settleItem 内 current===item 时已清）。
+      if (this.current === item) {
+        this.current = undefined;
+        this.processing = false;
+      }
+    }
+    // 继续处理下一项（settle 后）。用 microtask 推进保证 FIFO 顺序
+    // （测试用 vi.advanceTimersByTimeAsync(0) 推进，Promise.resolve().then 即可触发）。
+    void this.processNext();
+  }
+
+  /** 清空队列（dispose 用）。pending 项的 Promise 不 settle（dispose 时调用方已不关心）。
+   *  如需 settle，dispose 前应先 rejectChildDialogs。 */
+  clear(): void {
+    this.queue = [];
+    this.current = undefined;
+    this.processing = false;
+  }
+
+  /** 当前队列长度（测试/诊断用）。含等待处理项（不含 current）。 */
+  get size(): number {
+    return this.queue.length;
+  }
+}

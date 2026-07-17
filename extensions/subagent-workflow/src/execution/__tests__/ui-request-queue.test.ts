@@ -1,18 +1,27 @@
 // src/__tests__/ui-request-queue.test.ts
 //
-// W3 测试：UI 请求队列机制
+// W3 测试：UI 请求队列机制（L1 per-child createUiRequestQueue）
 // 1. 多个请求按 FIFO 顺序处理
 // 2. 第一个请求未完成时第二个不开始
 //
 // 直接测试 createUiRequestQueue 的队列逻辑（纯函数，不需要 mock runSpawn）。
 // 用 fake child（PassThrough stdin）+ 手动控制 Promise resolve 时序。
+//
+// 协议迁移（W2）：enqueue 第二参从旧 Record params（含 questions/context）改为
+// ExtensionUiRequest（method 平铺）；handler 签名从 (questions,context) 改为
+// UiRequestHandler (req: UiRequest) => Promise<UiResponse>。
 
 import type { ChildProcess } from "node:child_process";
 import { PassThrough } from "node:stream";
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import { createUiRequestQueue } from "../session-runner.ts";
+import {
+  createUiRequestQueue,
+  type UiRequest,
+  type UiRequestHandler,
+  type UiResponse,
+} from "../session-runner.ts";
 
 beforeEach(() => {
   vi.useFakeTimers();
@@ -33,10 +42,12 @@ function makeFakeChild(): ChildProcess {
   } as unknown as ChildProcess;
 }
 
-function makeReq(id: string, question: string): Record<string, unknown> {
+/** 构造 select method 的 ExtensionUiRequest（ask_user 借道 select dialog 通道）。 */
+function makeSelectReq(question: string): { method: "select"; title: string; options: string[] } {
   return {
-    questions: [{ question, options: [{ label: "A" }] }],
-    context: `ctx-${id}`,
+    method: "select",
+    title: question,
+    options: [JSON.stringify({ question, options: [{ label: "A" }] })],
   };
 }
 
@@ -46,13 +57,12 @@ describe("UI 请求队列", () => {
     // 每个请求返回独立的可控 Promise
     const resolvers: Array<(v: unknown) => void> = [];
 
-    const handler = vi.fn((questions: Record<string, unknown>[]) => {
-      const q = (questions[0] as Record<string, unknown>).question as string;
-      callOrder.push(q);
-      return new Promise((resolve) => {
+    const handler: UiRequestHandler = vi.fn((req: UiRequest) => {
+      callOrder.push(req.title ?? "");
+      return new Promise<UiResponse>((resolve) => {
         resolvers.push(resolve);
       });
-    });
+    }) as unknown as UiRequestHandler;
 
     const child = makeFakeChild();
     const ctx = { uiRequestHandler: handler } as Parameters<
@@ -61,22 +71,22 @@ describe("UI 请求队列", () => {
     const enqueue = createUiRequestQueue(child, ctx);
 
     // 快速入队三个请求（handler 被调用但不 resolve）
-    enqueue("r1", { ...makeReq("r1", "Q1") });
-    enqueue("r2", { ...makeReq("r2", "Q2") });
-    enqueue("r3", { ...makeReq("r3", "Q3") });
+    enqueue("r1", makeSelectReq("Q1"));
+    enqueue("r2", makeSelectReq("Q2"));
+    enqueue("r3", makeSelectReq("Q3"));
 
     // 第一个请求立即开始处理
     expect(handler).toHaveBeenCalledTimes(1);
     expect(callOrder).toEqual(["Q1"]);
 
     // resolve 第一个 → 第二个开始处理
-    resolvers[0]("a1");
+    resolvers[0]({ value: "a1" });
     await vi.advanceTimersByTimeAsync(0);
     expect(handler).toHaveBeenCalledTimes(2);
     expect(callOrder).toEqual(["Q1", "Q2"]);
 
     // resolve 第二个 → 第三个开始处理
-    resolvers[1]("a2");
+    resolvers[1]({ value: "a2" });
     await vi.advanceTimersByTimeAsync(0);
     expect(handler).toHaveBeenCalledTimes(3);
     expect(callOrder).toEqual(["Q1", "Q2", "Q3"]);
@@ -86,16 +96,15 @@ describe("UI 请求队列", () => {
     const callOrder: string[] = [];
     let firstResolve: (v: unknown) => void;
 
-    const handler = vi.fn((questions: Record<string, unknown>[]) => {
-      const q = (questions[0] as Record<string, unknown>).question as string;
-      callOrder.push(q);
-      if (q === "Q1") {
-        return new Promise((resolve) => {
+    const handler: UiRequestHandler = vi.fn((req: UiRequest) => {
+      callOrder.push(req.title ?? "");
+      if (req.title === "Q1") {
+        return new Promise<UiResponse>((resolve) => {
           firstResolve = resolve;
         });
       }
-      return Promise.resolve("done");
-    });
+      return Promise.resolve<UiResponse>({ value: "done" });
+    }) as unknown as UiRequestHandler;
 
     const child = makeFakeChild();
     const ctx = { uiRequestHandler: handler } as Parameters<
@@ -103,8 +112,8 @@ describe("UI 请求队列", () => {
     >[1];
     const enqueue = createUiRequestQueue(child, ctx);
 
-    enqueue("r1", { ...makeReq("r1", "Q1") });
-    enqueue("r2", { ...makeReq("r2", "Q2") });
+    enqueue("r1", makeSelectReq("Q1"));
+    enqueue("r2", makeSelectReq("Q2"));
 
     // 只有 Q1 被调用，Q2 还在队列里
     expect(handler).toHaveBeenCalledTimes(1);
@@ -116,7 +125,7 @@ describe("UI 请求队列", () => {
     expect(callOrder).toEqual(["Q1"]);
 
     // resolve Q1 → Q2 才开始
-    firstResolve!("a1");
+    firstResolve!({ value: "a1" });
     await vi.advanceTimersByTimeAsync(0);
     expect(handler).toHaveBeenCalledTimes(2);
     expect(callOrder).toEqual(["Q1", "Q2"]);

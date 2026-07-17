@@ -14,12 +14,15 @@ import { createHash } from "node:crypto";
 import * as fs from "node:fs";
 import * as path from "node:path";
 
+import type { ExtensionMode } from "@mariozechner/pi-coding-agent";
+
 import type { AgentResult as WorkflowAgentResult } from "../orchestration/models/types.ts";
 // D-A10: workflow 侧 AgentResult 映射（executeAndAwait 出口）
 import { mapToWorkflowAgentResult } from "./agent-result-mapper.ts";
 import { removeAliveMarker } from "./alive-store.ts";
 import { bestEffort } from "./best-effort.ts";
 import { type ConcurrencyPool,DefaultConcurrencyPool } from "./concurrency-pool.ts";
+import type { UiRequestHandler } from "./dialog-queue.ts";
 import {
   completeRecord,
   createRecord,
@@ -41,6 +44,7 @@ import type { StreamSink } from "./stream-sink.ts";
 import { SubagentStream } from "./stream-sink.ts";
 import { writeCancelledTombstone } from "./tombstone-store.ts";
 import type { WorktreeHandle } from "./types.ts";
+import { UiRequestObservability } from "./ui-request-observability.ts";
 import type {
   AgentEvent,
   AgentResult,
@@ -100,11 +104,9 @@ export interface SubagentServiceInit {
   modelService: ModelConfigService;
   /** 缓存的主 session file 获取函数（fork source 解析用）。 */
   getMainSessionFile?: () => string | undefined;
-  /** W2: UI 请求处理回调（ask_user 扩展）。 */
-  uiRequestHandler?: (
-    questions: Record<string, unknown>[],
-    context?: string,
-  ) => Promise<unknown>;
+  /** W2: UI 请求处理回调（ask_user 扩展）。
+   *  签名见 dialog-queue.ts UiRequestHandler：接收 UiRequest，返回 UiResponse。 */
+  uiRequestHandler?: UiRequestHandler;
 }
 
 /** session_start 注入参数（session 级）。 */
@@ -113,6 +115,12 @@ export interface SubagentServiceSessionInit {
   sessionId: string;
   /** UI streaming sink（ctx.ui.setWidget），用于 background text_delta 转发。 */
   streamSink?: StreamSink;
+  /** 主进程运行模式（W4 守卫：headless 不注入 ask_user RPC 提示词）。
+   *  initSession 读取后存入 this.sessionMode，buildSessionRunnerContext 透传给 session-runner。 */
+  mode?: ExtensionMode;
+  /** UI 请求 handler（session 级覆盖进程级）。
+   *  initSession 读取后覆盖 this.uiRequestHandler（setUiRequestHandler 的 session 级等价入口）。 */
+  uiRequestHandler?: UiRequestHandler;
 }
 
 /** background 优先级（保留 priority 排序机制，单一值）。 */
@@ -171,7 +179,10 @@ export class SubagentService {
   private readonly cwd: string;
   private readonly worktreeManager: WorktreeManager;
   private readonly getMainSessionFile: (() => string | undefined) | undefined;
-  private readonly uiRequestHandler: SubagentServiceInit["uiRequestHandler"];
+  /** UI 请求 handler（进程级，可被 setUiRequestHandler / initSession 覆盖）。 */
+  private uiRequestHandler: SubagentServiceInit["uiRequestHandler"];
+  /** UI 请求可观测性状态（sessionMode + handler 缺失告警去重，提取自本类降低行数）。 */
+  private readonly uiObservability = new UiRequestObservability();
   private pi: PiLike | null = null;
   /** 当前 Pi session ID（session 隔离过滤用）。initSession 时注入。 */
   private sessionId: string | null = null;
@@ -183,12 +194,9 @@ export class SubagentService {
   /** background 完成通知器（滑动窗口合并 + 去重）。session_start revive，shutdown dispose。 */
   private readonly notifier: BgNotifier;
   /** [MF#4][MF#2] fork 深度按 async 调用链传递（AsyncLocalStorage），替代共享可变计数器。
-   *  主 session=0；fork 进入子 session 期间推进为子深度，供嵌套 fork 的 execute（子 agent
-   *  在 run() 期间再调 subagent tool）经 ALS 读到自身深度作为 parentForkDepth。并发 background
-   *  fork 各自独立调用链，不再互相压低深度值 → MAX_FORK_DEPTH 递归护栏不被绕过。
-   *  [MF#2] 旧实现用单实例字段 currentForkDepth 跨所有执行链共享：并发 background 下 A 还原
-   *  深度后 B 的嵌套 fork 读到被压低的值 → 护栏恒不过限。ALS 是 node 跨 async 边界传递
-   *  “请求作用域”状态的标准机制，每条调用链隔离。 */
+   *  主 session=0；fork 进入子 session 期间推进为子深度，供嵌套 fork 经 ALS 读到自身深度作为
+   *  parentForkDepth。并发 background fork 各自独立调用链，不再互相压低深度值。
+   *  [MF#2] 旧实现用单实例字段跨执行链共享 → 并发下 A 还原深度后 B 读到被压低值 → 护栏失效。 */
   private readonly forkDepthAls = new AsyncLocalStorage<number>();
 
   /** subagent 执行上下文按 async 调用链传递（当前正在跑的 record 身份 + 递归深度）。
@@ -211,11 +219,31 @@ export class SubagentService {
 
   // ── 生命周期（index.ts 调）──────────────────────────────
 
+  /** 覆盖 UI 请求 handler（W3: index.ts session_start 时按 mode 注入 handler 后调）。
+   *  委托 uiObservability 重置缺失告警去重——新 handler 就位后允许重新 warn。 */
+  setUiRequestHandler(handler: UiRequestHandler | undefined): void {
+    this.uiRequestHandler = handler;
+    this.uiObservability.resetMissingHandlerWarnings();
+  }
+
+  /** session-runner handleUiRequest 在 handler 缺失时调用（FR-9 可观测性）。
+   *  委托 uiObservability：按 session 去重，同一 session 的多次 UI 请求只 warn 一次。
+   *  W2: console.warn 兜底。W3 接入 pi.appendEntry("subagent:ui-request-missing-handler", ...)。 */
+  notifyMissingHandler(sessionId: string): void {
+    this.uiObservability.notifyMissingHandler(sessionId);
+  }
+
   /** session_start 注入 pi + revive（modelRegistry/entries 归 ModelConfigService.initModel）。 */
   initSession(init: SubagentServiceSessionInit): void {
     this.pi = init.pi;
     this.sessionId = init.sessionId;
     this.streamSink = init.streamSink ?? null;
+    // 读取 mode（W4 守卫透传给 session-runner）+ session 级 handler 覆盖。
+    this.uiObservability.setMode(init.mode);
+    if (init.uiRequestHandler !== undefined) {
+      this.uiRequestHandler = init.uiRequestHandler;
+      this.uiObservability.resetMissingHandlerWarnings();
+    }
     // [SPAWN fork depth 跨进程传递] 子进程被父 spawn 时，父通过 env
     // PI_SUBAGENT_FORK_DEPTH 传入当前 fork 链深度。子进程 session_start 时
     // 读取作为 forkDepthAls 基线，使后续嵌套 spawn fork 能从正确深度递增。
@@ -242,32 +270,19 @@ export class SubagentService {
   dispose(): void {
     if (this._disposed) return;
     this._disposed = true;
-    // [R0/C1 孤儿进程修复] 进程退出路径：两层兜底 kill 所有 spawned 子进程（sync + background）。
-    //   1. store.abortRunningControllers()：background record 的 controller.abort → runSpawn signal
-    //      listener → child.kill("SIGTERM")。这是 background 的 CAS 收尾语义路径（不能动）。
-    //   2. killAllSpawnedChildren()：遍历 session-runner 的 spawnedChildren Set（sync + background
-    //      均注册），对仍存活的发 SIGTERM。sync record 的 controller 是 undefined，abortRunningControllers
-    //      跳过它们——此处补齐，防止 sync 子进程成孤儿（主进程崩溃/SIGKILL 之外的退出路径）。
-    // 必须在 store.dispose 之前（dispose 后 records 仍可访问，但语义上先 kill 再清场）。
-    // 注意：dispose 是同步返回，主进程可能紧接着 process.exit()，runSpawn 的 finally 清理
-    //（identity 补写等）可能来不及跑——这是可接受的退化（session.jsonl 已由子进程写入，
-    // 缺 identity entry 只影响 list 重建的可观测性，不丢执行数据）。
-    //
-    // [T2 AC-4.3 双重记账一致性] 进程退出时所有 running record 异常终止（runAndFinalize 的
-    // finalizeRecord 不会再跑——detached promise 随进程退出而丢弃）。此处为每个 running record
-    // emit pending:unregister(reason=failed)，让 pending-notifications 清理 registry entry，
-    // 避免进程退出后两侧（subagent store vs pending registry）状态不一致。
+    // [T2 AC-4.3 双重记账一致性] 为每个 running record emit pending:unregister(reason=failed)，
+    // 让 pending-notifications 清理 registry entry，避免进程退出后两侧状态不一致。
     // 必须在 abortRunningControllers 之前——此时 record 仍 running，listRunning 能取到。
-    // 只 emit running 的 record（已终态的由其正常路径 emit 过，不重复）。
     for (const record of this.store.listRunning()) {
       emitPendingUnregister(this.pi, record.id, "failed");
     }
+    // [R0/C1 孤儿进程修复] 两层兜底 kill 所有 spawned 子进程（sync + background）：
+    //   1. abortRunningControllers：background record 的 controller.abort → child.kill（CAS 收尾语义）。
+    //   2. killAllSpawnedChildren：遍历 session-runner spawnedChildren Set，对仍存活的发 SIGTERM
+    //      （sync record 的 controller 是 undefined，abortRunningControllers 跳过它们，此处补齐）。
+    // 必须在 store.dispose 之前（先 kill 再清场）。dispose 同步返回后主进程可能立即 exit，
+    // runSpawn 的 finally 清理可能来不及跑——可接受退化（session.jsonl 已由子进程写入）。
     this.store.abortRunningControllers();
-    // [C1] orphan 进程兜底：abortRunningControllers 只能 kill background 子进程（有 controller）。
-    // sync 子进程的 controller 是 undefined（见 createRecordForMode），主进程退出时会被遗漏成孤儿。
-    // killAllSpawnedChildren 遍历 session-runner 的 spawnedChildren Set（sync + background 均注册），
-    // 对仍存活的子进程发 SIGTERM。background 子进程此时已被 controller.abort 路径 kill，
-    // 此处对它们的二次 kill 是无害 noop（已 killed/退出）。不 await 子进程退出（dispose 要快）。
     killAllSpawnedChildren();
     for (const s of this.throttleState.values()) {
       if (s.timer !== undefined) clearTimeout(s.timer);
@@ -337,13 +352,9 @@ export class SubagentService {
 
     // 通用嵌套深度护栏（D-033）：execCtxAls 记录所有 subagent 嵌套层级（fork + 非 fork），
     // 每层 +1。MAX_FORK_DEPTH 同时限 fork 链与通用嵌套——非 fork 递归虽不累积 session 体积，
-    // 但耗资源（每层 createAgentSession + resourceLoader + session 文件）且 LLM 易陷入
-    // 「委派子 agent → 子 agent 再委派」死循环（实测无护栏时递归到 L36 全 failed）。
-    // 在所有副作用（record/worktree/session）之前拦截，错误直达调用方。
-    // fork:true 的体积护栏（resolveSessionContext 的 parentForkDepth 检查）作为第二层保留。
-    // 计数基准：顶层 nestingDepth=0；每次嵌套 execute +1。允许 0..MAX_FORK_DEPTH（共 11 层），
-    // nestingDepth=MAX+1 被拒。与 fork 护栏（parentForkDepth>=MAX 拒，parent 计数基准）互补：
-    // 本护栏更严（计所有嵌套），混合链下先生效；两者共享 MAX_FORK_DEPTH 上限不漂移。
+    // 但耗资源且 LLM 易陷入「委派→再委派」死循环。在所有副作用之前拦截，错误直达调用方。
+    // 计数基准：顶层 nestingDepth=0，nestingDepth>MAX 被拒。与 fork 体积护栏（parentForkDepth 检查）
+    // 互补：本护栏更严（计所有嵌套），混合链下先生效；两者共享 MAX_FORK_DEPTH 上限不漂移。
     const parentNesting = this.execCtxAls.getStore();
     const nestingDepth = parentNesting ? parentNesting.depth + 1 : 0;
     if (nestingDepth > MAX_FORK_DEPTH) {
@@ -704,17 +715,8 @@ export class SubagentService {
     }
     // 抢到锁：completeRecord（用空 result 填 cancelled）+ archive（立即移出内存）+ notify。
     // 写 cancelled tombstone：session.jsonl 被 abort 截断，cancelled 状态靠 sidecar 标记，
-    // collectRecords 重建时 override status=cancelled。
-    // durationMs 用真实耗时（startedAt → now），避免耗时统计恒为 0 失真。
-    const cancelledResult: AgentResult = {
-      text: "",
-      turns: record.turnCount,
-      durationMs: Date.now() - record.startedAt,
-      success: false,
-      error: "cancelled by user",
-      sessionId: record.id,
-      toolCalls: [],
-    };
+    // collectRecords 重建时 override status=cancelled。durationMs 用真实耗时（startedAt → now）。
+    const cancelledResult: AgentResult = { text: "", turns: record.turnCount, durationMs: Date.now() - record.startedAt, success: false, error: "cancelled by user", sessionId: record.id, toolCalls: [] };
     completeRecord(record, cancelledResult, "cancelled");
     // 写 tombstone（best-effort，sessionFile 可能为 undefined——窗口期 cancel）。
     if (record.sessionFile) {
@@ -830,13 +832,9 @@ export class SubagentService {
     emitPendingUnregister(this.pi, record.id, status);
   }
 
-  /**
-   * run() 创建期异常的收尾（H1 修复）。
-   * run() 正常路径不抛错，但 createAndConfigureSession 失败会抛——
-   * 本方法合成 failed AgentResult → CAS 抢锁 → finalizeRecord
-   * （与正常路径同形：completeRecord + archive）。
-   * 返回合成 result 供 runAndFinalize 继续返回（不 re-throw，swallow 策略）。
-   */
+  /** run() 创建期异常的收尾（H1 修复）：createAndConfigureSession 失败会抛，本方法合成 failed
+   *  AgentResult → CAS 抢锁 → finalizeRecord（与正常路径同形）。返回合成 result 供 runAndFinalize
+   *  继续返回（不 re-throw，swallow 策略）。 */
   private async finalizeFailed(record: ExecutionRecord, err: unknown): Promise<AgentResult> {
     const errMsg = err instanceof Error ? err.message : String(err);
     // durationMs 用真实耗时（startedAt → now），避免失败统计恒为 0 失真。
@@ -857,27 +855,15 @@ export class SubagentService {
     return cancelledResult;
   }
 
-  // onUpdate 节流状态（per-record Map）。每条 record（每条 onUpdate 回流链）独立节流，
-  // 避免嵌套（fork 链：主→A→B）多条 onUpdate 链争用同一份节流状态。
-  // [HISTORICAL] 旧实现用单个实例字段，注释假设“fork 嵌套串行，同时只有一条链”——错误：
-  // trailing timer 异步，B 设的 trailing 会在 B 完成、A 恢复期间触发，与 A 的同步事件争用
-  // onUpdateLastEmitAt/onUpdateTrailingTimer → A 的 onUpdate 被吞/延迟 → 主 agent 对话流
-  // A block 状态跳跃更新 → 残影。per-record 化让 A/B 各自独立节流，互不干扰。
+  // onUpdate 节流状态（per-record Map）。每条 record 独立节流，避免嵌套（fork 链：主→A→B）
+  // 多条 onUpdate 链争用同一份状态。旧实现用单实例字段——trailing timer 异步导致跨链争用
+  // → onUpdate 被吞/延迟 → 主 agent 对话流残影。per-record 化让 A/B 各自独立节流。
   private readonly throttleState = new Map<string, { lastEmitAt: number; timer?: ReturnType<typeof setTimeout> }>();
 
-  /**
-   * AgentEvent 节流回流到 onUpdate（streaming delta 不触发 + 时间窗节流）。
-   *
-   * 名为 Throttled 必须真节流——只过滤事件类型时，每个 tool_start/tool_end/turn_end
-   * 都直发 onUpdate，嵌套场景一秒 10+ 事件密集回流 → Pi tool_execution_update 密集重绘
-   * → 行数变化的流式 tool 组件在 chatContainer diff 中残影（状态行堆叠）。
-   *
-   * leading + trailing：首次事件立即发（响应性），窗口内后续合并到末尾补发一次
-   * （保证终态事件不丢——sync record 终态后 archive 移出内存，闭包持有的引用仍可 project）。
-   *
-   * 节流状态 per-record（Map）：每条 record 独立 leading/trailing 窗口。嵌套（fork 链）
-   * 时外层 A 与内层 B 各自节流，trailing timer 不会跨链污染。
-   */
+  /** AgentEvent 节流回流到 onUpdate（streaming delta 不触发 + 时间窗节流）。
+   *  名为 Throttled 必须真节流——否则嵌套场景一秒 10+ 事件密集回流 → Pi tool_execution_update
+   *  密集重绘 → 流式 tool 组件残影。leading + trailing：首次立即发（响应性），窗口内后续合并
+   *  到末尾补发一次（保证终态事件不丢）。节流状态 per-record，trailing timer 不会跨链污染。 */
   private onEventThrottled(
     record: ExecutionRecord,
     event: AgentEvent,
@@ -960,6 +946,8 @@ export class SubagentService {
       // worktree pid 回调：session-runner first header 时补全注册表 pid。
       onWorktreePid: (branch: string, pid: number) => this.worktreeManager.registerPid(branch, pid),
       uiRequestHandler: this.uiRequestHandler,
+      // 主进程运行模式：session-runner W4 守卫据此决定是否注入 ask_user RPC 提示词。
+      mode: this.uiObservability.getMode(),
     };
   }
 }

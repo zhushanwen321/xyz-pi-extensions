@@ -30,12 +30,68 @@ export interface SpawnSessionHeader {
   readonly version?: number;
 }
 
-/** parseSpawnLine 的分类结果。 */
+/** Pi 原生 extension_ui_request 的方法特定字段（按 method 平铺）。
+ *  与 Pi rpc-types.ts L230-265 的 RpcExtensionUIRequest 1:1 对应。
+ *  method 是判别字段；每个变体仅列出该 method 的已知字段（可选字段保持可选）。
+ *  未知 method 走 string fallback（保留 raw 字段，避免协议演进时丢字段）。 */
+export type ExtensionUiRequest =
+  | { method: "select"; title: string; options: string[]; timeout?: number }
+  | { method: "confirm"; title: string; message: string; timeout?: number }
+  | { method: "input"; title: string; placeholder?: string; timeout?: number }
+  | { method: "editor"; title: string; prefill?: string }
+  | { method: "notify"; message: string; notifyType?: "info" | "warning" | "error" }
+  | { method: "setStatus"; statusKey: string; statusText: string | undefined }
+  | {
+      method: "setWidget";
+      widgetKey: string;
+      widgetLines: string[] | undefined;
+      widgetPlacement?: "aboveEditor" | "belowEditor";
+    }
+  | { method: "setTitle"; title: string }
+  | { method: "set_editor_text"; text: string }
+  // 未知 method fallback：保留原始字段，避免协议演进时丢信息
+  | { method: string; raw: Record<string, unknown> };
+
+/** 解析后的 extension_ui_request 顶层形状（type 守卫用）。
+ *  id 和 method 在顶层，method 特定字段平铺（与 Pi 原生格式一致）。 */
+interface ExtensionUiRequestEnvelope {
+  type: "extension_ui_request";
+  id: string;
+  method: string;
+  [key: string]: unknown;
+}
+
+/** Pi 原生 RPC response 顶层形状（type 守卫用）。
+ *  与 Pi rpc-types.ts 的 RpcResponse 一致：type:"response" + command + success。 */
+interface RpcResponseEnvelope {
+  type: "response";
+  command: string;
+  success: boolean;
+  id?: string;
+  data?: unknown;
+  error?: string;
+  [key: string]: unknown;
+}
+
+/** parseSpawnLine 的分类结果。
+ *
+ *  关键改动（W1 协议层重写）：
+ *    - extension_ui_request 分支：从 {id, params:Record} 改为 {id, request: ExtensionUiRequest}
+ *      （request 按 method 平铺，与 Pi rpc-types.ts 1:1）
+ *    - response 分支：从 {id, result, error} 改为 {id?, command, success, data?, error?}
+ *      （Pi 原生 RpcResponse 格式，SR-1 根因 1b） */
 export type ParsedSpawnLine =
   | { kind: "header"; header: SpawnSessionHeader }
   | { kind: "event"; event: SdkEvent }
-  | { kind: "response"; id: string; result?: unknown; error?: unknown }
-  | { kind: "extension_ui_request"; id: string; params: Record<string, unknown> }
+  | {
+      kind: "response";
+      id?: string;
+      command: string;
+      success: boolean;
+      data?: unknown;
+      error?: string;
+    }
+  | { kind: "extension_ui_request"; id: string; request: ExtensionUiRequest }
   | { kind: "invalid"; raw: string; error: string };
 
 /**
@@ -55,34 +111,129 @@ function isSessionHeader(obj: unknown): obj is SpawnSessionHeader {
 }
 
 /**
- * 判断解析出的 JSON 是否为 JSON-RPC 2.0 response（有 jsonrpc + id，无 method）。
- * RPC response 有两种：成功（有 result）或失败（有 error）。
+ * 判断解析出的 JSON 是否为 Pi 原生 RPC response。
+ *
+ * SR-1 根因 1b 修复：旧守卫判 JSON-RPC 2.0（jsonrpc + id + result/error），
+ * 但 Pi 实际发 {type:"response", command, success, data?, error?}。
+ * 新守卫只认 Pi 原生格式：
+ *   - type === "response"
+ *   - command: string（调用的命令名，如 "run_tool"）
+ *   - success: boolean
+ * id 可选（通知型 response 无 id）。
+ *
+ * 旧 JSON-RPC 2.0 response（{jsonrpc, id, result}）不再被识别 → 落 invalid 分支。
  */
-function isRpcResponse(obj: unknown): obj is { id: string; result?: unknown; error?: unknown } {
+function isRpcResponse(obj: unknown): obj is RpcResponseEnvelope {
   if (typeof obj !== "object" || obj === null) return false;
   const r = obj as Record<string, unknown>;
   return (
-    r.jsonrpc === "2.0" &&
-    typeof r.id === "string" &&
-    !("method" in r) &&
-    ("result" in r || "error" in r)
+    r.type === "response" &&
+    typeof r.command === "string" &&
+    typeof r.success === "boolean"
   );
 }
 
 /**
- * 判断解析出的 JSON 是否为 extension_ui_request（JSON-RPC 2.0 request，method 固定）。
- * 子进程通过 stdout 发出 UI 交互请求（如 ask_user），父进程处理后通过 stdin 回写响应。
+ * 判断解析出的 JSON 是否为 Pi 原生 extension_ui_request。
+ *
+ * 关键改动（W1）：旧守卫判 JSON-RPC 2.0（jsonrpc + method:"extension_ui_request" + params），
+ * 但 Pi 实际发平铺格式 {type:"extension_ui_request", id, method, ...method特定字段}。
+ * 新守卫：
+ *   - type === "extension_ui_request"（顶层 type 字段，非 method 字段值）
+ *   - id: string
+ *   - method: string（select/confirm/.../set_editor_text 等具体方法名）
+ *
+ * 删掉 jsonrpc 守卫（Pi 不发 JSON-RPC 2.0 envelope）和 params 守卫（字段平铺，无 params 包裹）。
+ * 旧 JSON-RPC 2.0 格式（{jsonrpc, method:"extension_ui_request", params}）不再被识别。
  */
-function isExtensionUiRequest(obj: unknown): obj is { id: string; params: Record<string, unknown> } {
+function isExtensionUiRequest(obj: unknown): obj is ExtensionUiRequestEnvelope {
   if (typeof obj !== "object" || obj === null) return false;
   const r = obj as Record<string, unknown>;
   return (
-    r.jsonrpc === "2.0" &&
+    r.type === "extension_ui_request" &&
     typeof r.id === "string" &&
-    r.method === "extension_ui_request" &&
-    typeof r.params === "object" &&
-    r.params !== null
+    typeof r.method === "string"
   );
+}
+
+/**
+ * 从已通过 isExtensionUiRequest 守卫的 envelope 构造 ExtensionUiRequest 变体。
+ *
+ * 按 method 平铺提取字段（与 Pi rpc-types.ts L230-265 1:1）。已知 method
+ * 走对应变体；未知 method 走 string fallback（保留 raw 字段全量字段）。
+ *
+ * 字段类型容错：协议字段类型不符（如 options 非数组）时，该字段按 undefined
+ * 处理但仍归类为已知 method（不丢 method 信息）。由调用方/类型守卫后续校验。
+ */
+function buildExtensionUiRequest(env: ExtensionUiRequestEnvelope): ExtensionUiRequest {
+  const r: Record<string, unknown> = env;
+  switch (env.method) {
+    case "select":
+      return {
+        method: "select",
+        title: typeof r.title === "string" ? r.title : "",
+        options: Array.isArray(r.options) ? (r.options as string[]) : [],
+        ...(typeof r.timeout === "number" ? { timeout: r.timeout } : {}),
+      };
+    case "confirm":
+      return {
+        method: "confirm",
+        title: typeof r.title === "string" ? r.title : "",
+        message: typeof r.message === "string" ? r.message : "",
+        ...(typeof r.timeout === "number" ? { timeout: r.timeout } : {}),
+      };
+    case "input":
+      return {
+        method: "input",
+        title: typeof r.title === "string" ? r.title : "",
+        ...(typeof r.placeholder === "string" ? { placeholder: r.placeholder } : {}),
+        ...(typeof r.timeout === "number" ? { timeout: r.timeout } : {}),
+      };
+    case "editor":
+      return {
+        method: "editor",
+        title: typeof r.title === "string" ? r.title : "",
+        ...(typeof r.prefill === "string" ? { prefill: r.prefill } : {}),
+      };
+    case "notify":
+      return {
+        method: "notify",
+        message: typeof r.message === "string" ? r.message : "",
+        ...(r.notifyType === "info" || r.notifyType === "warning" || r.notifyType === "error"
+          ? { notifyType: r.notifyType }
+          : {}),
+      };
+    case "setStatus":
+      return {
+        method: "setStatus",
+        statusKey: typeof r.statusKey === "string" ? r.statusKey : "",
+        statusText: typeof r.statusText === "string" ? r.statusText : undefined,
+      };
+    case "setWidget": {
+      const placement = r.widgetPlacement;
+      return {
+        method: "setWidget",
+        widgetKey: typeof r.widgetKey === "string" ? r.widgetKey : "",
+        widgetLines: Array.isArray(r.widgetLines) ? (r.widgetLines as string[]) : undefined,
+        ...(placement === "aboveEditor" || placement === "belowEditor"
+          ? { widgetPlacement: placement }
+          : {}),
+      };
+    }
+    case "setTitle":
+      return {
+        method: "setTitle",
+        title: typeof r.title === "string" ? r.title : "",
+      };
+    case "set_editor_text":
+      return {
+        method: "set_editor_text",
+        text: typeof r.text === "string" ? r.text : "",
+      };
+    default:
+      // 未知 method：保留全部原始字段，避免协议演进时丢信息
+      return { method: env.method, raw: r };
+  }
 }
 
 /**
@@ -91,9 +242,12 @@ function isExtensionUiRequest(obj: unknown): obj is { id: string; params: Record
  * @param line stdout 的一行（不含换行符；空行返回 null）
  * @returns 分类结果，或 null（空行/仅空白）
  *
- * 分类规则：
+ * 分类规则（判定顺序关键，见 W1 bug 修复）：
  *   - 空白行 → null（pi 可能输出空行，跳过）
- *   - 合法 JSON + type:"session" + 有 id → header
+ *   - 合法 JSON + type:"session" + 必需字段 → header
+ *   - 合法 JSON + type:"extension_ui_request" + id + method → extension_ui_request
+ *     （必须在 event 分支之前，否则被 typeof obj.type===string 吞为 event）
+ *   - 合法 JSON + type:"response" + command + success → response
  *   - 合法 JSON + 有 type 字段 → event（SdkEvent，type schema 由调用方校验）
  *   - 合法 JSON 但无 type → invalid
  *   - 非法 JSON → invalid（记录 error，不抛——单行损坏不应中断整个流）
@@ -120,16 +274,23 @@ export function parseSpawnLine(line: string): ParsedSpawnLine | null {
     return { kind: "header", header: obj };
   }
 
-  // RPC response：JSON-RPC 2.0 response（有 jsonrpc + id + result/error，无 method）
-  if (isRpcResponse(obj)) {
-    const r = obj as Record<string, unknown>;
-    return { kind: "response", id: r.id as string, result: r.result, error: r.error };
+  // extension_ui_request：必须在 event 分支之前判定（W1 判定顺序 bug 修复）。
+  // 原因：extension_ui_request 也有 type 字段，若 event 分支（typeof obj.type===string）
+  // 在前，会被当 event 静默吞掉。现在先于 event 判定，命中后按 method 构造 request。
+  if (isExtensionUiRequest(obj)) {
+    return { kind: "extension_ui_request", id: obj.id, request: buildExtensionUiRequest(obj) };
   }
 
-  // extension_ui_request：JSON-RPC 2.0 request（jsonrpc + id + method:extension_ui_request + params）
-  if (isExtensionUiRequest(obj)) {
-    const r = obj as Record<string, unknown>;
-    return { kind: "extension_ui_request", id: r.id as string, params: r.params as Record<string, unknown> };
+  // RPC response：Pi 原生格式 {type:"response", command, success, data?, error?}
+  if (isRpcResponse(obj)) {
+    return {
+      kind: "response",
+      ...(typeof obj.id === "string" ? { id: obj.id } : {}),
+      command: obj.command,
+      success: obj.success,
+      ...(obj.data !== undefined ? { data: obj.data } : {}),
+      ...(typeof obj.error === "string" ? { error: obj.error } : {}),
+    };
   }
 
   // 事件行：必须有 type 字段（SdkEvent 契约）

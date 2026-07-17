@@ -10,6 +10,11 @@ export function getAgentDir(): string {
 
 // ── Type exports (minimal stubs for vitest resolution) ──
 // These approximate the real SDK shapes enough for structural tests.
+
+/** Pi run mode. Mirrors `ExtensionMode` from the real SDK
+ *  (core/extensions/types.ts:207). Used by host-mode.ts. */
+export type ExtensionMode = "tui" | "rpc" | "json" | "print";
+
 export interface ExtensionAPI {
   registerTool(tool: unknown): void;
   registerCommand(cmd: unknown): void;

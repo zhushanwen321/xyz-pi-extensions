@@ -9,6 +9,8 @@
 import { type ChildProcess,execFileSync, spawn } from "node:child_process";
 import * as fs from "node:fs";
 
+import type { ExtensionMode } from "@mariozechner/pi-coding-agent";
+
 import { writeAliveMarker } from "./alive-store.ts";
 import type {
   AgentEvent,
@@ -17,7 +19,13 @@ import type {
   SdkEvent,
   WorktreeHandle,
 } from "./types.ts";
+import {
+  type UiRequest,
+  type UiRequestHandler,
+  type UiResponse,
+} from "./dialog-queue.ts";
 import { updateFromEvent } from "./execution-record.ts";
+import { willRespondToAskUser } from "./host-mode.ts";
 import type {
   AgentConfig,
   ResolvedModel,
@@ -28,12 +36,14 @@ import { getPiInvocation } from "./pi-invocation.ts";
 import { MAX_FORK_DEPTH } from "./session-context-resolver.ts";
 import { IDENTITY_CUSTOM_TYPE, type SubagentIdentityData } from "./session-reconstructor.ts";
 import {
+  type ExtensionUiRequest,
   deriveSessionFilePath,
   findSessionFileByHeaderId,
   parseSpawnLine,
   type SpawnSessionHeader,
 } from "./spawn-event-adapter.ts";
 import type { SubagentStream } from "./stream-sink.ts";
+import { parseChannel } from "./ui-channels.ts";
 import {
   cleanupTempPrompt,
   writePromptToTempFile,
@@ -191,16 +201,18 @@ export interface SessionRunnerContext {
   onWorktreePid?: (branch: string, pid: number) => void;
   /**
    * UI 请求处理回调。子进程发 extension_ui_request 时调用。
-   * 接收 questions + context（ask_user 扩展产生的数据），返回用户选择的答案。
-   * 实现方将 questions 转发到主 agent 的 UI 通道（如 ask_user tool），
-   * 收到用户回答后 resolve。
    *
-   * 未设置时 extension_ui_request 被静默忽略（子进程超时后自行降级）。
+   * 入参 UiRequest（method + channel/channelPayload + method 特定字段），
+   * 返回 UiResponse（{value}/{confirmed}/{cancelled}/{ack}）。
+   * 实现方按 req.channel 分发业务路由（ask_user → AskUserComponent）+
+   * 默认转发（ctx.ui.*），收到用户回答后 resolve。
+   *
+   * 未设置时不再静默忽略——console.warn 兜底（FR-9 可观测性），
+   * W3 接入 SubagentService.notifyMissingHandler 的 appendEntry。
    */
-  uiRequestHandler?: (
-    questions: Record<string, unknown>[],
-    context?: string,
-  ) => Promise<unknown>;
+  uiRequestHandler?: UiRequestHandler;
+  /** 主进程运行模式（W4 守卫：headless 不注入 ask_user RPC 提示词）。 */
+  mode?: ExtensionMode;
 }
 
 /** SessionRunner.run 的入参。 */
@@ -348,6 +360,10 @@ export function buildEnvBlock(
 // ============================================================
 // W3: UI 请求队列（FIFO 串行处理）
 // ============================================================
+//
+// 类型再导出：dialog-queue.ts 是 UiRequest/UiResponse/UiRequestHandler 的规范来源，
+// 本模块再导出供测试 import（避免测试直接依赖 dialog-queue 内部实现）。
+export type { UiRequest, UiRequestHandler, UiResponse } from "./dialog-queue.ts";
 
 /**
  * 创建 UI 请求队列。返回 enqueue 函数，调用方将 extension_ui_request 入队。
@@ -359,25 +375,25 @@ export function buildEnvBlock(
  * 设计：队列是 runSpawn 生命周期内的闭包状态（非模块级），
  * 每个子进程实例独立队列，无跨 session 泄漏。
  *
- * @param child 子进程（stdin 写入 JSON-RPC response）
+ * @param child 子进程（stdin 写入 extension_ui_response）
  * @param ctx SessionRunnerContext（含 uiRequestHandler 回调）
- * @returns enqueue 函数：(id, params) => void，将请求入队并触发顺序处理
+ * @returns enqueue 函数：(id, request) => void，将请求入队并触发顺序处理
  */
 export function createUiRequestQueue(
   child: ChildProcess,
   ctx: SessionRunnerContext,
-): (id: string, params: Record<string, unknown>) => void {
+): (id: string, request: ExtensionUiRequest) => void {
   // [R3] AbortController 取消 pending handler——子进程退出时队列不再阻塞
   const abortController = new AbortController();
-  const queue: Array<{ id: string; params: Record<string, unknown>; signal: AbortSignal }> = [];
+  const queue: Array<{ id: string; request: ExtensionUiRequest; signal: AbortSignal }> = [];
   let processing = false;
   let closed = false;
 
   function processNext(): void {
     if (processing || queue.length === 0 || closed) return;
     processing = true;
-    const { id, params, signal } = queue.shift()!;
-    handleUiRequest(child, id, params, ctx, signal).finally(() => {
+    const { id, request, signal } = queue.shift()!;
+    handleUiRequest(child, id, request, ctx, signal).finally(() => {
       processing = false;
       processNext();
     });
@@ -392,9 +408,9 @@ export function createUiRequestQueue(
   child.on("close", onClose);
   child.on("error", onClose);
 
-  return function enqueue(id: string, params: Record<string, unknown>): void {
+  return function enqueue(id: string, request: ExtensionUiRequest): void {
     if (closed) return;
-    queue.push({ id, params, signal: abortController.signal });
+    queue.push({ id, request, signal: abortController.signal });
     processNext();
   };
 }
@@ -404,96 +420,105 @@ export function createUiRequestQueue(
 // ============================================================
 
 /**
- * 处理子进程发来的 extension_ui_request（ask_user）。
+ * 处理子进程发来的 extension_ui_request（ask_user 及其他 Pi UI method）。
  *
- * 流程：提取 questions/context → 调用主 agent uiRequestHandler → stdin 回写 JSON-RPC response。
- * uiRequestHandler 未设置时静默忽略（子进程超时后自行降级）。
+ * 流程：从 ExtensionUiRequest 构造 UiRequest（含 channel/channelPayload）
+ *  → 调用主 agent uiRequestHandler → 按 UiResponse 形状回写 stdin。
+ *
+ * handler 未设置时不再静默忽略——console.warn 兜底（FR-9 可观测性），
+ * W3 接入 SubagentService.notifyMissingHandler 的 appendEntry。
  *
  * @param child 子进程（stdin 写入响应）
- * @param id JSON-RPC request id（子进程用它关联 response）
- * @param params 请求参数（含 marker/questions/context/timeout）
+ * @param id 请求 id（子进程用它关联 response）
+ * @param request ExtensionUiRequest（method 平铺，从 enqueueUiRequest 传入）
  * @param ctx SessionRunnerContext（含 uiRequestHandler 回调）
  * @param signal abort signal（子进程退出时触发，取消正在等待的 handler）
- * @returns Promise（队列等待用：resolve 表示响应已写入 stdin）
+ * @returns Promise（队列等待用：resolve 表示响应已写入 stdin 或已放弃）
  */
-function handleUiRequest(
+async function handleUiRequest(
   child: ChildProcess,
   id: string,
-  params: Record<string, unknown>,
+  request: ExtensionUiRequest,
   ctx: SessionRunnerContext,
   signal?: AbortSignal,
 ): Promise<void> {
   const handler = ctx.uiRequestHandler;
   if (!handler) {
-    // 无 handler：静默忽略，子进程超时后自行降级
-    return Promise.resolve();
+    // 可观测性：handler 缺失不再静默（FR-9）
+    // W2 阶段先 console.warn，W3 接入 SubagentService.notifyMissingHandler 的 appendEntry
+    console.warn("[subagents] uiRequestHandler missing for request", id, "method:", request.method);
+    return;
   }
 
-  const questions = params.questions as Record<string, unknown>[] | undefined;
-  const context = params.context as string | undefined;
+  // 从 ExtensionUiRequest 构造 UiRequest（含 channel/channelPayload）
+  const { channel, channelPayload } = parseChannel(request);
+  const uiReq: UiRequest = {
+    id,
+    method: request.method,
+    ...(channel !== undefined ? { channel } : {}),
+    ...(channelPayload !== undefined ? { channelPayload } : {}),
+    ...extractMethodFields(request),
+  };
 
-  if (!Array.isArray(questions) || questions.length === 0) {
-    // [R2] JSON.stringify 安全处理
-    let errResp: string;
-    try {
-      errResp = JSON.stringify({
-        jsonrpc: "2.0",
-        id,
-        error: { code: -32602, message: "Invalid params: questions must be a non-empty array" },
-      }) + "\n";
-    } catch (e) {
-      console.error("[subagents] failed to serialize error response:", e);
-      return Promise.resolve();
-    }
-    // [R1] 检查 stdin.write 返回值，背压/失败时记日志
-    if (child.stdin && !child.stdin.destroyed) {
-      const ok = child.stdin.write(errResp);
-      if (!ok) console.warn("[subagents] stdin backpressure on error response for request", id);
-    }
-    return Promise.resolve();
+  try {
+    const result = await handler(uiReq);
+    // [R3] 子进程已退出，跳过写入
+    if (signal?.aborted) return;
+    respond(child, id, result, signal);
+  } catch (err) {
+    // [R3] 子进程已退出，跳过写入
+    if (signal?.aborted) return;
+    console.error("[subagents] uiRequestHandler threw:", err);
+    respond(child, id, { cancelled: true }, signal);
   }
+}
 
-  // 异步调用 handler，成功/失败都回写 response
-  return handler(questions, context)
-    .then((result) => {
-      // [R3] 子进程已退出，跳过写入
-      if (signal?.aborted) return;
-      // [R2] JSON.stringify 安全处理
-      let resp: string;
-      try {
-        resp = JSON.stringify({ jsonrpc: "2.0", id, result }) + "\n";
-      } catch (e) {
-        console.error("[subagents] failed to serialize UI response:", e);
-        return;
-      }
-      // [R1] 检查 stdin.write 返回值
-      if (child.stdin && !child.stdin.destroyed) {
-        const ok = child.stdin.write(resp);
-        if (!ok) console.warn("[subagents] stdin backpressure on UI response for request", id);
-      }
-    })
-    .catch((err: unknown) => {
-      // [R3] 子进程已退出，跳过写入
-      if (signal?.aborted) return;
-      const errMsg = err instanceof Error ? err.message : String(err);
-      // [R2] JSON.stringify 安全处理
-      let errResp: string;
-      try {
-        errResp = JSON.stringify({
-          jsonrpc: "2.0",
-          id,
-          error: { code: -32000, message: errMsg },
-        }) + "\n";
-      } catch (e) {
-        console.error("[subagents] failed to serialize error response:", e);
-        return;
-      }
-      // [R1] 检查 stdin.write 返回值
-      if (child.stdin && !child.stdin.destroyed) {
-        const ok = child.stdin.write(errResp);
-        if (!ok) console.warn("[subagents] stdin backpressure on error response for request", id);
-      }
-    });
+/** 从 ExtensionUiRequest 提取 method-specific 字段到 UiRequest（与 Pi rpc-types.ts 1:1）。
+ *  按 method 变体类型安全地复制对应字段；缺失字段不复制（保持 UiRequest 可选）。 */
+function extractMethodFields(req: ExtensionUiRequest): Partial<UiRequest> {
+  const out: Partial<UiRequest> = {};
+  if ("title" in req && typeof req.title === "string") out.title = req.title;
+  if ("options" in req && Array.isArray(req.options)) out.options = req.options;
+  if ("message" in req && typeof req.message === "string") out.message = req.message;
+  if ("placeholder" in req && typeof req.placeholder === "string") out.placeholder = req.placeholder;
+  if ("prefill" in req && typeof req.prefill === "string") out.prefill = req.prefill;
+  if ("notifyType" in req && typeof req.notifyType === "string") out.notifyType = req.notifyType;
+  if ("statusKey" in req && typeof req.statusKey === "string") out.statusKey = req.statusKey;
+  if ("statusText" in req) out.statusText = req.statusText;
+  if ("widgetKey" in req && typeof req.widgetKey === "string") out.widgetKey = req.widgetKey;
+  if ("widgetLines" in req) out.widgetLines = req.widgetLines;
+  if ("widgetPlacement" in req) out.widgetPlacement = req.widgetPlacement;
+  if ("text" in req && typeof req.text === "string") out.text = req.text;
+  if ("timeout" in req && typeof req.timeout === "number") out.timeout = req.timeout;
+  return out;
+}
+
+/**
+ * 按 UiResponse 形状构造 Pi 原生 extension_ui_response 并写 stdin。
+ *
+ * SR-5：ack（fire-and-forget）不写 stdin——Pi 对 fire-and-forget method 不期待响应，
+ * 写入会触发协议错配。其他三种 shape（value/confirmed/cancelled）按对应字段写。
+ *
+ * [R1] 背压检查：child.stdin.write 返回 false 时记 warn（不阻塞，内核缓冲会随后排空）。
+ * [R2] 序列化在调用方完成（JSON.stringify 已在下方逐分支构造），本函数不再包裹 try/catch。
+ *
+ * @param child 子进程（stdin 写入响应）
+ * @param id 请求 id（关联 response）
+ * @param out UiResponse（{value}/{confirmed}/{cancelled}/{ack}）
+ * @param signal abort signal（已 aborted 时跳过写入） */
+function respond(child: ChildProcess, id: string, out: UiResponse, signal?: AbortSignal): void {
+  if (signal?.aborted) return;
+  let line: string | undefined;
+  if ("value" in out) line = JSON.stringify({ type: "extension_ui_response", id, value: out.value });
+  else if ("confirmed" in out) line = JSON.stringify({ type: "extension_ui_response", id, confirmed: out.confirmed });
+  else if ("cancelled" in out) line = JSON.stringify({ type: "extension_ui_response", id, cancelled: true });
+  // ack: fire-and-forget，不写 stdin（SR-5）
+  if (line === undefined) return;
+  // [R1] 背压检查 + [R2] 序列化已在上方完成
+  if (child.stdin && !child.stdin.destroyed) {
+    const ok = child.stdin.write(line + "\n");
+    if (!ok) console.warn("[subagents] stdin backpressure on ui response for request", id);
+  }
 }
 
 // ============================================================
@@ -708,7 +733,7 @@ export async function runSpawn(
   if (opts.maxTurns && opts.maxTurns > 0) appendParts.push(WRAP_UP_HINT);
   // W4: ask_user RPC 使用指引——当子进程配置了 ask_user tool 时，告知 LLM
   // ask_user 的问题会通过 RPC 转发到主 agent UI，用户在主 agent 界面回答。
-  if (opts.agentConfig?.tools?.includes("ask_user")) {
+  if (opts.agentConfig?.tools?.includes("ask_user") && willRespondToAskUser(ctx.mode)) {
     appendParts.push(ASK_USER_RPC_PROMPT);
   }
   if (appendParts.length > 0) {
@@ -825,7 +850,7 @@ export async function runSpawn(
           if (isSdkEvent(parsed.event)) handleSdkEvent(parsed.event);
         } else if (parsed.kind === "extension_ui_request") {
           // W3: 子进程发 UI 请求（ask_user）。入队 FIFO 串行处理，防止并发询问用户。
-          enqueueUiRequest(parsed.id, parsed.params);
+          enqueueUiRequest(parsed.id, parsed.request);
         }
         // invalid 行忽略（stdout 可能有调试输出）
       }
