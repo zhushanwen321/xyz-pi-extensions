@@ -283,6 +283,29 @@ bash .githooks/check-structure
 - 展开/折叠：`options.expanded` 控制显示详细程度
 - **导航键规范**：自定义 TUI 组件（如 `CategoryConfirmComponent`）的列表导航用方向键，经 pi-tui 的 `matchesKey(data,"up"|"down")` 识别——它覆盖全部方向键编码（legacy `\x1b[A`/`\x1b[B`、application-mode `\x1bOA`/`\x1bOB`、Kitty CSI u、modifyOtherKeys），不要硬编码单一字节序列（会漏掉 application-mode/Kitty 终端，方向键直接失效）。禁止用 vim j/k 导航：自定义组件若用 j/k 导航，会与同一组件内的 filter 文本输入冲突——用户输入字母 j/k 时被误判为导航，字母进不了 filter。`matchesKey` 只匹配功能键码、对可打印字母返回 false，故天然避开此冲突。确认/取消多键位（Enter/Esc）走 `kb.matches` 以尊重用户键位，不受此限。Pi 内置 `SelectList` 的 j/k 行为是平台能力，不在此规范范围内。
 
+### 运行时环境区分（TUI 主进程 vs GUI 主进程 / xyz-agent）
+
+扩展需要在 TUI / GUI 两种主进程下走不同分支时（如 widget 内容源、sidecar 通道选择），用 `ctx.mode === "rpc"` 判断，**不要**用 `ctx.hasUI`。
+
+| 字段 | TUI 主进程 | GUI 主进程（xyz-agent）| subagent 子进程 |
+|---|---|---|---|
+| `ctx.mode` | `"tui"` | `"rpc"` | `"rpc"`（spawn 时 `--mode rpc`）|
+| `ctx.hasUI` | `true` | `true` | `true` |
+
+- `ctx` 来自 `session_start` 回调参数，永远是**当前进程**的 ctx。streamSink / widget 注入点的 ctx 是**主进程**的，跟子进程无关。
+- spawn 子进程时传的 `--mode rpc` 决定子进程 stdout 格式，与主进程的 ctx.mode 独立。
+- `hasUI` 在 TUI 和 RPC 都 true，不能区分。
+
+**应用示例**（subagent-workflow W1 修复）：TUI 下禁用 streamSink 避免 raw LLM text 灌 widget；GUI 下启用（ctx.ui.setWidget → sidecar → chatStore）。
+
+```typescript
+streamSink: ctx.mode === "rpc"
+  ? { setWidget: (key, lines) => ctx.ui.setWidget(key, lines) }
+  : undefined,
+```
+
+`ExtensionMode` 字面量定义（4 个值：`"tui" | "rpc" | "json" | "print"`）见 pi 源码 `packages/coding-agent/src/core/extensions/types.ts:299`。完整章节 + 进程边界 + `resolveAppMode` 映射见 [docs/pi-tui-development-guide.md](./docs/pi-tui-development-guide.md) 第四部分第 8 节。
+
 ### GUI 渲染描述符（`_render` 协议）— 已废弃
 
 > **⚠️ DEPRECATED（已废弃，不再维护）**

@@ -462,6 +462,66 @@ return {
 
 **配套教训（`c68ce754a`）**：删掉「widget 有自己的渲染轮询（200ms setInterval）+ 自己的状态镜像」这层（`AgentWidgetManager`），状态只在 runtime 一处维护，overlay 通过 `listRunningAgents()` 读快照。**不要让渲染层维护独立的状态镜像**——它和执行层的状态迟早不一致。
 
+### 8. 区分 TUI 主进程 vs GUI 主进程（xyz-agent / RPC mode）
+
+**坑（`f38e00fe0`）**：扩展想在 TUI / GUI 两种主进程下走不同分支（如 widget / sidecar channel）时，错误地用 `ctx.hasUI` 做判断。`hasUI` 在 TUI 和 RPC（GUI）模式下**都为 true**（types.ts:307），根本区分不开。结果：TUI 主进程下无条件启用了 streamSink 把 subagent 的 raw LLM text 推到 widget，变成噪音。
+
+**正确做法**：用 `ctx.mode === "rpc"` 区分。
+
+**为什么 `ctx.mode` 是正确的区分维度**：
+
+| 维度 | TUI 主进程 | GUI 主进程（xyz-agent） | subagent 子进程 |
+|---|---|---|---|
+| `ctx.mode` | `"tui"` | `"rpc"` | `"rpc"`（spawn 时 `--mode rpc`）|
+| `ctx.hasUI` | `true` | `true` | `true` |
+
+- **进程边界**：`ctx` 是 `session_start` 回调参数，永远是**当前进程**的 ctx。streamSink 注入点（index.ts session_start）捕获的 ctx 是**主进程**的 ctx，跟子进程无关。
+- **spawn 参数 vs 进程 mode**：`spawn pi --mode rpc` 决定子进程怎么输出 stdout（RPC mode JSON 流）；`ctx.mode` 是当前进程自己的 mode。两维度独立。
+
+**识别 GUI 主进程的三种途径（按推荐度排序）**：
+
+| 途径 | 可靠性 | 用法 |
+|---|---|---|
+| `ctx.mode === "rpc"` | ✓ SDK 标准字段 | `streamSink: ctx.mode === "rpc" ? { setWidget } : undefined` |
+| `ctx.hasUI && ctx.mode === "rpc"` | ✓ 更精确（双保险） | 同上，但排除 print/json 误判 |
+| 环境变量（如 `XYZ_AGENT=1`）| ✗ 不在 SDK | 子进程继承父环境，但 xyz-agent 是否设置未约定，不要依赖 |
+
+**`ExtensionMode` 字面量定义**（types.ts:299）：
+
+```ts
+export type ExtensionMode = "tui" | "rpc" | "json" | "print";
+```
+
+4 个值。映射（main.ts:100 `resolveAppMode`）：
+
+| CLI | stdin/stdout | AppMode | ExtensionMode |
+|---|---|---|---|
+| `pi`（默认）| TTY | `interactive` | `tui` |
+| `pi --mode rpc` | 任意 | `rpc` | `rpc` |
+| `pi --mode json` | 任意 | `json` | `json` |
+| `pi --print` / 管道 | 非 TTY | `print` | `print` |
+
+**修复示例**（subagent-workflow W1）：
+
+```ts
+// src/index.ts session_start 内
+streamSink: ctx.mode === "rpc"
+  ? { setWidget: (key, lines) => ctx.ui.setWidget(key, lines) }
+  : undefined,
+```
+
+**TUI 主进程** → `streamSink === undefined` → subagent text_delta 不进 widget（无噪音）。
+**GUI 主进程**（xyz-agent）→ streamSink 启用 → `ctx.ui.setWidget` → sidecar EventBus → GUI chatStore。
+
+**streamSink API 不变**（保持 `SubagentStream.onDelta(delta)` 签名），只是 TUI 下 stream 不会被创建（`init.streamSink ?? null` 的 fallback 已支持）。
+
+**反模式**：
+
+- ❌ 用 `ctx.hasUI` 区分（永远 true，没区分度）
+- ❌ 读 `process.argv.includes("--mode rpc")`（违反 abstraction，且 ctx 已有现成字段）
+- ❌ 自定义 env var / config（增加 surface area，且 SDK 已有现成字段）
+- ❌ 让 streamSink 在两种 mode 下都启用（TUI 下被噪音淹没）
+
 ---
 
 ## 踩坑 commit 索引（全量）
@@ -507,6 +567,7 @@ return {
 | `4ecc9f5a1` | background 完成双 block | `sendMessage` 用 `display:false` |
 | `1f0acc192` | sync/background eventLog slicing 不一致 | 统一调 `updateWidgetFromEvent` |
 | `c68ce754a` | widget 渲染层独立状态镜像 → drift | 删 `AgentWidgetManager`，runtime 唯一真源 |
+| `f38e00fe0` | streamSink 无条件启用 → TUI 下 widget 被 raw text 淹没 | 守卫 `ctx.mode === 'rpc'`（`hasUI` 在 TUI 和 RPC 都为 true，不能区分） |
 
 ---
 
@@ -527,6 +588,7 @@ return {
 | 终态（取消/失败）返回 | return 正常 AgentToolResult | ❌ throw（SDK 重建空 details 丢内容）|
 | background 完成通知 | `display: false` | ❌ `display: true`（双 block）|
 | 复用渲染组件 | `context.lastComponent` + `update(d, theme)` | ❌ 每次 new（GC + theme 闪烁）|
+| 区分 TUI vs GUI 主进程 | `ctx.mode === "rpc"` | ❌ `ctx.hasUI`（TUI 和 RPC 都 true）|
 | 引入新按键 | 同步补 mock Key + DATA_TO_KEY | ❌ 只改生产（测试 false negative）|
 | 空行占位 | `new Spacer(1)` | ❌ `new Text("")`（高度不稳定）|
 
