@@ -218,9 +218,12 @@ export default function subagentsWorkflowExtension(pi: ExtensionAPI): void {
       sessionId: ctx.sessionManager.getSessionId(),
       // 注入 ctx.ui.setWidget 作为 streaming sink（只绑方法，不持有整个 ctx）。
       // background subagent 执行期间，text_delta 经 SubagentStream 合并后由此通道转发。
-      streamSink: {
-        setWidget: (key, lines) => ctx.ui.setWidget(key, lines),
-      },
+      // [W1 修复] ctx.mode === 'rpc' 守卫：TUI/json/print 下 streamSink = undefined（无 widget 噪音），
+      // rpc mode（GUI/xyz-agent）下保持原行为（ctx.ui.setWidget → sidecar → chatStore）。
+      // streamSink API 不变（SubagentStream.onDelta 仍可调，只是 TUI 下 stream 不会被创建）。
+      streamSink: ctx.mode === "rpc"
+        ? { setWidget: (key, lines) => ctx.ui.setWidget(key, lines) }
+        : undefined,
     });
 
     if (!existingService) {
