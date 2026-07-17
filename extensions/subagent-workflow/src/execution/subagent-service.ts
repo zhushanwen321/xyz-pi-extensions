@@ -100,6 +100,11 @@ export interface SubagentServiceInit {
   modelService: ModelConfigService;
   /** 缓存的主 session file 获取函数（fork source 解析用）。 */
   getMainSessionFile?: () => string | undefined;
+  /** W2: UI 请求处理回调（ask_user 扩展）。 */
+  uiRequestHandler?: (
+    questions: Record<string, unknown>[],
+    context?: string,
+  ) => Promise<unknown>;
 }
 
 /** session_start 注入参数（session 级）。 */
@@ -166,7 +171,7 @@ export class SubagentService {
   private readonly cwd: string;
   private readonly worktreeManager: WorktreeManager;
   private readonly getMainSessionFile: (() => string | undefined) | undefined;
-
+  private readonly uiRequestHandler: SubagentServiceInit["uiRequestHandler"];
   private pi: PiLike | null = null;
   /** 当前 Pi session ID（session 隔离过滤用）。initSession 时注入。 */
   private sessionId: string | null = null;
@@ -196,6 +201,7 @@ export class SubagentService {
     this.cwd = init.cwd;
     this.modelService = init.modelService;
     this.getMainSessionFile = init.getMainSessionFile;
+    this.uiRequestHandler = init.uiRequestHandler;
     this.pool = new DefaultConcurrencyPool(this.modelService.getGlobalConfig().maxConcurrent);
     this.worktreeManager = new WorktreeManager(this.modelService.getAgentDir());
     const sessionsDir = getSubagentSessionDir(this.modelService.getAgentDir(), init.cwd);
@@ -309,14 +315,8 @@ export class SubagentService {
   }
 
   /**
-   * 预解析 model（renderCall 标题行用，同步）。
-   * 代理 modelService.resolveModel——renderCall 在 execute 前调用，但 model 解析是同步的，
-   * 让标题行能提前显示 model/thinking，不必等 execute。
-   * hub 未就绪时抛（调用方 catch 降级）。
-   *
-   * 注意：renderCall 无 ctx，拿不到主 agent model。这里仅解析 override/agentConfig 路径，
-   * 主 agent model 路径交给 execute（传 ctxModel）。renderCall 时如果用户未显式 override，
-   * 本方法会因 ctxModel 缺失走第三层→ 拋错→ 调用方 catch 降级（不显示 model）。
+   * 预解析 model（renderCall 标题行用，同步）。代理 modelService.resolveModel。
+   * 仅解析 override/agentConfig 路径；ctxModel 缺失时拋错，调用方 catch 降级。
    */
   resolveModel(
     agent: string,
@@ -959,6 +959,7 @@ export class SubagentService {
       mainSessionFile: this.getMainSessionFile?.() ?? undefined,
       // worktree pid 回调：session-runner first header 时补全注册表 pid。
       onWorktreePid: (branch: string, pid: number) => this.worktreeManager.registerPid(branch, pid),
+      uiRequestHandler: this.uiRequestHandler,
     };
   }
 }

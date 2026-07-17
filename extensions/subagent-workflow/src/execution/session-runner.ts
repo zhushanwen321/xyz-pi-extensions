@@ -160,6 +160,18 @@ export interface SessionRunnerContext {
    * 解耦 Core 与 Runtime——session-runner 不直接依赖 WorktreeManager。
    */
   onWorktreePid?: (branch: string, pid: number) => void;
+  /**
+   * UI 请求处理回调。子进程发 extension_ui_request 时调用。
+   * 接收 questions + context（ask_user 扩展产生的数据），返回用户选择的答案。
+   * 实现方将 questions 转发到主 agent 的 UI 通道（如 ask_user tool），
+   * 收到用户回答后 resolve。
+   *
+   * 未设置时 extension_ui_request 被静默忽略（子进程超时后自行降级）。
+   */
+  uiRequestHandler?: (
+    questions: Record<string, unknown>[],
+    context?: string,
+  ) => Promise<unknown>;
 }
 
 /** SessionRunner.run 的入参。 */
@@ -302,6 +314,64 @@ export function buildEnvBlock(
   if (branch) lines.push(`Git branch: ${branch}`);
   lines.push("--- end environment ---");
   return lines.join("\n");
+}
+
+// ============================================================
+// W2: UI 请求转发（extension_ui_request 处理）
+// ============================================================
+
+/**
+ * 处理子进程发来的 extension_ui_request（ask_user）。
+ *
+ * 流程：提取 questions/context → 调用主 agent uiRequestHandler → stdin 回写 JSON-RPC response。
+ * uiRequestHandler 未设置时静默忽略（子进程超时后自行降级）。
+ *
+ * @param child 子进程（stdin 写入响应）
+ * @param id JSON-RPC request id（子进程用它关联 response）
+ * @param params 请求参数（含 marker/questions/context/timeout）
+ * @param ctx SessionRunnerContext（含 uiRequestHandler 回调）
+ */
+function handleUiRequest(
+  child: ChildProcess,
+  id: string,
+  params: Record<string, unknown>,
+  ctx: SessionRunnerContext,
+): void {
+  const handler = ctx.uiRequestHandler;
+  if (!handler) {
+    // 无 handler：静默忽略，子进程超时后自行降级
+    return;
+  }
+
+  const questions = params.questions as Record<string, unknown>[] | undefined;
+  const context = params.context as string | undefined;
+
+  if (!Array.isArray(questions) || questions.length === 0) {
+    // 无效 questions：回错误响应
+    const errResp = JSON.stringify({
+      jsonrpc: "2.0",
+      id,
+      error: { code: -32602, message: "Invalid params: questions must be a non-empty array" },
+    }) + "\n";
+    child.stdin?.write(errResp);
+    return;
+  }
+
+  // 异步调用 handler，成功/失败都回写 response
+  handler(questions, context)
+    .then((result) => {
+      const resp = JSON.stringify({ jsonrpc: "2.0", id, result }) + "\n";
+      child.stdin?.write(resp);
+    })
+    .catch((err: unknown) => {
+      const errMsg = err instanceof Error ? err.message : String(err);
+      const errResp = JSON.stringify({
+        jsonrpc: "2.0",
+        id,
+        error: { code: -32000, message: errMsg },
+      }) + "\n";
+      child.stdin?.write(errResp);
+    });
 }
 
 // ============================================================
@@ -591,7 +661,7 @@ export async function runSpawn(
     const watchdog = setTimeout(() => child.kill("SIGTERM"), watchdogMs);
     watchdog.unref();
 
-    // stdout pump：逐行解析 → handleSdkEvent
+    // stdout pump：逐行解析 → handleSdkEvent / handleUiRequest
     let stdoutBuffer = "";
     child.stdout.on("data", (data: string) => {
       stdoutBuffer += data;
@@ -625,6 +695,9 @@ export async function runSpawn(
           }
         } else if (parsed.kind === "event") {
           if (isSdkEvent(parsed.event)) handleSdkEvent(parsed.event);
+        } else if (parsed.kind === "extension_ui_request") {
+          // W2: 子进程发 UI 请求（ask_user）。提取 questions/context → 调用 handler → stdin 回写响应。
+          handleUiRequest(child, parsed.id, parsed.params, ctx);
         }
         // invalid 行忽略（stdout 可能有调试输出）
       }
