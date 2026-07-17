@@ -377,6 +377,13 @@ export default function subagentsWorkflowExtension(pi: ExtensionAPI): void {
       cleanupAllFiles(state.activeTempFiles);
       sessionState.delete(sessionId);
     }
+
+    // M2: 清理 dialog queue 运行时状态（queue/current/processing）。
+    // 防异常退出后 processing=true 卡死下次 session——clear() 不 settle pending Promise
+    //（dispose 时调用方已不关心，符合 dialog-queue.ts clear() 的注释）。
+    // channel registry 不清：跨 session 持久是有意设计（ask-user 扩展注册的 channel handler
+    // 在 /new /resume /fork 时不丢失注册）。
+    getOrCreateDialogQueue().clear();
   });
 
   // ════════════════════════════════════════════════════════════

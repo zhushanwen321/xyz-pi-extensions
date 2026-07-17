@@ -29,6 +29,8 @@ export interface ExtensionAPI {
 
 export interface ExtensionContext {
   cwd: string;
+  /** Pi run mode（host-mode.ts 读此字段分流 tui/gui/headless）。 */
+  mode?: ExtensionMode;
   sessionManager: {
     getSessionId(): string;
     getSessionFile(): string | undefined;
