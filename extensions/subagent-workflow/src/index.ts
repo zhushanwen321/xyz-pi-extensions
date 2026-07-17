@@ -23,6 +23,9 @@ import { getAgentDir } from "@mariozechner/pi-coding-agent";
 import type { AgentRegistry } from "./execution/agent-registry.ts";
 import { bestEffort } from "./execution/best-effort.ts";
 // ═══ execution/ 层（subagents 核心 + 运行时） ═══
+import { createUiChannelRegistry, type UiChannelRegistry } from "./execution/ui-channels.ts";
+import { DialogGlobalQueue } from "./execution/dialog-queue.ts";
+import { createUiRequestHandlerForMode } from "./execution/ui-request-handler-factory.ts";
 import {
   getModelConfigService,
   ModelConfigService,
@@ -213,6 +216,16 @@ export default function subagentsWorkflowExtension(pi: ExtensionAPI): void {
       sessionId: ctx.sessionManager.getSessionId(),
       ctxModel: ctx.model ?? undefined,
     });
+
+    // ── W3: handler 注入链路接通 ──
+    // 进程级单例：channel registry + dialog queue 跨 session 复用
+    //（与 SubagentService 单例模式一致，globalThis Symbol 持有避免 jiti 多实例分裂）。
+    const channelRegistry = getOrCreateChannelRegistry();
+    const dialogQueue = getOrCreateDialogQueue();
+    const uiRequestHandler = createUiRequestHandlerForMode(ctx, channelRegistry, dialogQueue);
+    // SR-3: 无论 new 还是 existing（/resume /fork 复用），session_start 都必须注入 handler
+    service.setUiRequestHandler(uiRequestHandler);
+
     service.initSession({
       pi,
       sessionId: ctx.sessionManager.getSessionId(),
@@ -224,6 +237,9 @@ export default function subagentsWorkflowExtension(pi: ExtensionAPI): void {
       streamSink: ctx.mode === "rpc"
         ? { setWidget: (key, lines) => ctx.ui.setWidget(key, lines) }
         : undefined,
+      // W3: mode + handler session 级注入（与 setUiRequestHandler 二选一即可，但都加更稳）。
+      mode: ctx.mode,
+      uiRequestHandler,
     });
 
     if (!existingService) {
@@ -467,4 +483,37 @@ export default function subagentsWorkflowExtension(pi: ExtensionAPI): void {
     },
     lazyDeps,
   );
+}
+
+// ============================================================
+// 进程级单例（channel registry + dialog queue）
+// ============================================================
+
+// 与 SubagentService 单例同模式：用 globalThis[Symbol.for] 持有进程级单例，
+// 避免 jiti 因路径字符串不同加载多份模块导致单例分裂（详见 docs/standards.md §7.5）。
+// channel registry + dialog queue 跨 session 复用——ask-user 扩展注册的 channel handler
+// 持久化在 registry 内，session 切换（/new /resume /fork）时不丢失注册。
+const CHANNEL_REGISTRY_KEY = Symbol.for("@zhushanwen/pi-subagents.channelRegistry");
+const DIALOG_QUEUE_KEY = Symbol.for("@zhushanwen/pi-subagents.dialogQueue");
+
+/** 获取或创建进程级 channel registry 单例。
+ *  ask-user 扩展（Stage 4a）经此 registry 注册 "ask_user" channel handler。 */
+function getOrCreateChannelRegistry(): UiChannelRegistry {
+  let registry = Reflect.get(globalThis, CHANNEL_REGISTRY_KEY) as UiChannelRegistry | undefined;
+  if (!registry) {
+    registry = createUiChannelRegistry();
+    Reflect.set(globalThis, CHANNEL_REGISTRY_KEY, registry);
+  }
+  return registry;
+}
+
+/** 获取或创建进程级 dialog queue 单例。
+ *  L2 跨子进程串行队列——所有子进程的 dialog 类请求共享同一队列实例。 */
+function getOrCreateDialogQueue(): DialogGlobalQueue {
+  let queue = Reflect.get(globalThis, DIALOG_QUEUE_KEY) as DialogGlobalQueue | undefined;
+  if (!queue) {
+    queue = new DialogGlobalQueue();
+    Reflect.set(globalThis, DIALOG_QUEUE_KEY, queue);
+  }
+  return queue;
 }

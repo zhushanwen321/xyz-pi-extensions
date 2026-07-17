@@ -89,6 +89,8 @@ vi.mock("../model-config-service.ts", () => ({
 vi.mock("../subagent-service.ts", () => ({
   SubagentService: class {
     initSession = vi.fn();
+    // W3: index.ts session_start 注入 UI handler 时调用
+    setUiRequestHandler = vi.fn();
   },
   getSubagentService: () => null,
   setSubagentService: vi.fn(),
