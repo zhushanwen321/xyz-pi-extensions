@@ -317,6 +317,47 @@ export function buildEnvBlock(
 }
 
 // ============================================================
+// W3: UI 请求队列（FIFO 串行处理）
+// ============================================================
+
+/**
+ * 创建 UI 请求队列。返回 enqueue 函数，调用方将 extension_ui_request 入队。
+ *
+ * 多个 extension_ui_request 并发到达时，队列保证 FIFO 串行处理：
+ * 前一个请求的 uiRequestHandler resolve 后，才将下一个请求发给主 agent UI。
+ * 防止并发询问用户导致交错（用户同时看到多个问题）。
+ *
+ * 设计：队列是 runSpawn 生命周期内的闭包状态（非模块级），
+ * 每个子进程实例独立队列，无跨 session 泄漏。
+ *
+ * @param child 子进程（stdin 写入 JSON-RPC response）
+ * @param ctx SessionRunnerContext（含 uiRequestHandler 回调）
+ * @returns enqueue 函数：(id, params) => void，将请求入队并触发顺序处理
+ */
+export function createUiRequestQueue(
+  child: ChildProcess,
+  ctx: SessionRunnerContext,
+): (id: string, params: Record<string, unknown>) => void {
+  const queue: Array<{ id: string; params: Record<string, unknown> }> = [];
+  let processing = false;
+
+  function processNext(): void {
+    if (processing || queue.length === 0) return;
+    processing = true;
+    const { id, params } = queue.shift()!;
+    handleUiRequest(child, id, params, ctx).finally(() => {
+      processing = false;
+      processNext();
+    });
+  }
+
+  return function enqueue(id: string, params: Record<string, unknown>): void {
+    queue.push({ id, params });
+    processNext();
+  };
+}
+
+// ============================================================
 // W2: UI 请求转发（extension_ui_request 处理）
 // ============================================================
 
@@ -330,17 +371,18 @@ export function buildEnvBlock(
  * @param id JSON-RPC request id（子进程用它关联 response）
  * @param params 请求参数（含 marker/questions/context/timeout）
  * @param ctx SessionRunnerContext（含 uiRequestHandler 回调）
+ * @returns Promise（队列等待用：resolve 表示响应已写入 stdin）
  */
 function handleUiRequest(
   child: ChildProcess,
   id: string,
   params: Record<string, unknown>,
   ctx: SessionRunnerContext,
-): void {
+): Promise<void> {
   const handler = ctx.uiRequestHandler;
   if (!handler) {
     // 无 handler：静默忽略，子进程超时后自行降级
-    return;
+    return Promise.resolve();
   }
 
   const questions = params.questions as Record<string, unknown>[] | undefined;
@@ -354,11 +396,11 @@ function handleUiRequest(
       error: { code: -32602, message: "Invalid params: questions must be a non-empty array" },
     }) + "\n";
     child.stdin?.write(errResp);
-    return;
+    return Promise.resolve();
   }
 
   // 异步调用 handler，成功/失败都回写 response
-  handler(questions, context)
+  return handler(questions, context)
     .then((result) => {
       const resp = JSON.stringify({ jsonrpc: "2.0", id, result }) + "\n";
       child.stdin?.write(resp);
@@ -661,7 +703,8 @@ export async function runSpawn(
     const watchdog = setTimeout(() => child.kill("SIGTERM"), watchdogMs);
     watchdog.unref();
 
-    // stdout pump：逐行解析 → handleSdkEvent / handleUiRequest
+    // stdout pump：逐行解析 → handleSdkEvent / enqueueUiRequest
+    const enqueueUiRequest = createUiRequestQueue(child, ctx);
     let stdoutBuffer = "";
     child.stdout.on("data", (data: string) => {
       stdoutBuffer += data;
@@ -696,8 +739,8 @@ export async function runSpawn(
         } else if (parsed.kind === "event") {
           if (isSdkEvent(parsed.event)) handleSdkEvent(parsed.event);
         } else if (parsed.kind === "extension_ui_request") {
-          // W2: 子进程发 UI 请求（ask_user）。提取 questions/context → 调用 handler → stdin 回写响应。
-          handleUiRequest(child, parsed.id, parsed.params, ctx);
+          // W3: 子进程发 UI 请求（ask_user）。入队 FIFO 串行处理，防止并发询问用户。
+          enqueueUiRequest(parsed.id, parsed.params);
         }
         // invalid 行忽略（stdout 可能有调试输出）
       }
