@@ -367,21 +367,34 @@ export function createUiRequestQueue(
   child: ChildProcess,
   ctx: SessionRunnerContext,
 ): (id: string, params: Record<string, unknown>) => void {
-  const queue: Array<{ id: string; params: Record<string, unknown> }> = [];
+  // [R3] AbortController 取消 pending handler——子进程退出时队列不再阻塞
+  const abortController = new AbortController();
+  const queue: Array<{ id: string; params: Record<string, unknown>; signal: AbortSignal }> = [];
   let processing = false;
+  let closed = false;
 
   function processNext(): void {
-    if (processing || queue.length === 0) return;
+    if (processing || queue.length === 0 || closed) return;
     processing = true;
-    const { id, params } = queue.shift()!;
-    handleUiRequest(child, id, params, ctx).finally(() => {
+    const { id, params, signal } = queue.shift()!;
+    handleUiRequest(child, id, params, ctx, signal).finally(() => {
       processing = false;
       processNext();
     });
   }
 
+  // [R3] 子进程退出时 abort 所有 pending handler，队列不再阻塞
+  const onClose = (): void => {
+    closed = true;
+    abortController.abort();
+    queue.length = 0;
+  };
+  child.on("close", onClose);
+  child.on("error", onClose);
+
   return function enqueue(id: string, params: Record<string, unknown>): void {
-    queue.push({ id, params });
+    if (closed) return;
+    queue.push({ id, params, signal: abortController.signal });
     processNext();
   };
 }
@@ -400,6 +413,7 @@ export function createUiRequestQueue(
  * @param id JSON-RPC request id（子进程用它关联 response）
  * @param params 请求参数（含 marker/questions/context/timeout）
  * @param ctx SessionRunnerContext（含 uiRequestHandler 回调）
+ * @param signal abort signal（子进程退出时触发，取消正在等待的 handler）
  * @returns Promise（队列等待用：resolve 表示响应已写入 stdin）
  */
 function handleUiRequest(
@@ -407,6 +421,7 @@ function handleUiRequest(
   id: string,
   params: Record<string, unknown>,
   ctx: SessionRunnerContext,
+  signal?: AbortSignal,
 ): Promise<void> {
   const handler = ctx.uiRequestHandler;
   if (!handler) {
@@ -418,30 +433,66 @@ function handleUiRequest(
   const context = params.context as string | undefined;
 
   if (!Array.isArray(questions) || questions.length === 0) {
-    // 无效 questions：回错误响应
-    const errResp = JSON.stringify({
-      jsonrpc: "2.0",
-      id,
-      error: { code: -32602, message: "Invalid params: questions must be a non-empty array" },
-    }) + "\n";
-    child.stdin?.write(errResp);
+    // [R2] JSON.stringify 安全处理
+    let errResp: string;
+    try {
+      errResp = JSON.stringify({
+        jsonrpc: "2.0",
+        id,
+        error: { code: -32602, message: "Invalid params: questions must be a non-empty array" },
+      }) + "\n";
+    } catch (e) {
+      console.error("[subagents] failed to serialize error response:", e);
+      return Promise.resolve();
+    }
+    // [R1] 检查 stdin.write 返回值，背压/失败时记日志
+    if (child.stdin && !child.stdin.destroyed) {
+      const ok = child.stdin.write(errResp);
+      if (!ok) console.warn("[subagents] stdin backpressure on error response for request", id);
+    }
     return Promise.resolve();
   }
 
   // 异步调用 handler，成功/失败都回写 response
   return handler(questions, context)
     .then((result) => {
-      const resp = JSON.stringify({ jsonrpc: "2.0", id, result }) + "\n";
-      child.stdin?.write(resp);
+      // [R3] 子进程已退出，跳过写入
+      if (signal?.aborted) return;
+      // [R2] JSON.stringify 安全处理
+      let resp: string;
+      try {
+        resp = JSON.stringify({ jsonrpc: "2.0", id, result }) + "\n";
+      } catch (e) {
+        console.error("[subagents] failed to serialize UI response:", e);
+        return;
+      }
+      // [R1] 检查 stdin.write 返回值
+      if (child.stdin && !child.stdin.destroyed) {
+        const ok = child.stdin.write(resp);
+        if (!ok) console.warn("[subagents] stdin backpressure on UI response for request", id);
+      }
     })
     .catch((err: unknown) => {
+      // [R3] 子进程已退出，跳过写入
+      if (signal?.aborted) return;
       const errMsg = err instanceof Error ? err.message : String(err);
-      const errResp = JSON.stringify({
-        jsonrpc: "2.0",
-        id,
-        error: { code: -32000, message: errMsg },
-      }) + "\n";
-      child.stdin?.write(errResp);
+      // [R2] JSON.stringify 安全处理
+      let errResp: string;
+      try {
+        errResp = JSON.stringify({
+          jsonrpc: "2.0",
+          id,
+          error: { code: -32000, message: errMsg },
+        }) + "\n";
+      } catch (e) {
+        console.error("[subagents] failed to serialize error response:", e);
+        return;
+      }
+      // [R1] 检查 stdin.write 返回值
+      if (child.stdin && !child.stdin.destroyed) {
+        const ok = child.stdin.write(errResp);
+        if (!ok) console.warn("[subagents] stdin backpressure on error response for request", id);
+      }
     });
 }
 

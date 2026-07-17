@@ -28,6 +28,8 @@ function makeFakeChild(): ChildProcess {
     stdin,
     killed: false,
     pid: 10001,
+    on: vi.fn(),
+    removeListener: vi.fn(),
   } as unknown as ChildProcess;
 }
 
