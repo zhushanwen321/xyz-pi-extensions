@@ -59,8 +59,12 @@ export function createUiRequestHandlerForMode(
       return { ack: true };
     }
     // L2 全局队列：dialog 类必须串行（争输入焦点）。fire-and-forget（GUI 下）直接转发。
+    // [SR-4] 透传 req._childPid（session-runner 从 child.pid 填入）给 enqueue——
+    //   L2 据此关联 child close 时的 rejectChildDialogs 批量 reject（防全局死锁）。
     if (isDialogMethod(req.method)) {
-      return dialogQueue.enqueue(req, realHandler);
+      return dialogQueue.enqueue(req, realHandler, {
+        child: req._childPid !== undefined ? { pid: req._childPid } : undefined,
+      });
     }
     // GUI 下 fire-and-forget 直接转发
     return realHandler(req);

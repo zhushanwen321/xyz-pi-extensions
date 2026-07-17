@@ -16,8 +16,9 @@
 //
 // handler 抛错兜底：catch → 回 {cancelled:true} → 继续处理下一个。不能让一个失败卡死队列。
 //
-// fire-and-forget method 不入队：调用方在 enqueue 前应用 isDialogMethod 判断（dialog 入队，
-//   fire-and-forget 直接调 handler）。本队列内不重复判断 method，由调用方负责。
+// 调用方约定：只对 dialog 类（isDialogMethod===true）调 enqueue；fire-and-forget 由调用方
+//   直接调 handler（见 ui-request-handler-factory.ts），不经过本队列。enqueue 内仍防御性兼容
+//   fire-and-forget（万一调用方未判）：直接调 handler 返回，不入队串行。调用方不应依赖此防御。
 
 import { isDialogMethod } from "./ui-interaction-model.ts";
 
@@ -73,6 +74,10 @@ export interface UiRequest {
   /** channel 解析后的结构化 payload（已 JSON.parse）。
    *  ask_user: {questions, allowCancel}；gui_widget: {component}；无 channel: undefined。 */
   channelPayload?: unknown;
+  /** 内部元数据字段：发起该 UI 请求的子进程 pid（由 session-runner.handleUiRequest 从
+   *  child.pid 填入）。L2 队列据此关联 rejectChildDialogs（child close 时批量 reject）。
+   *  下划线前缀表示内部字段，非 Pi 协议字段，不参与 stdin 回写。 */
+  _childPid?: number;
 }
 
 /** UI 响应（handler 返回，session-runner 按 shape 回写 stdin）。
@@ -132,7 +137,8 @@ interface QueueItem {
  *   - FIFO 串行：前一个 handler settle 后才处理下一个
  *   - SR-4：rejectChildDialogs(child) 把该 child 的 pending 全部 resolve 为 {cancelled:true}
  *   - handler 抛错兜底：catch → {cancelled:true} → 继续下一个（队列不卡死）
- *   - fire-and-forget 不入队（调用方判断 isDialogMethod 后才 enqueue）
+ *   - 调用方约定只对 dialog 类调 enqueue；fire-and-forget 由调用方直接调 handler 不入队
+ *（enqueue 内仍防御性兼容 fire-and-forget，但不保证行为）
  *
  * 线程模型：纯 Promise + 微任务驱动，无锁。Node 单线程 event loop 保证队列状态一致。
  */
@@ -146,15 +152,18 @@ export class DialogGlobalQueue {
   /**
    * 入队一个 UI 请求，返回 Promise<UiResponse>。
    *
-   * 内部按 method 交互模型分流（TC-E4 case 4）：
-   *   - dialog 类（select/confirm/input/editor，isDialogMethod===true）：进队列 FIFO 串行，
-   *     等前一个 settle 后才调 handler（争输入焦点，防并发弹窗）
-   *   - fire-and-forget 类（notify/setStatus/...）：不入队，立即直接调 handler（不阻塞）
+   * 调用方约定：只对 dialog 类（isDialogMethod===true）调 enqueue。fire-and-forget 由
+   * 调用方（ui-request-handler-factory.ts）在 enqueue 前判 isDialogMethod 后直接调 handler，
+   * 不经过本队列。enqueue 内仍防御性兼容 fire-and-forget（万一调用方未判）：直接调 handler 返回，
+   * 不入队串行，但调用方不应依赖此防御行为。
+   *
+   * dialog 项处理（TC-E4 case 1）：进队列 FIFO 串行，等前一个 settle 后才调 handler
+   *（争输入焦点，防并发弹窗）。
    *
    * handler 抛错兜底：catch → 回 {cancelled:true}（dialog 路径，队列不卡死）。
    * SR-4：opts.child 用于 rejectChildDialogs 关联（dialog 项会被批量 reject，含 current）。
    *
-   * @param req UI 请求（dialog 或 fire-and-forget）
+   * @param req UI 请求（约定只传 dialog 类；fire-and-forget 防御性兼容）
    * @param handler 真正执行请求的 handler（TUI/GUI 模式分流后的 realHandler）
    * @param opts 可选 child 引用（用于 rejectChildDialogs 关联）
    * @returns handler 的响应；dialog 抛错时回 {cancelled:true}；child close 时回 {cancelled:true}
@@ -164,9 +173,11 @@ export class DialogGlobalQueue {
     handler: UiRequestHandler,
     opts?: EnqueueOptions,
   ): Promise<UiResponse> {
-    // fire-and-forget：不入队，立即直接调 handler（不阻塞，TC-E4 case 4）
+    // 防御性兼容 fire-and-forget：调用方约定不应传此类 req 进 enqueue（factory 层已判
+    // isDialogMethod 直接调 handler），但万一调用方未判，这里直接调 handler 不入队，避免阻塞。
+    // 直接返回 handler 真实结果（不做兜底形变为 cancelled——fire-and-forget 无串行语义）。
     if (!isDialogMethod(req.method)) {
-      return handler(req).catch(() => ({ cancelled: true } as UiResponse));
+      return handler(req);
     }
     // dialog：入队 FIFO 串行
     return new Promise<UiResponse>((resolve) => {

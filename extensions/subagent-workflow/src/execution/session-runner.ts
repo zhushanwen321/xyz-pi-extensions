@@ -20,6 +20,7 @@ import type {
   WorktreeHandle,
 } from "./types.ts";
 import {
+  type DialogGlobalQueue,
   type UiRequest,
   type UiRequestHandler,
   type UiResponse,
@@ -211,6 +212,14 @@ export interface SessionRunnerContext {
    * W3 接入 SubagentService.notifyMissingHandler 的 appendEntry。
    */
   uiRequestHandler?: UiRequestHandler;
+  /**
+   * L2 跨子进程全局 dialog 串行队列（进程单例，由 SubagentService 注入）。
+   *
+   * SR-4：child close 时调 rejectChildDialogs 清理该 child 在 L2 的 pending dialog，
+   * 防 Promise 永挂（handler 等用户输入永不 settle）导致队列死锁（processing 永远 true，
+   * 其他子进程的 dialog 永久阻塞）。未注入（旧调用方/测试）时 onclose 只清 L1。
+   */
+  dialogQueue?: DialogGlobalQueue;
   /** 主进程运行模式（W4 守卫：headless 不注入 ask_user RPC 提示词）。 */
   mode?: ExtensionMode;
 }
@@ -400,10 +409,18 @@ export function createUiRequestQueue(
   }
 
   // [R3] 子进程退出时 abort 所有 pending handler，队列不再阻塞
+  // [SR-4] 同步清理 L2 队列中该 child 的 pending dialog——child 在 dialog 等 L2 时退出，
+  //   L2 里该项永不 settle → processing 永远 true → 所有其他子进程 dialog 永久阻塞（全局死锁）。
+  //   pid 缺省（spawn 后极短窗口 child.pid 可能为 undefined）时跳过——此时该 child 还未在 L2
+  //   注册过任何 dialog（handleUiRequest 构造 UiRequest 时用同样的 child.pid，pid undefined 时
+  //   不填 _childPid，rejectChildDialogs 也匹配不到），无清理必要。
   const onClose = (): void => {
     closed = true;
     abortController.abort();
     queue.length = 0;
+    if (child.pid !== undefined) {
+      ctx.dialogQueue?.rejectChildDialogs({ pid: child.pid });
+    }
   };
   child.on("close", onClose);
   child.on("error", onClose);
@@ -452,9 +469,13 @@ async function handleUiRequest(
 
   // 从 ExtensionUiRequest 构造 UiRequest（含 channel/channelPayload）
   const { channel, channelPayload } = parseChannel(request);
+  // [SR-4] 填入 child.pid 作为内部元数据：L2 队列的 rejectChildDialogs 据此关联 child close
+  //   清理。factory 层 enqueue 时读 req._childPid 传给 opts.child。pid undefined（spawn 后极短
+  //   窗口）时不填——rejectChildDialogs 也匹配不到（onClose 同样用 child.pid 守卫），无副作用。
   const uiReq: UiRequest = {
     id,
     method: request.method,
+    ...(child.pid !== undefined ? { _childPid: child.pid } : {}),
     ...(channel !== undefined ? { channel } : {}),
     ...(channelPayload !== undefined ? { channelPayload } : {}),
     ...extractMethodFields(request),

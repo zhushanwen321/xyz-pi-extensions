@@ -162,8 +162,8 @@ function isExtensionUiRequest(obj: unknown): obj is ExtensionUiRequestEnvelope {
  * 按 method 平铺提取字段（与 Pi rpc-types.ts L230-265 1:1）。已知 method
  * 走对应变体；未知 method 走 string fallback（保留 raw 字段全量字段）。
  *
- * 字段类型容错：协议字段类型不符（如 options 非数组）时，该字段按 undefined
- * 处理但仍归类为已知 method（不丢 method 信息）。由调用方/类型守卫后续校验。
+ * 字段类型容错：协议字段类型不符（如 options 非数组）时，该字段降级为空数组/undefined
+ *（数组类字段做元素类型过滤，剔除非字符串元素），仍归类为已知 method（不丢 method 信息）。
  */
 function buildExtensionUiRequest(env: ExtensionUiRequestEnvelope): ExtensionUiRequest {
   const r: Record<string, unknown> = env;
@@ -172,7 +172,9 @@ function buildExtensionUiRequest(env: ExtensionUiRequestEnvelope): ExtensionUiRe
       return {
         method: "select",
         title: typeof r.title === "string" ? r.title : "",
-        options: Array.isArray(r.options) ? (r.options as string[]) : [],
+        options: Array.isArray(r.options)
+          ? r.options.filter((x): x is string => typeof x === "string")
+          : [],
         ...(typeof r.timeout === "number" ? { timeout: r.timeout } : {}),
       };
     case "confirm":
@@ -211,10 +213,13 @@ function buildExtensionUiRequest(env: ExtensionUiRequestEnvelope): ExtensionUiRe
       };
     case "setWidget": {
       const placement = r.widgetPlacement;
+      const widgetLines = Array.isArray(r.widgetLines)
+        ? r.widgetLines.filter((x): x is string => typeof x === "string")
+        : undefined;
       return {
         method: "setWidget",
         widgetKey: typeof r.widgetKey === "string" ? r.widgetKey : "",
-        widgetLines: Array.isArray(r.widgetLines) ? (r.widgetLines as string[]) : undefined,
+        widgetLines,
         ...(placement === "aboveEditor" || placement === "belowEditor"
           ? { widgetPlacement: placement }
           : {}),

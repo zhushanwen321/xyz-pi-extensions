@@ -13,7 +13,8 @@
 //     reject 为 cancelled（防 Promise 永挂 + 内存泄漏）
 //   - handler 抛错兜底：catch → appendEntry "subagent:dialog-handler-failed"
 //     → 回 {cancelled:true} → 继续处理下一个（不能让一个失败卡死队列）
-//   - fire-and-forget method 不入队（直接调 handler，不串行）
+//   - 调用方约定只对 dialog 类调 enqueue；fire-and-forget 由调用方（factory 层）
+//     直接调 handler 不入队。enqueue 内仍防御性兼容 fire-and-forget（直接调 handler）
 //
 // 4 个 TC-E4 测试 case：
 //   1. 3 个并发 dialog 请求按 FIFO 顺序串行处理
@@ -168,8 +169,8 @@ describe("DialogGlobalQueue — handler 抛错兜底（TC-E4 case 3）", () => {
   });
 });
 
-describe("DialogGlobalQueue — fire-and-forget 不入队（TC-E4 case 4）", () => {
-  it("fire-and-forget method（notify）直接调 handler，不串行等待", async () => {
+describe("DialogGlobalQueue — fire-and-forget 防御性兼容（TC-E4 case 4）", () => {
+  it("fire-and-forget method（notify）防御性直接调 handler，不串行等待（调用方约定不传此类）", async () => {
     const queue = new DialogGlobalQueue();
     const callOrder: string[] = [];
 

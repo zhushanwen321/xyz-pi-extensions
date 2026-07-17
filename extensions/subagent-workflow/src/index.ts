@@ -240,6 +240,9 @@ export default function subagentsWorkflowExtension(pi: ExtensionAPI): void {
       // W3: mode + handler session 级注入（与 setUiRequestHandler 二选一即可，但都加更稳）。
       mode: ctx.mode,
       uiRequestHandler,
+      // SR-4：注入 L2 dialog 队列——session-runner child close 时调 rejectChildDialogs
+      // 清理该 child 在 L2 的 pending dialog，防全局死锁（C1 修复：清理路径接通）。
+      dialogQueue,
     });
 
     if (!existingService) {

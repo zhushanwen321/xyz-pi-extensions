@@ -22,7 +22,7 @@ import { mapToWorkflowAgentResult } from "./agent-result-mapper.ts";
 import { removeAliveMarker } from "./alive-store.ts";
 import { bestEffort } from "./best-effort.ts";
 import { type ConcurrencyPool,DefaultConcurrencyPool } from "./concurrency-pool.ts";
-import type { UiRequestHandler } from "./dialog-queue.ts";
+import type { DialogGlobalQueue, UiRequestHandler } from "./dialog-queue.ts";
 import {
   completeRecord,
   createRecord,
@@ -121,11 +121,13 @@ export interface SubagentServiceSessionInit {
   /** UI 请求 handler（session 级覆盖进程级）。
    *  initSession 读取后覆盖 this.uiRequestHandler（setUiRequestHandler 的 session 级等价入口）。 */
   uiRequestHandler?: UiRequestHandler;
+  /** L2 跨子进程全局 dialog 串行队列（进程单例）。透传给 session-runner，
+   *  child close 时调 rejectChildDialogs 清理 pending（SR-4 防全局死锁）。 */
+  dialogQueue?: DialogGlobalQueue;
 }
 
 /** background 优先级（保留 priority 排序机制，单一值）。 */
 const PRIORITY_BACKGROUND = 1000;
-
 /** [MF#5] sessionId 短哈希前缀（6 hex）。两个并发 Pi 进程在同一 repo fork 时，seq 各自从 0
  *  自增 → recordId=run-1 / branch=pi-sub-run-1 冲突 → 第二个 git worktree add -b 失败。
  *  加 session 作用域前缀保证跨进程唯一。sessionId 缺失时用 'x' 兌底（空值不进 hash）。 */
@@ -181,7 +183,9 @@ export class SubagentService {
   private readonly getMainSessionFile: (() => string | undefined) | undefined;
   /** UI 请求 handler（进程级，可被 setUiRequestHandler / initSession 覆盖）。 */
   private uiRequestHandler: SubagentServiceInit["uiRequestHandler"];
-  /** UI 请求可观测性状态（sessionMode + handler 缺失告警去重，提取自本类降低行数）。 */
+  /** L2 dialog 串行队列（进程级）。SR-4：child close 时 session-runner 调 rejectChildDialogs 清理。 */
+  private dialogQueue: DialogGlobalQueue | undefined;
+  /** UI 请求可观测性（sessionMode + handler 缺失告警去重，提取自本类降低行数）。 */
   private readonly uiObservability = new UiRequestObservability();
   private pi: PiLike | null = null;
   /** 当前 Pi session ID（session 隔离过滤用）。initSession 时注入。 */
@@ -243,6 +247,11 @@ export class SubagentService {
     if (init.uiRequestHandler !== undefined) {
       this.uiRequestHandler = init.uiRequestHandler;
       this.uiObservability.resetMissingHandlerWarnings();
+    }
+    // SR-4：注入 L2 dialog 队列（child close 清理路径）。undefined 时 buildSessionRunnerContext
+    // 透传 undefined，session-runner onClose 跳过 L2 清理（仅清 L1，保留旧行为）。
+    if (init.dialogQueue !== undefined) {
+      this.dialogQueue = init.dialogQueue;
     }
     // [SPAWN fork depth 跨进程传递] 子进程被父 spawn 时，父通过 env
     // PI_SUBAGENT_FORK_DEPTH 传入当前 fork 链深度。子进程 session_start 时
@@ -946,6 +955,9 @@ export class SubagentService {
       // worktree pid 回调：session-runner first header 时补全注册表 pid。
       onWorktreePid: (branch: string, pid: number) => this.worktreeManager.registerPid(branch, pid),
       uiRequestHandler: this.uiRequestHandler,
+      // SR-4：L2 dialog 队列透传——child close 时 session-runner 据此调 rejectChildDialogs
+      // 清理 L2 pending dialog，防全局死锁。undefined 时 session-runner 跳过 L2 清理。
+      dialogQueue: this.dialogQueue,
       // 主进程运行模式：session-runner W4 守卫据此决定是否注入 ask_user RPC 提示词。
       mode: this.uiObservability.getMode(),
     };
