@@ -1,14 +1,17 @@
 // src/execution/channel-registry-access.ts
 //
-// Channel registry 的公开访问入口（跨扩展 API）。
+// Channel registry 的访问入口（本扩展内部用 + 契约文档化导出）。
 //
 // ask-user 等扩展通过本模块注册 channel handler，让 subagent 子进程的 UI 请求
 // 能透传到主进程渲染。与 index.ts 的 getOrCreateChannelRegistry 共享同一
 // globalThis[Symbol.for] 单例——无论从哪个模块访问，拿到的是同一个 registry 实例。
 //
-// 设计：本模块是 stable public API。内部实现（UiChannelRegistry 的存储结构）
-// 可能演进，但 getOrCreateChannelRegistry + register/resolve/list 契约稳定。
-// 跨扩展消费者（ask-user）只依赖本模块的导出，不依赖 index.ts 内部。
+// 设计说明（契约文档化）：本模块导出 getOrCreateChannelRegistry / UiChannelRegistry /
+// ChannelHandler 是契约文档化目的——声明 registry 的公开形状。跨扩展实际握手并不
+// import 本模块，而是各自直接读写
+// globalThis[Symbol.for("@zhushanwen/pi-subagents.channelRegistry")]，拿到结构兼容
+// 本接口形状（UiChannelRegistry）的同一实例。Symbol.for 跨 jiti 多实例共享是握手能
+// 成立的根本机制；本导出仅用于类型契约与单扩展内部调用，不保证被跨包 import。
 
 import { createUiChannelRegistry, type UiChannelRegistry, type ChannelHandler } from "./ui-channels.ts";
 

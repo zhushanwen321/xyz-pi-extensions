@@ -23,6 +23,7 @@ import {
 } from "@xyz-agent/extension-protocol";
 
 import { AskUserComponent } from "./component";
+import { resolveHostMode } from "./host-mode-compat";
 import { ANSWER_COMMENT_SEPARATOR, type Option, type Question, type Result, type ThemeLike } from "./types";
 
 /**
@@ -109,8 +110,16 @@ function encodeTuiResultToProto(
 		const selected: string[] = [];
 		const otherTokens: string[] = [];
 		for (const t of tokens) {
-			if (knownLabels.has(t)) selected.push(t);
-			else otherTokens.push(t);
+			if (knownLabels.has(t)) {
+				// 回查 proto option 的 value（PR #85 #8）：TUI 渲染用 label，但 RPC 路径
+				// （askUserInteract）回传的是 option.value。value≠label 时若直接 push label，
+				// TUI/RPC 两条路径产出分裂。value 缺失时 fallback label（保持 ask-user 自身
+				// toProtoQuestions 的 value=label 语义，以及历史行为）。
+				const opt = pq.options?.find(o => o.label === t || o.value === t);
+				selected.push(opt?.value ?? t);
+			} else {
+				otherTokens.push(t);
+			}
 		}
 		const otherText = otherTokens.join(", ") || undefined;
 
@@ -127,12 +136,20 @@ function encodeTuiResultToProto(
 	return answers;
 }
 
-/** TUI 路径：ctx.ui.custom + AskUserComponent 渲染，返回 proto answers 或 null（取消）。 */
+/** TUI 路径：ctx.ui.custom + AskUserComponent 渲染，返回 proto answers 或 null（取消）。
+ *
+ *  allowCancel 透传预留（PR #85 #12）：AskUserComponent 构造函数暂未接收 allowCancel，
+ *  Esc 取消始终可用（component.ts 的 escBackOrConfirm / cancel 无条件生效）。待组件升级
+ *  支持禁用 Esc 后，应把 allowCancel 下传给 AskUserComponent 构造函数。当前 allowCancel=false
+ *  时 TUI 与 RPC 路径仍有分裂，但 handler 层已不再吞掉 allowCancel（修复分裂的第一步）。 */
 async function runTuiProtoInteraction(
 	protoQuestions: AskUserQuestion[],
 	ctx: ExtensionContext,
+	allowCancel: boolean,
 ): Promise<AskUserAnswers | null> {
 	const questions = protoToInternalQuestions(protoQuestions);
+	// 预留：组件升级后此处改为 new AskUserComponent(questions, tui, theme, done, allowCancel)
+	void allowCancel;
 	const result = await ctx.ui.custom<Result | null>(
 		(tui: unknown, theme: unknown, _kb: unknown, done: (r: Result | null) => void) => {
 			const comp = new AskUserComponent(
@@ -169,11 +186,13 @@ export function createAskUserChannelHandler(ctx: ExtensionContext): ChannelHandl
 		}
 		const { questions, allowCancel } = payload;
 
-		// 按 mode 分流：RPC 走 askUserInteract（select 通道+sidecar），TUI 走 ctx.ui.custom+AskUserComponent
+		// 按 host-mode 分流（PR #85 #13）：gui（rpc）走 askUserInteract（select 通道+sidecar），
+		// tui/headless 走 ctx.ui.custom+AskUserComponent。用 resolveHostMode 替代 ctx.mode==="rpc"
+		// 字面比较，集中化 mode 判定（host-mode.ts 设计）。两条路径都透传 allowCancel（#12）。
 		const answers =
-			ctx.mode === "rpc"
+			resolveHostMode(ctx.mode) === "gui"
 				? await runRpcForward(questions, ctx, allowCancel ?? true)
-				: await runTuiProtoInteraction(questions, ctx);
+				: await runTuiProtoInteraction(questions, ctx, allowCancel ?? true);
 
 		if (answers === null) return { cancelled: true } satisfies ChannelResponse;
 		return { value: JSON.stringify(answers) } satisfies ChannelResponse;

@@ -55,13 +55,20 @@ export function performGetStateHandshake(
       attempts++;
       const reqId = sendGetStateCommand(child);
 
-      const timer = setTimeout(() => {
+      // [#15] 本次 tryOnce 私有的 timer（2s 超时 + 超时后派生的 retry）。
+      // 关键：response 回调通过闭包引用的是"本次 tryOnce 对应的 timer"，而非某个
+      // 外层共享变量——即便后续 tryOnce(#2) 重新发起请求，旧 reqId 的迟到 response 回调
+      // 闭包仍指向它自己那次 tryOnce 的 timer，不会误清新 reqId 的 timer。retry 句柄也
+      // 一并捕获，response 到达时同步取消"已在排队但尚未触发的下一次重试"。
+      let pendingRetry: ReturnType<typeof setTimeout> | undefined;
+      const timer: ReturnType<typeof setTimeout> = setTimeout(() => {
+        pendingRetry = undefined;
         // 单次超时：等待间隔后重试，或放弃
         if (attempts < GET_STATE_MAX_RETRIES && !resolved) {
           // [Bug fix] 旧实现直接 tryOnce() 立即重试，GET_STATE_RETRY_INTERVAL_MS 声明却
           // 从未使用（eslint error 阻断 commit）。现在重试前等待间隔，让常量名与行为一致。
-          const retry = setTimeout(() => tryOnce(), GET_STATE_RETRY_INTERVAL_MS);
-          retry.unref();
+          pendingRetry = setTimeout(() => tryOnce(), GET_STATE_RETRY_INTERVAL_MS);
+          pendingRetry.unref();
         } else if (!resolved) {
           resolved = true;
           resolve(collected);
@@ -71,7 +78,9 @@ export function performGetStateHandshake(
 
       addResponseListener(reqId, (data: unknown) => {
         if (resolved) return;
+        // [#15] 闭包清理本次 tryOnce 的 timer（2s 超时 + 排队中的 retry），不碰其他 reqId 的 timer。
         clearTimeout(timer);
+        if (pendingRetry) clearTimeout(pendingRetry);
         if (data && typeof data === "object") {
           const d = data as Record<string, unknown>;
           if (typeof d.sessionFile === "string" && d.sessionFile.length > 0) {

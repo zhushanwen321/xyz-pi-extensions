@@ -19,7 +19,9 @@ import type { UiResponse } from "./dialog-queue.ts";
  * 写入会触发协议错配。其他三种 shape（value/confirmed/cancelled）按对应字段写。
  *
  * [R1] 背压检查：child.stdin.write 返回 false 时记 warn（不阻塞，内核缓冲会随后排空）。
- * [R2] 序列化在调用方完成（JSON.stringify 已在下方逐分支构造），本函数不再包裹 try/catch。
+ * [R2] 序列化在本函数内逐分支完成。JSON.stringify 可能抛错（out.value 含循环引用 /
+ *     BigInt 等不可序列化结构），try/catch 降级为 cancelled——宁可取消单次 dialog 也不让
+ *     父进程崩溃（UI 请求通道不应被脏数据拖垮）。
  *
  * @param child 子进程（stdin 写入响应）
  * @param id 请求 id（关联 response）
@@ -29,9 +31,15 @@ import type { UiResponse } from "./dialog-queue.ts";
 export function respond(child: ChildProcess, id: string, out: UiResponse, signal?: AbortSignal): void {
   if (signal?.aborted) return;
   let line: string | undefined;
-  if ("value" in out) line = JSON.stringify({ type: "extension_ui_response", id, value: out.value });
-  else if ("confirmed" in out) line = JSON.stringify({ type: "extension_ui_response", id, confirmed: out.confirmed });
-  else if ("cancelled" in out) line = JSON.stringify({ type: "extension_ui_response", id, cancelled: true });
+  try {
+    if ("value" in out) line = JSON.stringify({ type: "extension_ui_response", id, value: out.value });
+    else if ("confirmed" in out) line = JSON.stringify({ type: "extension_ui_response", id, confirmed: out.confirmed });
+    else if ("cancelled" in out) line = JSON.stringify({ type: "extension_ui_response", id, cancelled: true });
+  } catch (err) {
+    // [R2] out.value 含循环引用/BigInt 等不可序列化结构——降级 cancelled，避免父进程崩溃。
+    console.warn(`[subagents] JSON.stringify failed for ui response ${id}, degrading to cancelled:`, err);
+    line = JSON.stringify({ type: "extension_ui_response", id, cancelled: true });
+  }
   // ack: fire-and-forget，不写 stdin（SR-5）
   if (line === undefined) return;
   writeStdinLine(child, line, `ui response for request ${id}`);

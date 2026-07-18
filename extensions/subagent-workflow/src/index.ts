@@ -17,7 +17,7 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 
-import type { ExtensionAPI, ExtensionContext, ResourcesDiscoverEvent, ResourcesDiscoverResult, SessionShutdownEvent, SessionStartEvent } from "@mariozechner/pi-coding-agent";
+import type { ExtensionAPI, ExtensionContext, ModelSelectEvent, ResourcesDiscoverEvent, ResourcesDiscoverResult, SessionShutdownEvent, SessionStartEvent, SessionTreeEvent } from "@mariozechner/pi-coding-agent";
 import { getAgentDir } from "@mariozechner/pi-coding-agent";
 
 import type { AgentRegistry } from "./execution/agent-registry.ts";
@@ -237,9 +237,11 @@ export default function subagentsWorkflowExtension(pi: ExtensionAPI): void {
       streamSink: ctx.mode === "rpc"
         ? { setWidget: (key, lines) => ctx.ui.setWidget(key, lines) }
         : undefined,
-      // W3: mode + handler session 级注入（与 setUiRequestHandler 二选一即可，但都加更稳）。
+      // [#24] uiRequestHandler 单一注入入口：上方 setUiRequestHandler 已注入（SR-3 语义，
+      // new/existing service 均覆盖）。此处不再重复传 initSession.uiRequestHandler，避免
+      // 同一 handler 双路径注入造成的语义混淆与“哪一个是 source of truth”歧义。
+      // mode 仍需 session 级注入（uiObservability.setMode 依赖它，与 handler 无关）。
       mode: ctx.mode,
-      uiRequestHandler,
       // SR-4：注入 L2 dialog 队列——session-runner child close 时调 rejectChildDialogs
       // 清理该 child 在 L2 的 pending dialog，防全局死锁（C1 修复：清理路径接通）。
       dialogQueue,
@@ -325,7 +327,7 @@ export default function subagentsWorkflowExtension(pi: ExtensionAPI): void {
   // ════════════════════════════════════════════════════════════
   //  model_select：用户切换 model 时刷新缓存
   // ════════════════════════════════════════════════════════════
-  pi.on("model_select", (event: { model: NonNullable<ExtensionContext["model"]> }, ctx: ExtensionContext) => {
+  pi.on("model_select", (event: ModelSelectEvent, ctx: ExtensionContext) => {
     const service = getModelConfigService();
     if (service && typeof service.setCtxModel === "function") {
       service.setCtxModel(event.model);
@@ -341,7 +343,7 @@ export default function subagentsWorkflowExtension(pi: ExtensionAPI): void {
   // ════════════════════════════════════════════════════════════
   //  session_tree：切分支前 pause 所有 running run
   // ════════════════════════════════════════════════════════════
-  pi.on("session_tree", async (_event: Record<string, unknown>, ctx: ExtensionContext) => {
+  pi.on("session_tree", async (_event: SessionTreeEvent, ctx: ExtensionContext) => {
     const sessionId = ctx.sessionManager.getSessionId();
     lsRef.lastSessionId = sessionId;
 
@@ -379,11 +381,15 @@ export default function subagentsWorkflowExtension(pi: ExtensionAPI): void {
     }
 
     // M2: 清理 dialog queue 运行时状态（queue/current/processing）。
-    // 防异常退出后 processing=true 卡死下次 session——clear() 不 settle pending Promise
-    //（dispose 时调用方已不关心，符合 dialog-queue.ts clear() 的注释）。
+    // [#10] 先 rejectAll() settle 所有 pending dialog Promise（防闭包泄漏：未 settle 的
+    // Promise 持有 resolve/reject 闭包及 handler 上下文，session 退出后仍挂在全球队列上），
+    // 再 clear() 重置 queue/current/processing（防异常退出后 processing=true 卡死下次 session）。
+    // rejectAll() 由 dialog-queue.ts 提供（Group B 新增）；若其内部已 reset 状态，此处 clear() 为幂等兜底。
     // channel registry 不清：跨 session 持久是有意设计（ask-user 扩展注册的 channel handler
     // 在 /new /resume /fork 时不丢失注册）。
-    getOrCreateDialogQueue().clear();
+    const dialogQueue = getOrCreateDialogQueue();
+    dialogQueue.rejectAll();
+    dialogQueue.clear();
   });
 
   // ════════════════════════════════════════════════════════════

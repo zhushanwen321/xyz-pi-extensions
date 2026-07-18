@@ -17,10 +17,11 @@ import type { UiRequest } from "./dialog-queue.ts";
 // 类型再导出：dialog-queue.ts 是 UiRequest/UiResponse/UiRequestHandler 的规范来源，
 // 本模块再导出供测试 import（避免测试直接依赖 dialog-queue 内部实现）。
 export type { UiRequest, UiRequestHandler, UiResponse } from "./dialog-queue.ts";
-import { respond } from "./stdin-writer.ts";
-import type { ExtensionUiRequest } from "./spawn-event-adapter.ts";
 import type { SessionRunnerContext } from "./session-runner.ts";
+import type { ExtensionUiRequest } from "./spawn-event-adapter.ts";
+import { respond } from "./stdin-writer.ts";
 import { parseChannel } from "./ui-channels.ts";
+import { notifyMissingHandlerGlobal } from "./ui-request-observability.ts";
 
 /**
  * 创建 UI 请求队列。返回 enqueue 函数，调用方将 extension_ui_request 入队。
@@ -63,6 +64,9 @@ export function createUiRequestQueue(
   //   注册过任何 dialog（handleUiRequest 构造 UiRequest 时用同样的 child.pid，pid undefined 时
   //   不填 _childPid，rejectChildDialogs 也匹配不到），无清理必要。
   const onClose = (): void => {
+    // #19/#17 幂等守卫：close + error 可能都触发，二次调用会重复 rejectChildDialogs（虽依赖 L2 的 settled 幂等，
+    // 但 close 状态本身需守卫——避免 closed=true 后 queue.length=0 + abort 重复执行，以及重复 reject 导致语义噪声）。
+    if (closed) return;
     closed = true;
     abortController.abort();
     queue.length = 0;
@@ -105,9 +109,14 @@ async function handleUiRequest(
 ): Promise<void> {
   const handler = ctx.uiRequestHandler;
   if (!handler) {
-    // 可观测性：handler 缺失不再静默（FR-9）
-    // W2 阶段先 console.warn，W3 接入 SubagentService.notifyMissingHandler 的 appendEntry
-    console.warn("[subagents] uiRequestHandler missing for request", id, "method:", request.method);
+    // #9 + #11：handler 缺失时不再静默 return（会让子进程永久挂起等 response）。
+    //   - notifyMissingHandlerGlobal：经 globalThis 桥接到 observability 单例做 per-session 去重告警
+    //     （FR-9 可观测性；未注册时走 fallback warn 不丢日志）
+    //   - respond(cancelled)：让子进程收到明确取消，不再永久挂起。等价于用户主动取消的语义。
+    // 去重 key 用 child.pid（队列内拿不到真实 sessionId；pid 是子进程会话的稳定标识，
+    // 去重粒度正确——同一子进程多次 handler 缺失只告警一次）。
+    notifyMissingHandlerGlobal(child.pid?.toString() ?? id);
+    respond(child, id, { cancelled: true }, signal);
     return;
   }
 

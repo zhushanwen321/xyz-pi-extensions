@@ -662,6 +662,37 @@ export async function runSpawn(
     // parseSpawnLine 返回 kind:"response" 时，按 command+id 匹配 resolver。
     const get_stateListeners = new Map<string, (data: unknown) => void>();
     let stdoutBuffer = "";
+
+    // [#18] 握手状态变量在 stdout handler 注册之前定义，消除"handler 闭包依赖同 tick
+    // 后续 const 初始化"的隐式顺序假设——handler 现在直接引用已初始化的变量，不靠
+    // "data 事件必然在下一 tick 才触发”的运行时不变式兜底。
+    const handshakeResultRef: { current?: GetStateResult } = {};
+    let settleHandshake: (() => void) | undefined;
+    const handshakeSettled: Promise<void> = new Promise((resolveSettled) => {
+      settleHandshake = resolveSettled;
+    });
+    /** 握手完成统一入口：记录结果 + 回填 sessionFile + 写 alive marker + settle。 */
+    const finishHandshake = (r: GetStateResult): void => {
+      handshakeResultRef.current = r;
+      // 仅当 header 未先行设置 record.sessionFile 时回填（RPC mode 路径）。
+      if (r.sessionFile && !record.sessionFile) {
+        record.sessionFile = r.sessionFile;
+        if (child.pid) {
+          try {
+            writeAliveMarker(r.sessionFile, {
+              pid: child.pid,
+              id: r.sessionId ?? record.id,
+              startedAt: Date.now(),
+            });
+          } catch {
+            // best-effort：alive marker 失败不影响执行
+          }
+        }
+      }
+      settleHandshake?.();
+      settleHandshake = undefined;
+    };
+
     child.stdout.on("data", (data: string) => {
       stdoutBuffer += data;
       const lines = stdoutBuffer.split("\n");
@@ -693,8 +724,9 @@ export async function runSpawn(
             ctx.onWorktreePid?.(opts.worktree.branch, child.pid);
           }
           // FR-4 加速路径：header 到达即 finishHandshake（header 已提供 sessionId，
-          // 足以推导 sessionFile + 兜底查找，无需等 get_state response）。避免 json mode
-          // 下 close handler 阻塞等待握手内部 6s 超时。
+          // 足以推导 sessionFile + 兜底查找，无需等 get_state response）。
+          // [#25] buildSpawnArgs 固定 --mode rpc，RPC mode 不发 header——此分支当前不触发，
+          // 仅为未来 mode 回切（如 json mode 调试）保留：届时 header 先到可省去 get_state 握手等待。
           if (settleHandshake) {
             finishHandshake({
               ...(record.sessionFile ? { sessionFile: record.sessionFile } : {}),
@@ -740,32 +772,8 @@ export async function runSpawn(
     // 时序：握手在 stdout pump（get_stateListeners 已就绪）之后启动。get_state 命令写入
     // stdin，pi rebindSession 后读取并返回 response，经 stdout pump 匹配 resolver 触发 resolve。
     // close handler await handshakeSettled，保证无论 task 多快结束，close 时 sessionFile 已回填。
-    const handshakeResultRef: { current?: GetStateResult } = {};
-    let settleHandshake: (() => void) | undefined;
-    const handshakeSettled: Promise<void> = new Promise((resolveSettled) => {
-      settleHandshake = resolveSettled;
-    });
-    /** 握手完成统一入口：记录结果 + 回填 sessionFile + 写 alive marker + settle。 */
-    const finishHandshake = (r: GetStateResult): void => {
-      handshakeResultRef.current = r;
-      // 仅当 header 未先行设置 record.sessionFile 时回填（RPC mode 路径）。
-      if (r.sessionFile && !record.sessionFile) {
-        record.sessionFile = r.sessionFile;
-        if (child.pid) {
-          try {
-            writeAliveMarker(r.sessionFile, {
-              pid: child.pid,
-              id: r.sessionId ?? record.id,
-              startedAt: Date.now(),
-            });
-          } catch {
-            // best-effort：alive marker 失败不影响执行
-          }
-        }
-      }
-      settleHandshake?.();
-      settleHandshake = undefined;
-    };
+    // [#18] 握手状态变量（handshakeResultRef/settleHandshake/handshakeSettled/finishHandshake）
+    // 已在上方 stdout handler 注册前定义，此处直接发起握手。
     void performGetStateHandshake(child, (id, resolver) => {
       get_stateListeners.set(id, resolver);
     }).then((r) => {

@@ -193,15 +193,21 @@ export class DialogGlobalQueue {
   }
 
   /**
-   * settle 一个 item（幂等）。handler 完成 / rejectChildDialogs 都通过本方法，
+   * settle 一个 item（幂等）。handler 完成 / rejectChildDialogs / rejectAll 都通过本方法，
    * settled 标志保证只 settle 一次（防竞争）。
-   * settle current 时清空 current 并推进队列（解阻塞）。
+   *
+   * #19 单一推进点：本方法 settle Promise + 清状态后，**唯一**调 processNext 推进队列。
+   * processNext 尾部不再调 processNext（旧代码双重推进，虽靠 processing 标志幂等，但语义混乱）。
+   * 为什么推进必须在 settleItem 而非 processNext 尾部：rejectChildDialogs 取消一个永不 settle
+   * 的 current（handler 等用户输入卡死）时，processNext 的 `await item.handler` 永不 resume，
+   * 尾部不会执行；只有 settleItem 里的 processNext 才能打破死锁，推进下一个。
    */
   private settleItem(item: QueueItem, resp: UiResponse): void {
     if (item.settled) return;
     item.settled = true;
     item.resolve(resp);
-    // 若是正在处理的项，清空 current 并推进（rejectChildDialogs 取消 current 后队列不卡死）
+    // 若是正在处理的项，清空 current/processing 并推进队列（唯一推进点）。
+    // 非当前项（队列中被 reject）只 settle Promise，不影响 current/推进。
     if (this.current === item) {
       this.current = undefined;
       this.processing = false;
@@ -245,7 +251,7 @@ export class DialogGlobalQueue {
    * 处理队列下一项（FIFO）。
    *
    * processing 标志保证串行：handler 运行期间 processing=true，新的 processNext 调用直接返回；
-   * handler settle 后 processing=false 并递归处理下一项。
+   * handler settle 后由 settleItem 清 processing=false 并推进下一项（#19 单一推进点）。
    *
    * handler 抛错兜底（TC-E4 case 3）：catch → settle {cancelled:true} → 继续。
    * 不能让一个失败卡死队列（processing 永远 true）。
@@ -258,26 +264,46 @@ export class DialogGlobalQueue {
     this.current = item;
     try {
       const resp = await item.handler(item.req);
-      // handler 完成：settle（若已被 rejectChildDialogs 抢先 settle 则 noop）
+      // handler 完成：settle（若已被 rejectChildDialogs 抢先 settle 则 noop）。
+      // settleItem 内会清 current/processing 并推进队列（#19 单一推进点）。
       this.settleItem(item, resp);
     } catch {
       // handler 抛错兜底：回 cancelled，不向上抛（队列不能卡死）
       this.settleItem(item, { cancelled: true });
-    } finally {
-      // settleItem 已处理 current/processing 清理（reject 路径）；
-      // 这里兜底处理 handler 正常完成路径（settleItem 内 current===item 时已清）。
-      if (this.current === item) {
-        this.current = undefined;
-        this.processing = false;
-      }
     }
-    // 继续处理下一项（settle 后）。用 microtask 推进保证 FIFO 顺序
-    // （测试用 vi.advanceTimersByTimeAsync(0) 推进，Promise.resolve().then 即可触发）。
-    void this.processNext();
+    // #19：不在尾部再调 processNext——推进统一由 settleItem 负责（避免双重推进）。
+  }
+
+  /**
+   * #10：把所有 pending dialog（queue + current）全部 settle 为 {cancelled:true}，
+   * 并清空 queue/current/processing 状态。session_shutdown 调用，保证不留永挂 Promise。
+   *
+   * 约定签名：rejectAll(): void（无参，返 void）。Group C 的 index.ts session_shutdown 依赖此契约。
+   *
+   * 幂等：依赖 settleItem 的 settled 标志——重复调用只会对已 settled 项 noop。
+   * 顺序敏感（#19 推进点在 settleItem）：必须先清空 queue 数组再 settle current，
+   * 否则 settleItem(current) 同步触发的 processNext 会从旧 queue 抢占下一项作为新 current，
+   * 避开本方法的 cancel 语义。清空后 processNext 看到空队列直接返回，新 current 不会被抢占。
+   */
+  rejectAll(): void {
+    // 先捕获并清空队列——防 settleItem(current) 触发的 processNext 抢占同队列下一项
+    const items = this.queue;
+    this.queue = [];
+    // 再 settle current（processNext 此时看到空队列，不会抢占）
+    if (this.current) {
+      this.settleItem(this.current, { cancelled: true });
+    }
+    // settle 所有原队列项（Promise 必须 resolve，不能挂）
+    for (const item of items) {
+      this.settleItem(item, { cancelled: true });
+    }
+    // 状态清理（幂等：settleItem(current) 可能已清）
+    this.current = undefined;
+    this.processing = false;
   }
 
   /** 清空队列（dispose 用）。pending 项的 Promise 不 settle（dispose 时调用方已不关心）。
-   *  如需 settle，dispose 前应先 rejectChildDialogs。 */
+   *  如需 settle，dispose 前应先 rejectChildDialogs 或 rejectAll。 */
   clear(): void {
     this.queue = [];
     this.current = undefined;
