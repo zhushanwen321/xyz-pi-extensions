@@ -9,3 +9,6 @@ coverage/
 
 # CW workflow worktree 运行产物（execute-full-workflow 在 .cw-wt/ 下建临时 worktree）
 .cw-wt/
+
+# zcode 编辑器会话计划（per-session 产物，不入库）
+.zcode/
