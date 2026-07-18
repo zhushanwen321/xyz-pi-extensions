@@ -1,6 +1,6 @@
 // src/core/session-runner.ts
 //
-// spawn pi --mode json 子进程执行 session 的编排器。零 mode 感知。
+// spawn pi --mode rpc 子进程执行 session 的编排器。零 mode 感知。
 //
 // spawn 改造后：session 在独立子进程跑（进程隔离），事件经 stdout JSON 流回流。
 // runSpawn 是唯一执行入口（sync/background 共用）。mode 分叉在 Runtime.execute 顶部。
@@ -515,7 +515,7 @@ function extractMethodFields(req: ExtensionUiRequest): Partial<UiRequest> {
 }
 
 // ============================================================
-// [SPAWN 改造] runSpawn：spawn pi --mode json 子进程执行 session
+// [SPAWN 改造] runSpawn：spawn pi --mode rpc 子进程执行 session
 // ============================================================
 //
 // 替代 in-process run()。核心差异：session 在独立子进程跑（进程隔离），
@@ -605,15 +605,16 @@ export async function runSpawn(
   const pendingTools = new Map<string, { toolName: string; args?: unknown }>();
 
   // b. turnLimiter（spawn 版：abort = proc.kill；steer 是 no-op）
-  // [M1] pi --mode json 是 single-shot，无运行时 steer 通道。补偿：启动时通过
-  // --append-system-prompt 预置 WRAP_UP_HINT（见上方 appendParts），让 agent 感知
-  // 接近上限时主动收尾。maxTurns soft limit 仍依赖 graceTurns 后的 abort 兑现。
+  // [M1] rpc mode 是长驻进程（agent_end 后不自动退出），maxTurns soft limit 依赖
+  // graceTurns 后的 abort（proc.kill SIGTERM）兑现。agent 自然结束时由 stdout pump
+  // 的 agent_end 拦截 kill（见下方）。steer 通道当前未接通（见下方 steer no-op 注释）。
   let proc: ChildProcess | undefined;
   const limiter = createTurnLimiter({
     maxTurns: opts.maxTurns ?? 0,
     graceTurns: opts.graceTurns ?? DEFAULT_GRACE_TURNS,
     steer: () => {
-      // no-op：spawn 无运行时 steer 通道，补偿已在启动时注入 WRAP_UP_HINT。
+      // no-op：当前 runSpawn 未接通 rpc stdin steer 通道（rpc mode 支持 steer/followUp，
+      // 但未实现写入逻辑）。补偿已在启动时注入 WRAP_UP_HINT 让 agent 主动收尾。
     },
     abort: () => {
       proc?.kill("SIGTERM");
@@ -721,9 +722,8 @@ export async function runSpawn(
   const appendParts: string[] = [buildEnvBlock(ctx.cwd, ownForkDepth, record.depth)];
   if (opts.agentConfig?.systemPrompt) appendParts.push(opts.agentConfig.systemPrompt);
   if (opts.appendSystemPrompt) appendParts.push(...opts.appendSystemPrompt);
-  // [M1 补偿] spawn 模式无运行时 steer 通道（pi --mode json 是 single-shot），
-  // 改为启动时预置 wrap-up 提示——agent 感知接近上限时主动收尾。
-  // 长期方案：切到 pi --mode rpc（支持运行时 steer），见 follow-up。
+  // [M1 补偿] rpc mode 的 steer 通道当前未接通，改为启动时预置 wrap-up 提示——
+  // agent 感知接近上限时主动收尾。
   if (opts.maxTurns && opts.maxTurns > 0) appendParts.push(WRAP_UP_HINT);
   // W4: ask_user RPC 使用指引——当子进程配置了 ask_user tool 时，告知 LLM
   // ask_user 的问题会通过 RPC 转发到主 agent UI，用户在主 agent 界面回答。
@@ -845,6 +845,17 @@ export async function runSpawn(
             ctx.onWorktreePid?.(opts.worktree.branch, child.pid);
           }
         } else if (parsed.kind === "event") {
+          const evt = parsed.event;
+          // agent_end（willRetry=false）= agent 自然完成。rpc mode 子进程不自动退出
+          //（runRpcMode 末尾 return new Promise(() => {}) 长驻等命令），需主动 kill
+          // 触发 close → runSpawn resolve。willRetry=true 时 agent 会重试，不能 kill。
+          if (
+            evt && typeof evt === "object" && "type" in evt &&
+            (evt as { type: string }).type === "agent_end"
+          ) {
+            const willRetry = (evt as { willRetry?: boolean }).willRetry === true;
+            if (!willRetry) child.kill("SIGTERM");
+          }
           if (isSdkEvent(parsed.event)) handleSdkEvent(parsed.event);
         } else if (parsed.kind === "extension_ui_request") {
           // W3: 子进程发 UI 请求（ask_user）。入队 FIFO 串行处理，防止并发询问用户。

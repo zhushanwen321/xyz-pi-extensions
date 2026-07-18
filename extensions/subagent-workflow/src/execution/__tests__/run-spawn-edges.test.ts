@@ -6,6 +6,7 @@
 //   - [C1] orphan 进程兜底：killAllSpawnedChildren 对未退出 child 发 SIGTERM。
 //   - [M8] stdout 边界：损坏行（非法 JSON / 缺 type）静默忽略 + 残留尾行（close 前无 \n）
 //     由 close handler 再 parse。
+//   - [agent_end] rpc 长驻进程自然完成：agent_end（willRetry=false）→ kill SIGTERM 触发 close。
 //
 // mock 策略（与 run-spawn-integration.test.ts 一致，vi.mock 是文件作用域，每文件需独立声明）：
 //   - node:child_process.spawn → 返回 FakeChild（EventEmitter + PassThrough），
@@ -37,6 +38,7 @@ vi.mock("node:child_process", async () => {
     pid = 12345;
     stdout = new PassThrough();
     stderr = new PassThrough();
+    stdin = new PassThrough();
     killed = false;
     killSignal: string | undefined;
     kill(sig?: string): boolean {
@@ -108,6 +110,7 @@ interface FakeChild {
   pid: number;
   stdout: PassThrough;
   stderr: PassThrough;
+  stdin: PassThrough;
   killed: boolean;
   killSignal: string | undefined;
   kill(sig?: string): boolean;
@@ -434,6 +437,89 @@ describe("runSpawn", () => {
 
       expect(result.success).toBe(true);
       expect(record.turnCount).toBe(1); // 3 片拼接后解析为 1 次 turn_end
+    });
+  });
+
+  // ── 3. agent_end 自然完成（rpc 长驻进程不自动退出，需主动 kill）──
+  //
+  // [rpc agent_end] pi --mode rpc 是长驻进程（runRpcMode 末尾 return new Promise(() => {})），
+  // 处理完 prompt 后不退出。runSpawn 只靠 child.on("close") 判完成——如果不处理 agent_end，
+  // 子进程会卡到 watchdog 30 分钟兜底 kill。修复：收到 agent_end（willRetry=false）后
+  // 主动 child.kill("SIGTERM") 让子进程退出，触发 close → runSpawn resolve。
+  // willRetry=true 时 agent 会重试，不能 kill。
+  describe("agent_end 自然完成", () => {
+    it("agent_end（willRetry=false）→ child.kill(SIGTERM) 被调用，close 后 success=true", async () => {
+      const record = makeRecord();
+      const promise = runSpawn(record, "Task: done", makeOpts(), makeCtx());
+
+      await waitForSpawn();
+      const child = lastSpawnedChild();
+
+      emitStdoutLine(child, sessionHeader());
+      // agent 自然完成（willRetry=false）
+      emitStdoutLine(child, { type: "agent_end", messages: [], willRetry: false });
+      child.stdout.end();
+      child.stderr.end();
+      // agent_end 触发 kill(SIGTERM) → 子进程退出（exitCode 143 = 128+15）
+      child.emit("close", 143);
+
+      const result = await promise;
+
+      expect(child.killed).toBe(true);
+      expect(child.killSignal).toBe("SIGTERM");
+      // 信号终止（>=128）视为正常完成
+      expect(result.success).toBe(true);
+    });
+
+    it("agent_end（willRetry=true）→ child.kill 不被调用（agent 会重试，等下一个 agent_end）", async () => {
+      const record = makeRecord();
+      const promise = runSpawn(record, "Task: retry", makeOpts(), makeCtx());
+
+      await waitForSpawn();
+      const child = lastSpawnedChild();
+
+      emitStdoutLine(child, sessionHeader());
+      // willRetry=true：agent 会重试，不应 kill
+      emitStdoutLine(child, { type: "agent_end", messages: [], willRetry: true });
+      // 此时 child.killed 应仍为 false。给一点时间让 event pump 处理完。
+      await new Promise((r) => setTimeout(r, 10));
+      expect(child.killed).toBe(false);
+
+      // 收尾：模拟重试后的最终完成（willRetry=false）
+      emitStdoutLine(child, { type: "agent_end", messages: [], willRetry: false });
+      child.stdout.end();
+      child.stderr.end();
+      child.emit("close", 143);
+
+      const result = await promise;
+
+      // 最终的 agent_end（willRetry=false）触发 kill
+      expect(child.killed).toBe(true);
+      expect(child.killSignal).toBe("SIGTERM");
+      expect(result.success).toBe(true);
+    });
+
+    it("agent_end 后的后续 event 仍被 handleSdkEvent 处理（kill 不阻塞 event pump）", async () => {
+      const record = makeRecord();
+      const promise = runSpawn(record, "Task: flush", makeOpts(), makeCtx());
+
+      await waitForSpawn();
+      const child = lastSpawnedChild();
+
+      emitStdoutLine(child, sessionHeader());
+      // agent_end kill 是 fire-and-forget（SIGTERM 异步），后续 stdout 行仍被 event pump 处理
+      emitStdoutLine(child, { type: "agent_end", messages: [], willRetry: false });
+      emitStdoutLine(child, { type: "turn_end" }); // kill 后的 turn_end 仍应被处理
+      child.stdout.end();
+      child.stderr.end();
+      child.emit("close", 143);
+
+      const result = await promise;
+
+      expect(child.killed).toBe(true);
+      expect(result.success).toBe(true);
+      // turn_end 被处理 → turnCount=1
+      expect(record.turnCount).toBe(1);
     });
   });
 });
