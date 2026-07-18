@@ -107,8 +107,8 @@ const SubagentParams = Type.Object({
     }),
     slug: Type.String({
       description:
-        "REQUIRED for action:'start'. Short label (max 20 chars) describing what THIS subagent does — e.g. 'extract-urls', 'fix-login-bug'. " +
-        "Shown in the TUI alongside the agent type to distinguish concurrent subagents. Throws if missing or whitespace-only.",
+        "REQUIRED for action:'start'. Short label (≤20 chars) for this subagent, e.g. 'fix-login', 'extract-urls'. " +
+        "Shown in TUI to distinguish concurrent subagents.",
       maxLength: 20,
     }),
     agent: Type.Optional(Type.String({
