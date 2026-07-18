@@ -13,8 +13,8 @@ import { describe, expect, it, vi } from "vitest";
 import { handleWorkerMessage } from "../orchestration/error-recovery.ts";
 import type { LifecycleDeps, WorkerHandlers } from "../orchestration/models/ports.ts";
 import { Trace } from "../orchestration/models/trace.ts";
-import type { WorkflowRun } from "../orchestration/models/workflow-run.ts";
 import type { AgentResult } from "../orchestration/models/types.ts";
+import type { WorkflowRun } from "../orchestration/models/workflow-run.ts";
 
 // ── helpers ──────────────────────────────────────────────────
 

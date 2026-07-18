@@ -1,9 +1,10 @@
-import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import * as fs from "fs";
-import * as path from "path";
 import * as os from "os";
-import { RecordStore } from "../execution/record-store";
+import * as path from "path";
+import { afterEach,beforeEach, describe, expect, it } from "vitest";
+
 import { ManifestStore } from "../execution/manifest-store";
+import { RecordStore } from "../execution/record-store";
 
 describe("FR-8: Orphan Recovery from Manifest", () => {
   let sessionsDir: string;
@@ -130,25 +131,18 @@ describe("FR-8: Orphan Recovery from Manifest", () => {
       createdAt: 2000,
     });
 
-    await manifestStore.writeManifest({
-      id: "status-error",
-      rootSessionId: "session-main",
-      agentName: "worker",
-      status: "error",
-      createdAt: 3000,
-    });
-
+    // [Wave1] status: "error" 分支已删除——ManifestRecord.status 只接受 running/completed/failed
+    //（"error" 枚举已移除），且 listAllSync 的 isValidManifest 守卫会过滤非合法 status。
+    // 历史 error→failed 的降级语义仍由 mapManifestStatus 保留（越界降级 failed），
+    // 但合法写入路径不再产出 error 文件——该 case 语义已消亡，删除。
     const records = store.collectRecords(100, "all", "session-main");
-    expect(records).toHaveLength(3);
+    expect(records).toHaveLength(2);
 
     const completed = records.find((r) => r.id === "status-completed");
     expect(completed?.status).toBe("done");
 
     const failed = records.find((r) => r.id === "status-failed");
     expect(failed?.status).toBe("failed");
-
-    const error = records.find((r) => r.id === "status-error");
-    expect(error?.status).toBe("failed");
   });
 
   it("in-memory records should take priority over manifest records", async () => {

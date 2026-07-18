@@ -21,6 +21,23 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 // ── mock modules（在 import 前声明；路径相对 src/execution/__tests/） ──
+//
+// [D15] 为何此处内联 vi.mock 与 vitest.config.ts 的 alias（包根 mocks/pi-coding-agent.ts）并存：
+// 两套 mock 分工不同，不强制统一——
+//   1. **config alias（包根 mocks/pi-coding-agent.ts）**：完整 stub，导出 ExtensionAPI/
+//      ExtensionContext/ExtensionMode 等 *类型*（编译期擦除）+ getAgentDir 运行时值。服务于
+//      全仓库绝大多数测试的类型解析与轻量 mock（不 import 真实重模块的测试直接吃 alias）。
+//   2. **本文件内联 vi.mock（下方）**：vi.mock 在运行时覆盖 config alias，确保本文件 import
+//      真实 index.ts（它 `import { getAgentDir } from "@mariozechner/pi-coding-agent"` +
+//      一组 type-only import）时，运行时只暴露 getAgentDir，彻底隔离真实 SDK 的模块顶层
+//      副作用（避免 jiti 加载真实 pi 包触发未 mock 的依赖链）。
+//   3. 形状一致性：内联 mock 的运行时值形状（`{ getAgentDir }`）与 alias stub 的运行时值
+//      形状完全一致（alias stub 运行时也只导出 getAgentDir 函数，类型导出在运行期擦除）。
+//      差异仅在「覆盖时机」——vi.mock 比 alias 更早介入模块图解析，保证真实 index.ts 加载时
+//      拿到的是纯函数桩而非 alias 的完整对象。
+//   4. crash-recovery.test.ts / session-start-reaper.test.ts 同此模式（import 真实模块的
+//      测试统一用内联 vi.mock 覆盖），三者保持一致。
+// 结论：不抽共享 mocks 文件。alias 已承担类型解析，内联 vi.mock 承担运行时隔离，职责正交。
 
 vi.mock("@mariozechner/pi-coding-agent", () => ({
   getAgentDir: () => "/home/user/.pi/agent",
@@ -272,20 +289,30 @@ describe("session_start UI handler 注入链路（SR-3）", () => {
     expect(typeof injected).toBe("function");
   });
 
-  it("initSession 也收到同一 uiRequestHandler（双重注入：setUiRequestHandler + initSession）", async () => {
+  it("initSession 不再收 uiRequestHandler（#24 单一注入入口：setUiRequestHandler 唯一通道）", async () => {
     const { pi, getSessionStartHandler } = createMockPi();
     subagentsExtension(pi);
 
     const handler = getSessionStartHandler();
     await handler!({ type: "session_start" }, createMockCtx("tui"));
 
-    // index.ts 既调 service.setUiRequestHandler(h) 又调 service.initSession({ uiRequestHandler: h })
-    // 断言 initSession 的入参含 uiRequestHandler 字段且与 setUiRequestHandler 同源（都是函数）
+    // [#24] uiRequestHandler 单一注入入口：index.ts 只调 service.setUiRequestHandler(h)，
+    // 不再重复传 initSession.uiRequestHandler——避免同一 handler 双路径注入造成
+    // "哪一个是 source of truth" 歧义。此处断言该契约不被回退。
     expect(mockInitSession).toHaveBeenCalledTimes(1);
-    const initArg = mockInitSession.mock.calls[0]?.[0] as { uiRequestHandler?: unknown } | undefined;
+    const initArg = mockInitSession.mock.calls[0]?.[0] as {
+      uiRequestHandler?: unknown;
+      mode?: unknown;
+      dialogQueue?: unknown;
+    } | undefined;
     expect(initArg).toBeDefined();
-    expect(typeof initArg?.uiRequestHandler).toBe("function");
-    // dialogQueue 也注入（SR-4 清理路径接通）
+    // uiRequestHandler 不再走 initSession（已被 #24 移除）
+    expect(initArg?.uiRequestHandler).toBeUndefined();
+    // mode 仍需 session 级注入（uiObservability.setMode 依赖它）
+    expect(initArg?.mode).toBe("tui");
+    // dialogQueue 仍注入（SR-4 清理路径接通）
     expect(initArg).toHaveProperty("dialogQueue");
+    // handler 经 setUiRequestHandler 注入（单一入口）——前面 case 已断言，此处复断不再赘述。
+    expect(mockSetUiRequestHandler).toHaveBeenCalledTimes(1);
   });
 });

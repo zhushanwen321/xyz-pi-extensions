@@ -26,8 +26,8 @@ import { describe, expect, it, vi } from "vitest";
 
 import {
   createUiChannelRegistry,
-  parseChannel,
   type ExtensionUiRequestLike,
+  parseChannel,
 } from "../ui-channels.ts";
 
 // ── 测试 fixture 构造助手 ────────────────────────────────────

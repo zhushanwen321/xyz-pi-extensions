@@ -3,10 +3,11 @@
 // M2: AgentCallOpts has thinkingLevel field + resolveAgentOpts propagates it from agent .md
 // M3: resolveAgentOpts uses === undefined check (not ||) for model fallback
 
-import { describe, expect, it } from "vitest";
 import { readFileSync } from "node:fs";
-import { join, dirname } from "node:path";
+import { dirname,join } from "node:path";
 import { fileURLToPath } from "node:url";
+
+import { describe, expect, it } from "vitest";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const PKG_ROOT = join(__dirname, "..", "..");

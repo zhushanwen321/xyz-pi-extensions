@@ -6,10 +6,11 @@
 //
 // E1: workflows/ 目录含 4 个 .js 文件，每个 meta.name 与文件名 stem 一致。
 
-import { describe, expect, it } from "vitest";
-import { readFileSync, readdirSync } from "node:fs";
-import { join, dirname } from "node:path";
+import { readdirSync,readFileSync } from "node:fs";
+import { dirname,join } from "node:path";
 import { fileURLToPath } from "node:url";
+
+import { describe, expect, it } from "vitest";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const WORKFLOWS_DIR = join(__dirname, "../../workflows");

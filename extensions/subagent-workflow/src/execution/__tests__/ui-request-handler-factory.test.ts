@@ -9,13 +9,12 @@
 // realHandler 路由：channel 命中 → channelHandler（经 coerceUiResponse 形变）；未命中 → defaultDialogForward（cancelled）。
 // 测接口契约，不测实现细节。
 
+import type { ExtensionContext, ExtensionMode } from "@mariozechner/pi-coding-agent";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import type { ExtensionContext, ExtensionMode } from "@mariozechner/pi-coding-agent";
-
-import { createUiRequestHandlerForMode } from "../ui-request-handler-factory.ts";
-import { createUiChannelRegistry, type ChannelHandler } from "../ui-channels.ts";
 import { DialogGlobalQueue, type UiRequest } from "../dialog-queue.ts";
+import { type ChannelHandler,createUiChannelRegistry } from "../ui-channels.ts";
+import { createUiRequestHandlerForMode } from "../ui-request-handler-factory.ts";
 
 // mock ExtensionContext 已补 mode 字段（host-mode.ts 读它分流）。最小形状构造。
 function makeCtx(mode: ExtensionMode): ExtensionContext {

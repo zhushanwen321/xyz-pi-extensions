@@ -140,6 +140,8 @@ function createMockPi(overrides: Record<string, unknown> = {}): {
 function createMockCtx(overrides: Record<string, unknown> = {}): Record<string, unknown> {
   return {
     cwd: "/home/user/project",
+    // [Wave1 #21] mode 必填（与 SDK ExtensionContext 契约一致）；默认 tui。
+    mode: "tui",
     modelRegistry: { getAvailable: () => [], find: () => undefined, hasConfiguredAuth: () => false },
     model: undefined,
     sessionManager: {

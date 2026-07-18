@@ -117,9 +117,9 @@ vi.mock("../temp-prompt.ts", () => ({
 
 import { spawn } from "node:child_process";
 
+import { ModelConfigService } from "../model-config-service.ts";
 import type { ModelInfo, ModelRegistryLike } from "../model-resolver.ts";
 import { MAX_FORK_DEPTH } from "../session-context-resolver.ts";
-import { ModelConfigService } from "../model-config-service.ts";
 import { SubagentService } from "../subagent-service.ts";
 
 const mockSpawn = vi.mocked(spawn);

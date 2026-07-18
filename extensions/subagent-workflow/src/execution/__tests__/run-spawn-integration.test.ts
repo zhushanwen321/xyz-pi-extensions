@@ -14,37 +14,22 @@
 //   - fs.promises.* → 保留真实实现（temp-prompt 整体被 mock，不触发真实 I/O）。
 //   - temp-prompt → mock（writePromptToTempFile 返回固定路径，消除 fake-timers flaky）。
 //   - alive-store.writeAliveMarker → mock（避免写 .alive sidecar）。
+//
+// mock 工厂 + FakeChild class + 工具函数（lastSpawnedChild/waitForSpawn/emitStdoutLine/
+// sessionHeader/makeRecord/makeOpts/makeCtx）抽到 helpers/spawn-mock.ts，与
+// run-spawn-edges.test.ts / run-spawn-rpc-mode.test.ts 三文件共享。vi.mock 工厂内用
+// `await import("./helpers/spawn-mock.ts")` 取回 FakeChild（绕开 vitest 的 hoisting 限制——
+// 工厂函数体不能引用顶层 import 变量，但 async 工厂内的 await import 是运行时求值）。
 
-import type { PassThrough } from "node:stream";
+import { execFileSync, spawn } from "node:child_process";
+import * as fs from "node:fs";
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-// ── mock modules ──
-//
-// vitest 会把 vi.mock 提升到文件顶部（早于其他 import / 声明）。mock 工厂若要引用
-// FakeChild，需在工厂内部 import（async 工厂可用 await import），而非引用顶部
-// 顶层 import（它们在 vi.mock 执行时尚未绑定）。
+// ── mock modules（工厂体共享自 helpers/spawn-mock.ts；vi.mock 必须各文件独立声明）──
 
 vi.mock("node:child_process", async () => {
-  const { EventEmitter } = await import("node:events");
-  const { PassThrough } = await import("node:stream");
-
-  // FakeChild：模拟 ChildProcess（EventEmitter + PassThrough streams）。
-  // 测试通过 mockSpawn.mock.results.at(-1).value 取回实例，控制 emit data/close/error 时序。
-  class FakeChild extends EventEmitter {
-    pid = 12345;
-    stdout = new PassThrough();
-    stderr = new PassThrough();
-    stdin = new PassThrough();
-    killed = false;
-    killSignal: string | undefined;
-    kill(sig?: string): boolean {
-      this.killed = true;
-      this.killSignal = sig;
-      return true;
-    }
-  }
-
+  const { FakeChild } = await import("./helpers/spawn-mock.ts");
   return {
     spawn: vi.fn(() => new FakeChild()),
     execFileSync: vi.fn(() => ""), // buildEnvBlock 的 git branch 调用，返回空避免副作用
@@ -63,13 +48,11 @@ vi.mock("node:fs", async () => {
       writeFileSync: vi.fn(),
       readdirSync: vi.fn(() => []),
     },
-    // 具名导出与 default 保持一致
     mkdirSync: vi.fn(),
     existsSync: vi.fn(() => false),
     appendFileSync: vi.fn(),
     writeFileSync: vi.fn(),
     readdirSync: vi.fn(() => []),
-    // promises 保留真实实现——temp-prompt 已被 mock（见下方 vi.mock），不再触发真实 I/O
     promises: actual.promises,
   };
 });
@@ -81,9 +64,7 @@ vi.mock("../alive-store.ts", () => ({
 // temp-prompt：mock 掉真实 fs.promises I/O（mkdtemp/writeFile/rm）。
 // 原先保留真实实现导致 fake-timers 测试偶发 flaky——writePromptToTempFile 的真实异步
 // I/O 在 CI 慢机器上无法在 advanceTimersByTimeAsync 的有限步数内 resolve，spawn 永不触发。
-// runSpawn 只消费返回的 filePath 字符串（传给 --append-system-prompt），无需真实文件。
 vi.mock("../temp-prompt.ts", () => ({
-  // 文件名规则与真实实现对齐（safeName：非 \w.- 替换为 _），保持 spawn args 断言稳定
   writePromptToTempFile: vi.fn(async (agent: string) => {
     const safeName = agent.replace(/[^\w.-]+/g, "_");
     return { dir: `/tmp/fake-${safeName}`, filePath: `/tmp/fake-${safeName}/prompt-${safeName}.md` };
@@ -91,11 +72,18 @@ vi.mock("../temp-prompt.ts", () => ({
   cleanupTempPrompt: vi.fn(async () => {}),
 }));
 
-import { execFileSync, spawn } from "node:child_process";
-import * as fs from "node:fs";
-
-import { createRecord } from "../execution-record.ts";
-import { type RunOptions, runSpawn, type SessionRunnerContext } from "../session-runner.ts";
+import { runSpawn } from "../session-runner.ts";
+import {
+  emitStdoutLine,
+  type FakeChild,
+  lastSpawnedChild as lastSpawnedChildOf,
+  makeCtx,
+  makeOpts,
+  makeRecord,
+  mockSessionFileExists as mockSessionFileExistsOf,
+  sessionHeader,
+  waitForSpawn as waitForSpawnOf,
+} from "./helpers/spawn-mock.ts";
 
 const mockSpawn = vi.mocked(spawn);
 const mockExec = vi.mocked(execFileSync);
@@ -103,125 +91,10 @@ const mockExistsSync = vi.mocked(fs.existsSync);
 const mockAppendFileSync = vi.mocked(fs.appendFileSync);
 const mockMkdirSync = vi.mocked(fs.mkdirSync);
 
-/**
- * spawn mock 返回的 fake child 类型。
- * 由于 FakeChild 定义在 vi.mock 工厂内部（作用域隔离），此处用结构子集类型描述，
- * 测试代码通过此类型访问 stdout/stderr/kill 等成员。
- */
-interface FakeChild {
-  pid: number;
-  stdout: PassThrough;
-  stderr: PassThrough;
-  stdin: PassThrough;
-  killed: boolean;
-  killSignal: string | undefined;
-  kill(sig?: string): boolean;
-  emit(event: string, ...args: unknown[]): boolean;
-}
-
-/** 从最近一次 spawn 调用取回返回的 FakeChild（测试控制器）。 */
-function lastSpawnedChild(): FakeChild {
-  const result = mockSpawn.mock.results.at(-1);
-  if (!result) throw new Error("spawn was not called yet");
-  return result.value as FakeChild;
-}
-
-/**
- * 等待 runSpawn 内部调到 spawn（拿到 child 控制器）。
- *
- * runSpawn 是 async，spawn 在 mkdirSync + writePromptToTempFile 之后才调（均有微任务/
- * I/O 延迟）。用 setInterval 轮询 mockSpawn.mock.results，比 vi.waitFor 在该 vitest 版本
- * 下更可靠（vi.waitFor 偶发过早 resolve 导致后续读取竞态）。
- */
-async function waitForSpawn(timeoutMs = 1000): Promise<void> {
-  const start = Date.now();
-  while (mockSpawn.mock.results.length === 0) {
-    if (Date.now() - start > timeoutMs) {
-      throw new Error(`spawn was not called within ${timeoutMs}ms`);
-    }
-    await new Promise((r) => setTimeout(r, 5));
-  }
-}
-
-// ============================================================
-// 辅助：向 stdout 写一行（自动补换行，runSpawn 按 \n split 行）
-// ============================================================
-
-function emitStdoutLine(child: FakeChild, obj: Record<string, unknown>): void {
-  child.stdout.write(`${JSON.stringify(obj)}\n`);
-}
-
-/** 构造 session header 行（stdout 首行）。 */
-function sessionHeader(id = "sess-abc"): Record<string, unknown> {
-  return {
-    type: "session",
-    id,
-    timestamp: "2026-07-03T12-00-00-000Z",
-    cwd: "/tmp/test",
-  };
-}
-
-// ============================================================
-// 辅助：构造最小合法的 record / opts / ctx
-// ============================================================
-
-function makeRecord() {
-  return createRecord("run-1", {
-    agent: "general-purpose",
-    model: "test-model",
-    mode: "sync",
-    task: "do something",
-    startedAt: 1_000_000,
-    rootSessionId: "root-session",
-    parentRecordId: undefined,
-    depth: 0,
-  });
-}
-
-function makeOpts(overrides: Partial<RunOptions> = {}): RunOptions {
-  return {
-    resolved: {
-      model: {
-        id: "test-model",
-        name: "Test Model",
-        provider: "test",
-        reasoning: false,
-      },
-      thinkingLevel: undefined,
-    },
-    agentConfig: undefined,
-    appendSystemPrompt: undefined,
-    skillPath: undefined,
-    schema: undefined,
-    maxTurns: undefined,
-    graceTurns: undefined,
-    signal: undefined,
-    onEvent: undefined,
-    ...overrides,
-  };
-}
-
-function makeCtx(overrides: Partial<SessionRunnerContext> = {}): SessionRunnerContext {
-  return {
-    cwd: "/tmp/test",
-    agentDir: "/tmp/test/agents",
-    skillDirs: [],
-    mainCwd: "/tmp/test",
-    mainSessionFile: undefined,
-    ...overrides,
-  };
-}
-
-/**
- * 让 sessionFile 存在校验通过——
- * runSpawn 在进程退出后用 existsSync(record.sessionFile) 判断是否补写 identity。
- * 默认 mock existsSync 返回 false（兜底查找），此 helper 在指定路径返回 true。
- */
-function mockSessionFileExists(sessionFilePath: string): void {
-  mockExistsSync.mockImplementation((p: unknown) => {
-    return String(p) === sessionFilePath;
-  });
-}
+// 绑定到本文件 mockSpawn 的 lastSpawnedChild/waitForSpawn（需读 mockSpawn.mock.results）
+const lastSpawnedChild = (): FakeChild => lastSpawnedChildOf(mockSpawn);
+const waitForSpawn = (timeoutMs = 1000): Promise<void> => waitForSpawnOf(mockSpawn, timeoutMs);
+const mockSessionFileExists = (p: string): void => mockSessionFileExistsOf(mockExistsSync, p);
 
 // ============================================================
 // 测试

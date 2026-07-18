@@ -5,10 +5,11 @@
 // M10: notifyDone JSON.stringify wrapped in try-catch (circular ref safe)
 // M12: budget-done transition and onRunDone in separate try blocks
 
-import { describe, expect, it } from "vitest";
 import { readFileSync } from "node:fs";
-import { join, dirname } from "node:path";
+import { dirname,join } from "node:path";
 import { fileURLToPath } from "node:url";
+
+import { describe, expect, it } from "vitest";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const PKG_ROOT = join(__dirname, "..", "..");

@@ -17,8 +17,8 @@ import * as path from "node:path";
 
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
-import { createRecord } from "../execution-record.ts";
 import { writeAliveMarker } from "../alive-store.ts";
+import { createRecord } from "../execution-record.ts";
 import { writeFinalized } from "../finalized-marker.ts";
 import type { StatusFilter } from "../record-store.ts";
 import { RecordStore } from "../record-store.ts";

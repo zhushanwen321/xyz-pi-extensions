@@ -6,10 +6,11 @@
 // E1: tool-workflow-script.ts description + promptGuidelines discovery 提示 + anti-pattern
 // E2: 5 个 agent .md 改动后仍保留有效 frontmatter
 
-import { describe, expect, it } from "vitest";
 import { readFileSync } from "node:fs";
-import { join, dirname } from "node:path";
+import { dirname,join } from "node:path";
 import { fileURLToPath } from "node:url";
+
+import { describe, expect, it } from "vitest";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const PKG_ROOT = join(__dirname, "..", "..");

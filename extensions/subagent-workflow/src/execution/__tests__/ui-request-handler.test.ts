@@ -18,9 +18,9 @@ import { PassThrough } from "node:stream";
 
 import { describe, expect, it, vi } from "vitest";
 
-import { parseChannel } from "../ui-channels.ts";
-import { parseSpawnLine } from "../spawn-event-adapter.ts";
 import { ASK_USER_RPC_PROMPT } from "../session-runner.ts";
+import { parseSpawnLine } from "../spawn-event-adapter.ts";
+import { parseChannel } from "../ui-channels.ts";
 import { createUiRequestQueue, type UiRequest, type UiRequestHandler } from "../ui-request-queue.ts";
 
 // ── Pi 原生协议样本构造 ────────────────────────────────────

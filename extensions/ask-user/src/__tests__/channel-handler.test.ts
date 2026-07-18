@@ -9,10 +9,10 @@
 //     验证内部 Result → proto AskUserAnswers 重新编码（single/multi/Other/comment 四种答案形态）。
 //   - 取消（askUserInteract/custom 返回 null 或 cancelled）→ {cancelled: true}
 //   - 输入校验（channelPayload 缺失/无 questions）→ {cancelled: true}
+import type { AskUserQuestion } from "@xyz-agent/extension-protocol";
 import { describe, expect, it } from "vitest";
 
 import { createAskUserChannelHandler } from "../channel-handler";
-import type { AskUserQuestion } from "@xyz-agent/extension-protocol";
 import type { Result } from "../types";
 
 // ── Mock ctx ───────────────────────────────────────────
@@ -151,6 +151,54 @@ describe("createAskUserChannelHandler", () => {
 		const resp = await handler({ channelPayload: { questions: [multiProto] } });
 		// 期望：key=header "Tools"，value = JSON.stringify(["A","C"])
 		expect(resp).toEqual({ value: JSON.stringify({ Tools: JSON.stringify(["A", "C"]) }) });
+	});
+
+	it("TUI: value≠label single-select → encodeTuiResultToProto 回查 proto option value（PR #85 #8 回归守护）", async () => {
+		// value≠label 是 #8 修复的核心场景：TUI 渲染用 label，但 proto 期望回传 option.value。
+		// 若 #8 修复回归（直接 push label），此测试会失败：返回 "显示名A" 而非 "val_a"。
+		const valueNeqLabelProto: AskUserQuestion = {
+			question: "选哪个?",
+			options: [
+				{ label: "显示名A", value: "val_a" },
+				{ label: "显示名B", value: "val_b" },
+			],
+		};
+		// 内部 Result.answers：用户在 TUI 选了"显示名A"（label）
+		const internalResult: Result = {
+			questions: [],
+			answers: { "选哪个?": "显示名A" },
+			cancelled: false,
+		};
+		const handler = createAskUserChannelHandler(
+			makeCtx({ mode: "tui", customResult: internalResult }) as never,
+		);
+		const resp = await handler({ channelPayload: { questions: [valueNeqLabelProto] } });
+		// 期望：proto answers 回查 value，返回 "val_a"（不是 label "显示名A"）
+		expect(resp).toEqual({ value: JSON.stringify({ "选哪个?": "val_a" }) });
+	});
+
+	it("TUI: value≠label multi-select → proto JSON 数组元素回查 value（PR #85 #8 回归守护）", async () => {
+		// 多选路径同样依赖 #8 修复：selected.push(opt?.value ?? t)，多选会 JSON.stringify 数组。
+		const valueNeqLabelMultiProto: AskUserQuestion = {
+			question: "选哪些?",
+			header: "Opts",
+			multiSelect: true,
+			options: [
+				{ label: "显示名A", value: "val_a" },
+				{ label: "显示名B", value: "val_b" },
+			],
+		};
+		const internalResult: Result = {
+			questions: [],
+			answers: { "选哪些?": "显示名A, 显示名B" },
+			cancelled: false,
+		};
+		const handler = createAskUserChannelHandler(
+			makeCtx({ mode: "tui", customResult: internalResult }) as never,
+		);
+		const resp = await handler({ channelPayload: { questions: [valueNeqLabelMultiProto] } });
+		// 期望：多选 JSON 数组，每个元素回查 value（["val_a","val_b"]，不是 label）
+		expect(resp).toEqual({ value: JSON.stringify({ Opts: JSON.stringify(["val_a", "val_b"]) }) });
 	});
 
 	it("TUI: Other free text → ${key}__other", async () => {

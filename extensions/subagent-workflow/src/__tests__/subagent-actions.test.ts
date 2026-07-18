@@ -19,8 +19,8 @@ import { fileURLToPath } from "node:url";
 
 import { describe, expect, it } from "vitest";
 
-import { adapter } from "../interface/subagent-actions.ts";
 import type { ListHandlerResult } from "../interface/subagent-actions.ts";
+import { adapter } from "../interface/subagent-actions.ts";
 
 // ── adapter reminder test fixtures ──
 
@@ -89,6 +89,8 @@ describe("BG_MESSAGE 强化 (FR-5)", () => {
 	}
 
 	it("subagent-actions.ts 源码 BG_MESSAGE 字符串含 'auto-injected' 或 'do not poll' 关键词", () => {
+		// [B9] 防回退守护测试：验证源码文本常量 BG_MESSAGE 不被误改/弱化（如有人删掉
+		// 'auto-injected' 提示词），非运行时行为断言。运行时行为由 adapter list reminder 测试覆盖。
 		const value = extractBgMessage(SUBAGENT_ACTIONS_SRC);
 		expect(value).toMatch(/auto-injected|do not poll/i);
 	});
@@ -103,6 +105,7 @@ describe("subagent tool description 强化 (FR-6)", () => {
 	}
 
 	it("description 'do NOT wait' 段含 'auto-injected' 关键词", () => {
+		// [B9] 防回退守护测试：验证源码 description 模板字符串常量不被误改，非运行时行为断言。
 		const description = extractDescription(SUBAGENT_TOOL_SRC);
 		// 定位 "After launching" 段（section header）
 		const idx = description.indexOf("## After launching");

@@ -18,9 +18,9 @@ import * as path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { createRecord } from "../execution-record.ts";
+import { ModelConfigService } from "../model-config-service.ts";
 import type { ModelInfo, ModelRegistryLike } from "../model-resolver.ts";
 import type { RecordStore } from "../record-store.ts";
-import { ModelConfigService } from "../model-config-service.ts";
 import type { PiLike } from "../subagent-service.ts";
 import { getSubagentService, setSubagentService,SubagentService } from "../subagent-service.ts";
 import type { ExecutionRecord } from "../types.ts";

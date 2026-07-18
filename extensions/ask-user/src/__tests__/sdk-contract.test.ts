@@ -10,8 +10,8 @@
 
 import { describe, expect, it } from "vitest";
 
-import { validateInput } from "../validate";
 import askUserExtension from "../index";
+import { validateInput } from "../validate";
 
 describe("ask-user SDK contract", () => {
 	it("default export is a function accepting ExtensionAPI", () => {

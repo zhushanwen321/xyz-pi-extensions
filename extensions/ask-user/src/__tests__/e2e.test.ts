@@ -75,9 +75,9 @@ describe("E2E-3: single question + allowComment — Enter in comment skips", () 
 		expect(details.cancelled).toBe(false);
 		// 不含 " — " 分隔符
 		expect(details.answers["Which DB?"]).toBe("Postgres");
-			expect(details.answers["Which DB?"]).not.toContain("—");
-		});
+		expect(details.answers["Which DB?"]).not.toContain("—");
 	});
+});
 
 // ── E2E-4: 多问题提交 — 逐题选择后 Submit tab 提交（S-11）──────
 describe("E2E-4: multi-question submit — answer each then Submit tab", () => {

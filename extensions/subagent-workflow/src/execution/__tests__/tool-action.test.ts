@@ -5,8 +5,8 @@
 
 import { describe, expect, it, vi } from "vitest";
 
-import type { SubagentService } from "../subagent-service.ts";
 import { adapter, cancelHandler, listHandler, startHandler } from "../../interface/subagent-actions.ts";
+import type { SubagentService } from "../subagent-service.ts";
 import type {
   ExecutionHandle,
   RecordSnapshot,
