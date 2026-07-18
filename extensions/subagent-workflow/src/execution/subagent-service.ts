@@ -1,11 +1,4 @@
-// src/runtime/subagent-service.ts
-//
-// 执行编排 + 记录 + 通知领域 Service。"跑一次子代理 + 管理执行状态"。
-//
-// 与 ModelConfigService（配置/模型解析域）正交——本 Service 持有其引用但不暴露给外部。
-// executor 逻辑已合并进本文件——它是 SubagentService.execute 的编排逻辑，
-// 没有独立状态/生命周期，不需要独立文件。合并后行为方法自然 private。
-//
+// 执行编排 + 记录 + 通知领域 Service。
 // 上游：subagent-tool（execute/query/cancel）、TUI（onChange/listRunning/collectRecords）。
 // session_start 时经 initSession 注入 pi；modelRegistry/entries 归 ModelConfigService.initModel。
 
@@ -214,7 +207,7 @@ export class SubagentService {
     const sessionsDir = getSubagentSessionDir(this.modelService.getAgentDir(), init.cwd);
     const recordsDir = path.join(this.modelService.getAgentDir(), "records");
     this.manifestStore = new ManifestStore(recordsDir);
-    this.store = new RecordStore(sessionsDir);
+    this.store = new RecordStore(sessionsDir, this.manifestStore);
     this.notifier = new BgNotifier(this.piAdapter());
   }
 
@@ -804,7 +797,7 @@ export class SubagentService {
         id: record.id,
         rootSessionId: record.rootSessionId ?? "",
         agentName: record.agent,
-        status: status === "done" ? "completed" : status,
+        status: status === "done" ? "completed" : status === "cancelled" ? "failed" : status,
         createdAt: record.startedAt,
         completedAt: record.endedAt ?? Date.now(),
         sessionFile: record.sessionFile,
@@ -976,22 +969,13 @@ export class SubagentService {
   }
 }
 
-// ============================================================
-// 进程单例访问器（session_start 重建）
-// ============================================================
-
-// 用 globalThis[Symbol.for] 持有进程单例，避免 jiti 因路径字符串不同加载多份模块
-// 导致单例分裂。场景：其它扩展 import "@zhushanwen/pi-subagents" 与本扩展被 Pi host
-// 直接加载，若 jiti 缓存 key 用路径字符串（非 realpath），两份 subagent-service.ts 各持
-// 一个 _service，setSubagentService 写 A、getSubagentService 读 B(null)。globalThis 跨所有模块实例共享，彻底消除。
-// 详见 docs/standards.md §7.5。
+// ── 进程单例访问器 ────────────────────────────────────
+// globalThis[Symbol.for] 防 jiti 路径不同致单例分裂。详见 docs/standards.md §7.5。
 const SERVICE_SLOT_KEY = Symbol.for("@zhushanwen/pi-subagents.service");
 
 type ServiceSlot = { current: SubagentService | null };
 
 function getServiceSlot(): ServiceSlot {
-  // globalThis 无 symbol 索引签名，但运行时支持 symbol 键——用 Reflect 安全读写，
-  // 避免双重断言。ServiceSlot 是运行时保证的固定形状（同文件唯一写入点）。
   let slot = Reflect.get(globalThis, SERVICE_SLOT_KEY) as ServiceSlot | undefined;
   if (!slot) {
     slot = { current: null };

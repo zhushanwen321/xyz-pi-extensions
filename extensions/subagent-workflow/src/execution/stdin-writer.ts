@@ -62,6 +62,26 @@ export function sendPromptCommand(child: ChildProcess, task: string): void {
 }
 
 /**
+ * 向 rpc 子进程 stdin 写 get_state 命令，查询 sessionFile/sessionId。
+ *
+ * FR-4: RPC get_state 握手。当 stdout header 未携带 sessionFile 时，
+ * 通过此命令向子进程查询当前 session 状态。子进程收到后返回
+ * {type:"response", command:"get_state", success:true, data:{sessionFile, sessionId}}。
+ *
+ * @param child 子进程（stdin 写入 get_state 命令）
+ * @returns 请求 id（用于匹配 response）
+ */
+export function sendGetStateCommand(child: ChildProcess): string {
+  const id = crypto.randomUUID();
+  const command = JSON.stringify({
+    id,
+    type: "get_state",
+  });
+  writeStdinLine(child, command, "get_state command");
+  return id;
+}
+
+/**
  * 向子进程 stdin 写一行（自动补换行），带背压检查。
  *
  * [R1] write 返回 false 时记 warn（不阻塞，内核缓冲会随后排空）。

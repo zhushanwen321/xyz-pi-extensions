@@ -12,7 +12,28 @@ import * as fs from "node:fs";
 import type { ExtensionMode } from "@mariozechner/pi-coding-agent";
 
 import { writeAliveMarker } from "./alive-store.ts";
-import { respond, sendPromptCommand } from "./stdin-writer.ts";
+import { type DialogGlobalQueue, type UiRequestHandler } from "./dialog-queue.ts";
+import { updateFromEvent } from "./execution-record.ts";
+import { type GetStateResult, performGetStateHandshake } from "./get-state-handshake.ts";
+import { willRespondToAskUser } from "./host-mode.ts";
+import type { AgentConfig, ResolvedModel } from "./model-resolver.ts";
+import { collectResult } from "./output-collector.ts";
+import { getSubagentSessionDir } from "./path-encoding.ts";
+import { getPiInvocation } from "./pi-invocation.ts";
+import { MAX_FORK_DEPTH } from "./session-context-resolver.ts";
+import { IDENTITY_CUSTOM_TYPE, type SubagentIdentityData } from "./session-reconstructor.ts";
+import { sendPromptCommand } from "./stdin-writer.ts";
+import {
+  deriveSessionFilePath,
+  findSessionFileByHeaderId,
+  parseSpawnLine,
+  type SpawnSessionHeader,
+} from "./spawn-event-adapter.ts";
+import type { SubagentStream } from "./stream-sink.ts";
+import {
+  cleanupTempPrompt,
+  writePromptToTempFile,
+} from "./temp-prompt.ts";
 import type {
   AgentEvent,
   AgentResult,
@@ -20,36 +41,8 @@ import type {
   SdkEvent,
   WorktreeHandle,
 } from "./types.ts";
-import {
-  type DialogGlobalQueue,
-  type UiRequest,
-  type UiRequestHandler,
-} from "./dialog-queue.ts";
-import { updateFromEvent } from "./execution-record.ts";
-import { willRespondToAskUser } from "./host-mode.ts";
-import type {
-  AgentConfig,
-  ResolvedModel,
-} from "./model-resolver.ts";
-import { collectResult } from "./output-collector.ts";
-import { getSubagentSessionDir } from "./path-encoding.ts";
-import { getPiInvocation } from "./pi-invocation.ts";
-import { MAX_FORK_DEPTH } from "./session-context-resolver.ts";
-import { IDENTITY_CUSTOM_TYPE, type SubagentIdentityData } from "./session-reconstructor.ts";
-import {
-  type ExtensionUiRequest,
-  deriveSessionFilePath,
-  findSessionFileByHeaderId,
-  parseSpawnLine,
-  type SpawnSessionHeader,
-} from "./spawn-event-adapter.ts";
-import type { SubagentStream } from "./stream-sink.ts";
-import { parseChannel } from "./ui-channels.ts";
-import {
-  cleanupTempPrompt,
-  writePromptToTempFile,
-} from "./temp-prompt.ts";
 import { createTurnLimiter, WRAP_UP_HINT } from "./turn-limiter.ts";
+import { createUiRequestQueue } from "./ui-request-queue.ts";
 
 /**
  * 运行时 guard：subscribe 回调收到的 event 形状未知，校验 type 字段后再交给 handle。
@@ -367,154 +360,6 @@ export function buildEnvBlock(
 }
 
 // ============================================================
-// W3: UI 请求队列（FIFO 串行处理）
-// ============================================================
-//
-// 类型再导出：dialog-queue.ts 是 UiRequest/UiResponse/UiRequestHandler 的规范来源，
-// 本模块再导出供测试 import（避免测试直接依赖 dialog-queue 内部实现）。
-export type { UiRequest, UiRequestHandler, UiResponse } from "./dialog-queue.ts";
-
-/**
- * 创建 UI 请求队列。返回 enqueue 函数，调用方将 extension_ui_request 入队。
- *
- * 多个 extension_ui_request 并发到达时，队列保证 FIFO 串行处理：
- * 前一个请求的 uiRequestHandler resolve 后，才将下一个请求发给主 agent UI。
- * 防止并发询问用户导致交错（用户同时看到多个问题）。
- *
- * 设计：队列是 runSpawn 生命周期内的闭包状态（非模块级），
- * 每个子进程实例独立队列，无跨 session 泄漏。
- *
- * @param child 子进程（stdin 写入 extension_ui_response）
- * @param ctx SessionRunnerContext（含 uiRequestHandler 回调）
- * @returns enqueue 函数：(id, request) => void，将请求入队并触发顺序处理
- */
-export function createUiRequestQueue(
-  child: ChildProcess,
-  ctx: SessionRunnerContext,
-): (id: string, request: ExtensionUiRequest) => void {
-  // [R3] AbortController 取消 pending handler——子进程退出时队列不再阻塞
-  const abortController = new AbortController();
-  const queue: Array<{ id: string; request: ExtensionUiRequest; signal: AbortSignal }> = [];
-  let processing = false;
-  let closed = false;
-
-  function processNext(): void {
-    if (processing || queue.length === 0 || closed) return;
-    processing = true;
-    const { id, request, signal } = queue.shift()!;
-    handleUiRequest(child, id, request, ctx, signal).finally(() => {
-      processing = false;
-      processNext();
-    });
-  }
-
-  // [R3] 子进程退出时 abort 所有 pending handler，队列不再阻塞
-  // [SR-4] 同步清理 L2 队列中该 child 的 pending dialog——child 在 dialog 等 L2 时退出，
-  //   L2 里该项永不 settle → processing 永远 true → 所有其他子进程 dialog 永久阻塞（全局死锁）。
-  //   pid 缺省（spawn 后极短窗口 child.pid 可能为 undefined）时跳过——此时该 child 还未在 L2
-  //   注册过任何 dialog（handleUiRequest 构造 UiRequest 时用同样的 child.pid，pid undefined 时
-  //   不填 _childPid，rejectChildDialogs 也匹配不到），无清理必要。
-  const onClose = (): void => {
-    closed = true;
-    abortController.abort();
-    queue.length = 0;
-    if (child.pid !== undefined) {
-      ctx.dialogQueue?.rejectChildDialogs({ pid: child.pid });
-    }
-  };
-  child.on("close", onClose);
-  child.on("error", onClose);
-
-  return function enqueue(id: string, request: ExtensionUiRequest): void {
-    if (closed) return;
-    queue.push({ id, request, signal: abortController.signal });
-    processNext();
-  };
-}
-
-// ============================================================
-// W2: UI 请求转发（extension_ui_request 处理）
-// ============================================================
-
-/**
- * 处理子进程发来的 extension_ui_request（ask_user 及其他 Pi UI method）。
- *
- * 流程：从 ExtensionUiRequest 构造 UiRequest（含 channel/channelPayload）
- *  → 调用主 agent uiRequestHandler → 按 UiResponse 形状回写 stdin。
- *
- * handler 未设置时不再静默忽略——console.warn 兜底（FR-9 可观测性），
- * W3 接入 SubagentService.notifyMissingHandler 的 appendEntry。
- *
- * @param child 子进程（stdin 写入响应）
- * @param id 请求 id（子进程用它关联 response）
- * @param request ExtensionUiRequest（method 平铺，从 enqueueUiRequest 传入）
- * @param ctx SessionRunnerContext（含 uiRequestHandler 回调）
- * @param signal abort signal（子进程退出时触发，取消正在等待的 handler）
- * @returns Promise（队列等待用：resolve 表示响应已写入 stdin 或已放弃）
- */
-async function handleUiRequest(
-  child: ChildProcess,
-  id: string,
-  request: ExtensionUiRequest,
-  ctx: SessionRunnerContext,
-  signal?: AbortSignal,
-): Promise<void> {
-  const handler = ctx.uiRequestHandler;
-  if (!handler) {
-    // 可观测性：handler 缺失不再静默（FR-9）
-    // W2 阶段先 console.warn，W3 接入 SubagentService.notifyMissingHandler 的 appendEntry
-    console.warn("[subagents] uiRequestHandler missing for request", id, "method:", request.method);
-    return;
-  }
-
-  // 从 ExtensionUiRequest 构造 UiRequest（含 channel/channelPayload）
-  const { channel, channelPayload } = parseChannel(request);
-  // [SR-4] 填入 child.pid 作为内部元数据：L2 队列的 rejectChildDialogs 据此关联 child close
-  //   清理。factory 层 enqueue 时读 req._childPid 传给 opts.child。pid undefined（spawn 后极短
-  //   窗口）时不填——rejectChildDialogs 也匹配不到（onClose 同样用 child.pid 守卫），无副作用。
-  const uiReq: UiRequest = {
-    id,
-    method: request.method,
-    ...(child.pid !== undefined ? { _childPid: child.pid } : {}),
-    ...(channel !== undefined ? { channel } : {}),
-    ...(channelPayload !== undefined ? { channelPayload } : {}),
-    ...extractMethodFields(request),
-  };
-
-  try {
-    const result = await handler(uiReq);
-    // [R3] 子进程已退出，跳过写入
-    if (signal?.aborted) return;
-    respond(child, id, result, signal);
-  } catch (err) {
-    // [R3] 子进程已退出，跳过写入
-    if (signal?.aborted) return;
-    console.error("[subagents] uiRequestHandler threw:", err);
-    respond(child, id, { cancelled: true }, signal);
-  }
-}
-
-/** 从 ExtensionUiRequest 提取 method-specific 字段到 UiRequest（与 Pi rpc-types.ts 1:1）。
- *  按 method 变体类型安全地复制对应字段；缺失字段不复制（保持 UiRequest 可选）。 */
-function extractMethodFields(req: ExtensionUiRequest): Partial<UiRequest> {
-  const out: Partial<UiRequest> = {};
-  if ("title" in req && typeof req.title === "string") out.title = req.title;
-  if ("options" in req && Array.isArray(req.options)) out.options = req.options;
-  if ("message" in req && typeof req.message === "string") out.message = req.message;
-  if ("placeholder" in req && typeof req.placeholder === "string") out.placeholder = req.placeholder;
-  if ("prefill" in req && typeof req.prefill === "string") out.prefill = req.prefill;
-  if ("notifyType" in req && typeof req.notifyType === "string") out.notifyType = req.notifyType;
-  if ("statusKey" in req && typeof req.statusKey === "string") out.statusKey = req.statusKey;
-  if ("statusText" in req) out.statusText = req.statusText;
-  if ("widgetKey" in req && typeof req.widgetKey === "string") out.widgetKey = req.widgetKey;
-  if ("widgetLines" in req) out.widgetLines = req.widgetLines;
-  if ("widgetPlacement" in req) out.widgetPlacement = req.widgetPlacement;
-  if ("text" in req && typeof req.text === "string") out.text = req.text;
-  if ("timeout" in req && typeof req.timeout === "number") out.timeout = req.timeout;
-  return out;
-}
-
-// ============================================================
 // [SPAWN 改造] runSpawn：spawn pi --mode rpc 子进程执行 session
 // ============================================================
 //
@@ -813,6 +658,9 @@ export async function runSpawn(
 
     // stdout pump：逐行解析 → handleSdkEvent / enqueueUiRequest
     const enqueueUiRequest = createUiRequestQueue(child, ctx);
+    // FR-4: get_state RPC response 监听器（id → resolver）。
+    // parseSpawnLine 返回 kind:"response" 时，按 command+id 匹配 resolver。
+    const get_stateListeners = new Map<string, (data: unknown) => void>();
     let stdoutBuffer = "";
     child.stdout.on("data", (data: string) => {
       stdoutBuffer += data;
@@ -844,6 +692,15 @@ export async function runSpawn(
           if (opts.worktree && child.pid) {
             ctx.onWorktreePid?.(opts.worktree.branch, child.pid);
           }
+          // FR-4 加速路径：header 到达即 finishHandshake（header 已提供 sessionId，
+          // 足以推导 sessionFile + 兜底查找，无需等 get_state response）。避免 json mode
+          // 下 close handler 阻塞等待握手内部 6s 超时。
+          if (settleHandshake) {
+            finishHandshake({
+              ...(record.sessionFile ? { sessionFile: record.sessionFile } : {}),
+              sessionId: parsed.header.id,
+            });
+          }
         } else if (parsed.kind === "event") {
           const evt = parsed.event;
           // agent_end（willRetry=false）= agent 自然完成。rpc mode 子进程不自动退出
@@ -857,12 +714,64 @@ export async function runSpawn(
             if (!willRetry) child.kill("SIGTERM");
           }
           if (isSdkEvent(parsed.event)) handleSdkEvent(parsed.event);
+        } else if (parsed.kind === "response") {
+          // FR-4: RPC response handling — 匹配 get_state 响应
+          if (parsed.command === "get_state" && parsed.success && parsed.id) {
+            const resolver = get_stateListeners.get(parsed.id);
+            if (resolver) {
+              get_stateListeners.delete(parsed.id);
+              resolver(parsed.data);
+            }
+          }
         } else if (parsed.kind === "extension_ui_request") {
           // W3: 子进程发 UI 请求（ask_user）。入队 FIFO 串行处理，防止并发询问用户。
           enqueueUiRequest(parsed.id, parsed.request);
         }
         // invalid 行忽略（stdout 可能有调试输出）
       }
+    });
+
+    // FR-4: get_state RPC 握手——spawn 后无条件启动。
+    // RPC mode（pi --mode rpc）不向 stdout 输出 header，record.sessionFile 无法靠 header
+    // 推导，必须通过 get_state RPC 查询子进程回填。json mode 下 header 会先到达触发提前
+    // resolve（加速路径），握手仍启动但无害——response 到达时外层已 resolve，resolver
+    // 因 resolved=true 直接 return。
+    //
+    // 时序：握手在 stdout pump（get_stateListeners 已就绪）之后启动。get_state 命令写入
+    // stdin，pi rebindSession 后读取并返回 response，经 stdout pump 匹配 resolver 触发 resolve。
+    // close handler await handshakeSettled，保证无论 task 多快结束，close 时 sessionFile 已回填。
+    const handshakeResultRef: { current?: GetStateResult } = {};
+    let settleHandshake: (() => void) | undefined;
+    const handshakeSettled: Promise<void> = new Promise((resolveSettled) => {
+      settleHandshake = resolveSettled;
+    });
+    /** 握手完成统一入口：记录结果 + 回填 sessionFile + 写 alive marker + settle。 */
+    const finishHandshake = (r: GetStateResult): void => {
+      handshakeResultRef.current = r;
+      // 仅当 header 未先行设置 record.sessionFile 时回填（RPC mode 路径）。
+      if (r.sessionFile && !record.sessionFile) {
+        record.sessionFile = r.sessionFile;
+        if (child.pid) {
+          try {
+            writeAliveMarker(r.sessionFile, {
+              pid: child.pid,
+              id: r.sessionId ?? record.id,
+              startedAt: Date.now(),
+            });
+          } catch {
+            // best-effort：alive marker 失败不影响执行
+          }
+        }
+      }
+      settleHandshake?.();
+      settleHandshake = undefined;
+    };
+    void performGetStateHandshake(child, (id, resolver) => {
+      get_stateListeners.set(id, resolver);
+    }).then((r) => {
+      // header 加速路径下 settleHandshake 已 undefined，跳过（避免覆盖 header 结果）。
+      // 超时兜底（r 为空对象）也经此分支 settle，但 record.sessionFile 不回填。
+      if (settleHandshake) finishHandshake(r);
     });
 
     child.stderr.on("data", (data: string) => {
@@ -872,9 +781,19 @@ export async function runSpawn(
 
     // 等待子进程退出
     const exitCode = await new Promise<number>((resolve) => {
-      child.on("close", (code: number | null) => {
+      child.on("close", async (code: number | null) => {
         // [C1] 子进程已退出，从 orphan-tracking Set 移除（dispose 兜底无需再 kill 它）
         spawnedChildren.delete(child);
+        // FR-4: 清理 get_state 监听器（子进程已退出，无更多 response）
+        get_stateListeners.clear();
+        // FR-4: 子进程已退出，get_state response 不会再来。若握手仍未 settle，立即放弃
+        //（record.sessionFile 未回填则走 findSessionFileByHeaderId 兜底）。避免子进程快速
+        // 失败/退出场景下 close handler 阻塞等待握手内部 6s 超时。
+        settleHandshake?.();
+        settleHandshake = undefined;
+        // await 立即返回（上方已 settle）：保证 header 加速路径或 get_state response 已
+        // 完成的回填结果对后续 identity 写入可见。
+        await handshakeSettled;
         // 处理 stdout 末尾残留行
         if (stdoutBuffer.trim()) {
           const parsed = parseSpawnLine(stdoutBuffer);
@@ -899,12 +818,16 @@ export async function runSpawn(
     // session.jsonl 由子进程写入，父进程在子进程退出后（写入完成）補写身份条目。
     // reconstructFromFile 依赖 IDENTITY_CUSTOM_TYPE custom entry 重建 record 身份，
     // 缺失则 /subagents list 磁盘源为空（终态 record 全丢失）。[回归修复]
-    if (sessionHeader && record.sessionFile) {
-      // 兜底：deriveSessionFilePath 推导的路径可能不存在（pi 命名规则变化），
+    if (record.sessionFile) {
+      // 兜底：deriveSessionFilePath 推导或握手返回的路径可能不存在（pi 命名规则变化），
       // 用 sessionId 后缀匹配实际文件。匹配到则修正 record.sessionFile。
+      // sessionId 来源：header（json mode）优先，其次握手结果（RPC mode）。
       if (!fs.existsSync(record.sessionFile)) {
-        const actual = findSessionFileByHeaderId(sessionDir, sessionHeader.id);
-        if (actual) record.sessionFile = actual;
+        const lookupId = sessionHeader?.id ?? handshakeResultRef.current?.sessionId;
+        if (lookupId) {
+          const actual = findSessionFileByHeaderId(sessionDir, lookupId);
+          if (actual) record.sessionFile = actual;
+        }
       }
       // 补写 identity custom entry（子进程已退出，append 安全）。
       if (fs.existsSync(record.sessionFile)) {

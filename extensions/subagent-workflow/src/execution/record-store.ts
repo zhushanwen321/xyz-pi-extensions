@@ -12,6 +12,7 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 
 import { getCurrentActivity, getDisplayItems, getEventLog, markReconstructedStatus, snapshot as toSnapshot } from "./execution-record.ts";
+import type { ManifestRecord, ManifestStore } from "./manifest-store.ts";
 import { reconstructFromFile } from "./session-reconstructor.ts";
 import type {
   ExecutionRecord,
@@ -66,7 +67,10 @@ export class RecordStore {
   /** 重建缓存：sessionFile → SubagentRecord。notifyChange 时失效。 */
   private reconCache: Map<string, SubagentRecord> | undefined;
 
-  constructor(private readonly sessionsDir: string) {}
+  constructor(
+    private readonly sessionsDir: string,
+    private readonly manifestStore?: ManifestStore,
+  ) {}
 
   /** 注册新 record。触发 onChange。 */
   register(record: ExecutionRecord): void {
@@ -152,6 +156,17 @@ export class RecordStore {
     // 1. 磁盘源（重建终态 record）。 reconstructAll 已按 rootSessionFilter 过滤。
     for (const rec of this.reconstructAll(rootSessionFilter)) {
       byId.set(rec.id, rec);
+    }
+
+    // 1.5 FR-8: manifest 源补充 orphan 记录。
+    // 优先级：内存 > 磁盘重建 > manifest。manifest 仅补充 session.jsonl 重建失败的记录。
+    if (this.manifestStore) {
+      for (const manifest of this.readManifestsSync()) {
+        if (byId.has(manifest.id)) continue; // 已被磁盘/内存源覆盖
+        if (rootSessionFilter !== undefined && manifest.rootSessionId !== rootSessionFilter) continue;
+        const rec = RecordStore.manifestToSubagent(manifest);
+        byId.set(rec.id, rec);
+      }
     }
 
     // 2. 内存源覆盖（running record 优先——它是活态，比磁盘重建更新鲜）。同样按 session 过滤。
@@ -321,6 +336,57 @@ export class RecordStore {
     const pdiff = STATUS_PRIORITY[a.status] - STATUS_PRIORITY[b.status];
     if (pdiff !== 0) return pdiff;
     return b.startedAt - a.startedAt; // 新→旧
+  }
+
+  /** FR-8: 同步读取所有 manifest 记录（best-effort，损坏文件跳过）。 */
+  private readManifestsSync(): ManifestRecord[] {
+    if (!this.manifestStore) return [];
+    try {
+      const dir = (this.manifestStore as unknown as { dir: string }).dir;
+      if (!fs.existsSync(dir)) return [];
+      const files = fs.readdirSync(dir).filter((f) => f.endsWith(".json") && !f.includes(".tmp."));
+      const results: ManifestRecord[] = [];
+      for (const file of files) {
+        try {
+          const content = fs.readFileSync(path.join(dir, file), "utf-8");
+          const parsed = JSON.parse(content) as ManifestRecord;
+          if (parsed && typeof parsed.id === "string") {
+            results.push(parsed);
+          }
+        } catch {
+          // best-effort：损坏文件跳过
+        }
+      }
+      return results;
+    } catch {
+      return [];
+    }
+  }
+
+  /** FR-8: ManifestRecord → SubagentRecord（manifest 源投影）。 */
+  private static manifestToSubagent(m: ManifestRecord): SubagentRecord {
+    return {
+      id: m.id,
+      agent: m.agentName,
+      task: "",
+      slug: "",
+      status: m.status === "completed" ? "done" : m.status === "error" ? "failed" : m.status as ExecutionStatus,
+      mode: "background" as const,
+      startedAt: m.createdAt,
+      rootSessionId: m.rootSessionId || undefined,
+      parentRecordId: undefined,
+      depth: 0,
+      endedAt: m.completedAt,
+      turns: 0,
+      totalTokens: 0,
+      model: "",
+      thinkingLevel: undefined,
+      eventLog: [],
+      displayItems: [],
+      result: undefined,
+      error: m.status === "failed" || m.status === "error" ? "manifest record" : undefined,
+      sessionFile: m.sessionFile,
+    };
   }
 
   /** ExecutionRecord → SubagentRecord（内存源投影）。 */

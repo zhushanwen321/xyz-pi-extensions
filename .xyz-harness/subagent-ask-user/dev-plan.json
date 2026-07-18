@@ -1,0 +1,92 @@
+{
+  "format": "lite",
+  "objective": "Enable ask_user tool in subagents via RPC mode with UI request forwarding to main agent",
+  "waves": [
+    {
+      "id": "W1",
+      "changes": [
+        {
+          "file": "extensions/subagent-workflow/src/execution/session-runner.ts",
+          "description": "buildSpawnArgs: --mode json → --mode rpc; runSpawn: stdio [\"ignore\",\"pipe\",\"pipe\"] → [\"pipe\",\"pipe\",\"pipe\"], 添加 stdin 命令写入能力（writeToStdin helper）"
+        },
+        {
+          "file": "extensions/subagent-workflow/src/execution/spawn-event-adapter.ts",
+          "description": "ParsedSpawnLine 新增 kind: \"response\" 类型（RPC response id+result/error），添加 isRpcResponse 类型守卫"
+        }
+      ],
+      "dependsOn": [],
+      "priority": "P0"
+    },
+    {
+      "id": "W2",
+      "changes": [
+        {
+          "file": "extensions/subagent-workflow/src/execution/spawn-event-adapter.ts",
+          "description": "ParsedSpawnLine 新增 kind: \"extension_ui_request\" 类型（method=\"extension_ui_request\", params 含 questions/context/timeout），添加类型守卫"
+        },
+        {
+          "file": "extensions/subagent-workflow/src/execution/session-runner.ts",
+          "description": "runSpawn stdout pump 处理 extension_ui_request: 提取 questions/context → 调用主 agent UI 通道 → 将 result 通过 stdin 发回子进程（JSON-RPC response 格式）"
+        },
+        {
+          "file": "extensions/subagent-workflow/src/execution/subagent-service.ts",
+          "description": "SessionRunnerContext 新增 uiRequestHandler 回调（接收 questions/context, 返回 answers），SubagentService 构造时注入（来源：pi 的 ExtensionContext.ui.custom 或直接 ask_user 协议），RunOptions 透传到 runSpawn"
+        }
+      ],
+      "dependsOn": ["W1"],
+      "priority": "P0"
+    },
+    {
+      "id": "W3",
+      "changes": [
+        {
+          "file": "extensions/subagent-workflow/src/execution/session-runner.ts",
+          "description": "runSpawn 内新增 PendingUiRequest 队列（FIFO）: 多个 extension_ui_request 按序 enqueue, 前一个 resolve 后才 dequeue 下一个并发给主 agent UI, 防止并发询问用户导致交错"
+        }
+      ],
+      "dependsOn": ["W2"],
+      "priority": "P1"
+    },
+    {
+      "id": "W4",
+      "changes": [
+        {
+          "file": "extensions/subagent-workflow/src/execution/session-runner.ts",
+          "description": "appendParts 追加系统提示词: 注入 ask_user 工具可用说明 + RPC 使用指引（当子进程配置了 ask_user tool 时），告知 LLM ask_user 会转发到主 agent UI 等待用户回答"
+        }
+      ],
+      "dependsOn": ["W2"],
+      "priority": "P1"
+    }
+  ],
+  "testCases": [
+    {
+      "id": "TC-W1",
+      "layer": "mock",
+      "scenario": "子进程以 --mode rpc 启动，stdout 解析 header + response 行",
+      "steps": "1. 调 buildSpawnArgs 验证 --mode rpc 参数 2. 模拟 rpc response JSON 行喂给 parseSpawnLine 3. 验证 kind=response 类型守卫",
+      "expected": { "text": "buildSpawnArgs 输出含 --mode rpc; parseSpawnLine 正确分类 response 行" }
+    },
+    {
+      "id": "TC-W2",
+      "layer": "mock",
+      "scenario": "extension_ui_request 从 stdout 解析后转发到主 agent UI，结果写回 stdin",
+      "steps": "1. 模拟子进程 stdout 输出 extension_ui_request JSON 2. 验证 parsed.kind=extension_ui_request 3. 验证 uiRequestHandler 被调用 4. 验证 stdin 收到 JSON-RPC response",
+      "expected": { "text": "UI 请求正确转发，answers 写回 stdin" }
+    },
+    {
+      "id": "TC-W3",
+      "layer": "mock",
+      "scenario": "多个 extension_ui_request 按序排队处理",
+      "steps": "1. 连续发 2 个 extension_ui_request 2. 第一个未 resolve 前第二个不调用 uiRequestHandler 3. 第一个 resolve 后第二个自动触发",
+      "expected": { "text": "队列 FIFO 保证串行询问" }
+    },
+    {
+      "id": "TC-W4",
+      "layer": "mock",
+      "scenario": "系统提示词注入 ask_user 使用说明",
+      "steps": "1. 验证 appendParts 包含 ask_user 工具说明 2. 验证提示词告知 LLM ask_user 走 RPC 转发",
+      "expected": { "text": "appendParts 含 ask_user RPC 使用指引" }
+    }
+  ]
+}

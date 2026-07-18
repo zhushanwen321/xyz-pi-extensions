@@ -2,9 +2,11 @@
 //
 // pi 子进程 stdout JSON 事件流的解析器。Core 叶子原语（仅依赖 types.ts）。
 //
-// spawn 改造的基座模块。pi --mode json 子进程通过 stdout 输出两种行：
-//   1. header 行（首行）：{ type: "session", id, timestamp, cwd, ... }
-//      —— session 元信息，含 session id（文件路径由 W2 runSpawn 配合 --session-dir 推导）
+// spawn 改造的基座模块。session-runner runSpawn 用 `pi --mode rpc` spawn 子进程。
+// RPC mode 不向 stdout 输出 header 行（只有 json/print mode 才输出），故 runSpawn 额外
+// 通过 get_state RPC 握手回填 sessionFile/sessionId。两种 stdout 行形态本模块统一解析：
+//   1. header 行（json/print mode 首行）：{ type: "session", id, timestamp, cwd, ... }
+//      —— session 元信息，含 session id（RPC mode 不发，靠 get_state 握手替代）
 //   2. 事件行：{ type: "tool_execution_start" | "message_end" | ..., ... }
 //      —— 与 in-process session.subscribe 收到的 SdkEvent 同源同构
 //

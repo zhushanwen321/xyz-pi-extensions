@@ -21,7 +21,7 @@ import {
   type UiRequest,
   type UiRequestHandler,
   type UiResponse,
-} from "../session-runner.ts";
+} from "../ui-request-queue.ts";
 
 beforeEach(() => {
   vi.useFakeTimers();
