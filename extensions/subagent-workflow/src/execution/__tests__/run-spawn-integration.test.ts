@@ -35,6 +35,7 @@ vi.mock("node:child_process", async () => {
     pid = 12345;
     stdout = new PassThrough();
     stderr = new PassThrough();
+    stdin = new PassThrough();
     killed = false;
     killSignal: string | undefined;
     kill(sig?: string): boolean {
@@ -111,6 +112,7 @@ interface FakeChild {
   pid: number;
   stdout: PassThrough;
   stderr: PassThrough;
+  stdin: PassThrough;
   killed: boolean;
   killSignal: string | undefined;
   kill(sig?: string): boolean;
@@ -889,6 +891,65 @@ describe("runSpawn", () => {
 
       expect(result.success).toBe(true);
       expect(record.turnCount).toBe(1); // 拆开的 turn_end 仍被解析为 1 次
+    });
+  });
+
+  // ── 15. stdin prompt 注入 ──
+  //
+  // [RPC prompt 修复] pi runRpcMode 只通过 stdin RpcCommand 驱动——positional task arg
+  // / -p flag 在 rpc mode 下被 resolveAppMode 无视。runSpawn 必须在 spawn 后主动写
+  // {type:"prompt",message:<task>} 到 child.stdin，否则子进程阻塞、totalTokens 恒 0。
+  // sendPromptCommand 在 spawn + setEncoding 后同步执行，waitForSpawn 拿到 child 时
+  // 命令已在 stdin 缓冲。PassThrough.write 无 reader 时缓冲全部数据，可事后读出断言。
+  describe("stdin prompt 注入", () => {
+    it("spawn 后向 stdin 写一行 {type:prompt} 且 message 含 task 文本", async () => {
+      const record = makeRecord();
+      const taskText = "Task: hello-prompt-injection";
+      const promise = runSpawn(record, taskText, makeOpts(), makeCtx());
+
+      await waitForSpawn();
+      const child = lastSpawnedChild();
+
+      // sendPromptCommand 已同步执行——PassThrough 缓冲了写入的命令，读出来断言。
+      // pause() 让 PassThrough 切到暂停模式（默认 flow 模式下数据缓冲在内部），
+      // 然后 read() 取出全部已缓冲内容。
+      child.stdin.pause();
+      const buffered = child.stdin.read()?.toString() ?? "";
+
+      // 收尾：让 runSpawn resolve（避免悬挂）
+      emitStdoutLine(child, sessionHeader());
+      child.stdout.end();
+      child.stderr.end();
+      child.emit("close", 0);
+      await promise;
+
+      // 断言：缓冲含合法 JSON，type=prompt，message 含 task 文本
+      const lines = buffered.trim().split("\n");
+      expect(lines.length).toBeGreaterThanOrEqual(1);
+      const cmd = JSON.parse(lines[0]!) as { type: string; message: string; id?: string };
+      expect(cmd.type).toBe("prompt");
+      expect(cmd.message).toBe(taskText);
+      expect(typeof cmd.id).toBe("string");
+    });
+
+    it("child.stdin.destroyed → sendPromptCommand 不抛错（guard 生效）", async () => {
+      const record = makeRecord();
+      const promise = runSpawn(record, "Task: destroyed-stdin", makeOpts(), makeCtx());
+
+      await waitForSpawn();
+      const child = lastSpawnedChild();
+
+      // destroy stdin 模拟子进程已关闭输入通道；sendPromptCommand 在 spawn 时已执行过一次
+      //（stdin 当时未 destroyed），这里仅验证后续不抛。此用例主要保护 guard 逻辑——
+      // 收尾正常 close 即证明无异常抛出中断 runSpawn。
+      child.stdin.destroy();
+      emitStdoutLine(child, sessionHeader());
+      child.stdout.end();
+      child.stderr.end();
+      child.emit("close", 0);
+
+      const result = await promise;
+      expect(result.success).toBe(true);
     });
   });
 

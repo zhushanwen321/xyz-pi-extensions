@@ -12,6 +12,7 @@ import * as fs from "node:fs";
 import type { ExtensionMode } from "@mariozechner/pi-coding-agent";
 
 import { writeAliveMarker } from "./alive-store.ts";
+import { respond, sendPromptCommand } from "./stdin-writer.ts";
 import type {
   AgentEvent,
   AgentResult,
@@ -23,7 +24,6 @@ import {
   type DialogGlobalQueue,
   type UiRequest,
   type UiRequestHandler,
-  type UiResponse,
 } from "./dialog-queue.ts";
 import { updateFromEvent } from "./execution-record.ts";
 import { willRespondToAskUser } from "./host-mode.ts";
@@ -514,34 +514,6 @@ function extractMethodFields(req: ExtensionUiRequest): Partial<UiRequest> {
   return out;
 }
 
-/**
- * 按 UiResponse 形状构造 Pi 原生 extension_ui_response 并写 stdin。
- *
- * SR-5：ack（fire-and-forget）不写 stdin——Pi 对 fire-and-forget method 不期待响应，
- * 写入会触发协议错配。其他三种 shape（value/confirmed/cancelled）按对应字段写。
- *
- * [R1] 背压检查：child.stdin.write 返回 false 时记 warn（不阻塞，内核缓冲会随后排空）。
- * [R2] 序列化在调用方完成（JSON.stringify 已在下方逐分支构造），本函数不再包裹 try/catch。
- *
- * @param child 子进程（stdin 写入响应）
- * @param id 请求 id（关联 response）
- * @param out UiResponse（{value}/{confirmed}/{cancelled}/{ack}）
- * @param signal abort signal（已 aborted 时跳过写入） */
-function respond(child: ChildProcess, id: string, out: UiResponse, signal?: AbortSignal): void {
-  if (signal?.aborted) return;
-  let line: string | undefined;
-  if ("value" in out) line = JSON.stringify({ type: "extension_ui_response", id, value: out.value });
-  else if ("confirmed" in out) line = JSON.stringify({ type: "extension_ui_response", id, confirmed: out.confirmed });
-  else if ("cancelled" in out) line = JSON.stringify({ type: "extension_ui_response", id, cancelled: true });
-  // ack: fire-and-forget，不写 stdin（SR-5）
-  if (line === undefined) return;
-  // [R1] 背压检查 + [R2] 序列化已在上方完成
-  if (child.stdin && !child.stdin.destroyed) {
-    const ok = child.stdin.write(line + "\n");
-    if (!ok) console.warn("[subagents] stdin backpressure on ui response for request", id);
-  }
-}
-
 // ============================================================
 // [SPAWN 改造] runSpawn：spawn pi --mode json 子进程执行 session
 // ============================================================
@@ -584,9 +556,11 @@ export function buildSpawnArgs(
     forkSource: string | undefined;
     skillPaths: string[] | undefined;
   },
-  task: string,
 ): string[] {
-  const args: string[] = ["--mode", "rpc", "-p", "--session-dir", params.sessionDir];
+  // task 不通过命令行传——pi 的 runRpcMode 只消费 stdin RpcCommand，
+  // positional task arg / -p flag 在 rpc mode 下被 resolveAppMode 无视。
+  // task 由 runSpawn 内 sendPromptCommand 写 child.stdin 驱动。
+  const args: string[] = ["--mode", "rpc", "--session-dir", params.sessionDir];
   if (params.model) args.push("--model", params.model);
   if (params.thinkingLevel && params.model) {
     // thinking level 通过 model 后缀 :level 传递（pi CLI 约定）
@@ -610,7 +584,6 @@ export function buildSpawnArgs(
       args.push("--skill", sp);
     }
   }
-  args.push(task);
   return args;
 }
 
@@ -786,7 +759,6 @@ export async function runSpawn(
       forkSource,
       skillPaths: skillPaths.length > 0 ? skillPaths : undefined,
     },
-    fullTask,
   );
   const invocation = getPiInvocation(spawnArgs);
 
@@ -813,6 +785,11 @@ export async function runSpawn(
     //（下方）只清理 tempPromptFile，watchdog/signal listener 尚未注册则无需清理——避免泄漏。
     child.stdout.setEncoding("utf8");
     child.stderr.setEncoding("utf8");
+
+    // 喂 prompt 命令驱动子进程开始处理 task。pi runRpcMode 只消费 stdin RpcCommand，
+    // 不读 positional arg；必须在 spawn 后主动写，否则子进程阻塞、totalTokens 恒 0。
+    // 时机安全：pipe 内核缓冲不丢；pi 在 rebindSession 后才挂 stdin reader。
+    sendPromptCommand(child, fullTask);
 
     // d. signal → proc.kill 监听（一次性，替代 session.abort）
     const onAbort = (): void => {

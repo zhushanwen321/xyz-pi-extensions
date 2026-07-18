@@ -42,7 +42,7 @@ function isGenericRuntime(execPath: string): boolean {
 /**
  * 组装 pi 子进程的 spawn 调用。
  *
- * @param userArgs pi CLI 参数（如 ["--mode", "json", "-p", "Task: ..."]）
+ * @param userArgs pi CLI 参数（如 ["--mode", "rpc", "--session-dir", "..."]）
  * @returns spawn 描述符（command + 完整 args）
  *
  * 决策链（按优先级）：

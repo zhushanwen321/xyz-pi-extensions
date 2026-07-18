@@ -20,18 +20,20 @@ describe("buildSpawnArgs", () => {
     skillPaths: undefined as string[] | undefined,
   };
 
-  it("基础参数：--mode rpc -p --session-dir + task", () => {
-    const args = buildSpawnArgs(baseParams, "Task: do something");
-    expect(args).toEqual([
-      "--mode", "rpc", "-p", "--session-dir", "/sessions/dir",
-      "Task: do something",
-    ]);
+  it("基础参数：--mode rpc --session-dir，不含 -p 也不含 task（task 经 stdin 传）", () => {
+    const args = buildSpawnArgs(baseParams);
+    expect(args).toEqual(["--mode", "rpc", "--session-dir", "/sessions/dir"]);
+  });
+
+  it("不含 -p / --print（rpc mode 下 -p 被 resolveAppMode 无视，是死代码）", () => {
+    const args = buildSpawnArgs(baseParams);
+    expect(args).not.toContain("-p");
+    expect(args).not.toContain("--print");
   });
 
   it("有 model → 追加 --model provider/id", () => {
     const args = buildSpawnArgs(
       { ...baseParams, model: "openai/gpt-4o" },
-      "Task: x",
     );
     expect(args).toContain("--model");
     const idx = args.indexOf("--model");
@@ -41,7 +43,6 @@ describe("buildSpawnArgs", () => {
   it("model + thinkingLevel → model 后缀 :level", () => {
     const args = buildSpawnArgs(
       { ...baseParams, model: "anthropic/claude", thinkingLevel: "high" },
-      "Task: x",
     );
     const idx = args.indexOf("--model");
     expect(args[idx + 1]).toBe("anthropic/claude:high");
@@ -50,7 +51,6 @@ describe("buildSpawnArgs", () => {
   it("thinkingLevel 无 model → 不追加（thinking 依赖 model 后缀）", () => {
     const args = buildSpawnArgs(
       { ...baseParams, model: undefined, thinkingLevel: "high" },
-      "Task: x",
     );
     expect(args).not.toContain("--model");
   });
@@ -58,7 +58,6 @@ describe("buildSpawnArgs", () => {
   it("agentTools → --tools 逗号分隔", () => {
     const args = buildSpawnArgs(
       { ...baseParams, agentTools: ["read", "bash", "edit"] },
-      "Task: x",
     );
     const idx = args.indexOf("--tools");
     expect(args[idx + 1]).toBe("read,bash,edit");
@@ -67,7 +66,6 @@ describe("buildSpawnArgs", () => {
   it("appendSystemPromptPath → --append-system-prompt <path>", () => {
     const args = buildSpawnArgs(
       { ...baseParams, appendSystemPromptPath: "/tmp/prompt.md" },
-      "Task: x",
     );
     const idx = args.indexOf("--append-system-prompt");
     expect(args[idx + 1]).toBe("/tmp/prompt.md");
@@ -76,7 +74,6 @@ describe("buildSpawnArgs", () => {
   it("forkSource → --fork <path>", () => {
     const args = buildSpawnArgs(
       { ...baseParams, forkSource: "/sessions/parent.jsonl" },
-      "Task: x",
     );
     const idx = args.indexOf("--fork");
     expect(args[idx + 1]).toBe("/sessions/parent.jsonl");
@@ -85,7 +82,6 @@ describe("buildSpawnArgs", () => {
   it("skillPaths 多个 → 每个 push --skill <path>", () => {
     const args = buildSpawnArgs(
       { ...baseParams, skillPaths: ["/skills/a", "/skills/b", "/skills/c"] },
-      "Task: x",
     );
     // 三个 --skill token，后跟各自路径，顺序保留
     const skillIdxs = args
@@ -100,17 +96,16 @@ describe("buildSpawnArgs", () => {
   it("skillPaths 空数组 → 不含 --skill", () => {
     const args = buildSpawnArgs(
       { ...baseParams, skillPaths: [] },
-      "Task: x",
     );
     expect(args).not.toContain("--skill");
   });
 
   it("skillPaths undefined → 不含 --skill", () => {
-    const args = buildSpawnArgs(baseParams, "Task: x");
+    const args = buildSpawnArgs(baseParams);
     expect(args).not.toContain("--skill");
   });
 
-  it("全参数组合顺序正确，task 始终最后", () => {
+  it("全参数组合：所有 flag 存在，不含 -p 也不含 positional task", () => {
     const args = buildSpawnArgs(
       {
         model: "openai/gpt-4o",
@@ -121,18 +116,18 @@ describe("buildSpawnArgs", () => {
         forkSource: "/parent.jsonl",
         skillPaths: ["/skills/x"],
       },
-      "final task",
     );
-    expect(args[args.length - 1]).toBe("final task");
+    // 末尾应是最后一个 --skill 的路径（task 不再作为 positional arg 出现）
+    expect(args[args.length - 1]).toBe("/skills/x");
     expect(args).toContain("--fork");
     expect(args).toContain("--tools");
     expect(args).toContain("--skill");
+    expect(args).not.toContain("-p");
   });
 
   it("空 tools 数组不追加 --tools", () => {
     const args = buildSpawnArgs(
       { ...baseParams, agentTools: [] },
-      "Task: x",
     );
     expect(args).not.toContain("--tools");
   });

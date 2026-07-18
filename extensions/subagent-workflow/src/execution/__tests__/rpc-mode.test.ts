@@ -21,7 +21,7 @@ describe("buildSpawnArgs - RPC mode", () => {
   };
 
   it("生成 --mode rpc 参数（非 json）", () => {
-    const args = buildSpawnArgs(baseParams, "test task");
+    const args = buildSpawnArgs(baseParams);
     // 应包含 --mode rpc
     expect(args).toContain("--mode");
     const modeIdx = args.indexOf("--mode");
@@ -29,7 +29,7 @@ describe("buildSpawnArgs - RPC mode", () => {
   });
 
   it("不包含 --mode json", () => {
-    const args = buildSpawnArgs(baseParams, "test task");
+    const args = buildSpawnArgs(baseParams);
     const modeIdx = args.indexOf("--mode");
     expect(args[modeIdx + 1]).not.toBe("json");
   });
