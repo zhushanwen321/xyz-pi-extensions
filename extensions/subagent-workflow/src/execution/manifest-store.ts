@@ -1,15 +1,51 @@
-import * as fs from "fs";
-import * as path from "path";
+import * as fs from "node:fs";
+import * as fsPromises from "node:fs/promises";
+import * as path from "node:path";
+
+import { bestEffort } from "./best-effort.ts";
 
 export interface ManifestRecord {
   id: string;
   rootSessionId: string;
   agentName: string;
-  status: "running" | "completed" | "failed" | "error";
+  /**
+   * 终态枚举：finalizeRecord 只写 running→completed/failed（cancelled 归一为 failed）。
+   * 历史 "error" 值已移除——finalizeRecord 从不写 error，读侧 mapManifestStatus 把
+   * 陈旧 "error" 文件降级为 failed。
+   */
+  status: "running" | "completed" | "failed";
   createdAt: number;
   completedAt?: number;
   sessionFile?: string;
   pid?: number;
+  /** FR-7 补字段：manifest 写入时从 ExecutionRecord 抓取，供 manifestToSubagent 投影真实值。 */
+  task?: string;
+  slug?: string;
+  model?: string;
+}
+
+/** 合法 manifest status 集合（运行时守卫用，磁盘文件可能陈旧/损坏）。 */
+const VALID_MANIFEST_STATUSES: ReadonlySet<string> = new Set([
+  "running",
+  "completed",
+  "failed",
+]);
+
+/**
+ * 校验 JSON.parse 产物是否为合法 ManifestRecord。
+ * 关键字段类型检查——不合法返回 false，调用方据此过滤（防损坏/陈旧文件污染投影）。
+ */
+function isValidManifest(value: unknown): value is ManifestRecord {
+  if (typeof value !== "object" || value === null) return false;
+  const v = value as Record<string, unknown>;
+  return (
+    typeof v.id === "string" &&
+    typeof v.rootSessionId === "string" &&
+    typeof v.agentName === "string" &&
+    typeof v.createdAt === "number" &&
+    typeof v.status === "string" &&
+    VALID_MANIFEST_STATUSES.has(v.status)
+  );
 }
 
 export class ManifestStore {
@@ -23,53 +59,103 @@ export class ManifestStore {
   }
 
   /**
-   * Atomic write: write tmp → fsync → rename → fsync dir
-   * Throws on failure (not bestEffort)
+   * 原子写：tmp → fsync → rename → fsync dir。真异步（fs.promises，不阻塞 event loop）。
+   *
+   * rename 失败时 best-effort 清理残留 tmp（用 renamed 标志在 catch 中决定是否 unlink），
+   * 不掩盖原错误。失败向上抛——调用方（finalizeRecord）决定降级策略。
    */
   async writeManifest(record: ManifestRecord): Promise<void> {
     const filePath = path.join(this.dir, `${record.id}.json`);
     const tmpPath = `${filePath}.tmp.${process.pid}`;
     const content = JSON.stringify(record, null, 2);
 
-    // Write tmp file
-    const fd = fs.openSync(tmpPath, "w");
+    let renamed = false;
     try {
-      fs.writeSync(fd, content, 0, "utf-8");
-      fs.fsyncSync(fd);
-    } finally {
-      fs.closeSync(fd);
-    }
+      // 1. 写 tmp → fsync 文件
+      const fh = await fsPromises.open(tmpPath, "w");
+      try {
+        await fh.writeFile(content, "utf-8");
+        await fh.sync();
+      } finally {
+        await fh.close();
+      }
 
-    // Rename tmp → final
-    fs.renameSync(tmpPath, filePath);
+      // 2. rename tmp → final（放入 try：失败时 catch 清理 tmp）
+      await fsPromises.rename(tmpPath, filePath);
+      renamed = true;
 
-    // Fsync directory
-    const dirFd = fs.openSync(this.dir, "r");
-    try {
-      fs.fsyncSync(dirFd);
-    } finally {
-      fs.closeSync(dirFd);
+      // 3. fsync 目录（保证 rename 落盘）
+      const dirFh = await fsPromises.open(this.dir, "r");
+      try {
+        await dirFh.sync();
+      } finally {
+        await dirFh.close();
+      }
+    } catch (err) {
+      // rename 未成功 → 清理残留 tmp（best-effort，不掩盖原错误）
+      if (!renamed) {
+        try {
+          await fsPromises.unlink(tmpPath);
+        } catch (cleanupErr) {
+          // best-effort：tmp 可能已被 rename 消费或从未创建。不影响主错误（下面 re-throw err）
+          bestEffort(cleanupErr, "unlink tmp (writeManifest)");
+        }
+      }
+      throw err;
     }
   }
 
   /**
-   * Read manifest by id. Returns null if not found.
+   * 按 id 读 manifest。文件不存在/JSON 损坏/schema 不合法均返回 null。
+   * 调用方需处理 null。
    */
   async readManifest(id: string): Promise<ManifestRecord | null> {
     const filePath = path.join(this.dir, `${id}.json`);
-    if (!fs.existsSync(filePath)) {
+    try {
+      const content = await fsPromises.readFile(filePath, "utf-8");
+      const parsed: unknown = JSON.parse(content);
+      return isValidManifest(parsed) ? parsed : null;
+    } catch {
+      // 文件缺失（ENOENT）或 JSON 损坏（SyntaxError）均降级为 null
       return null;
     }
-    const content = fs.readFileSync(filePath, "utf-8");
-    return JSON.parse(content) as ManifestRecord;
   }
 
   /**
-   * Recover tmp files on startup.
-   * 3-branch logic:
-   * 1. Manifest exists → delete tmp (stale)
-   * 2. Tmp valid + manifest missing → rename tmp to manifest
-   * 3. Tmp invalid + manifest missing → delete tmp
+   * 同步读取所有 manifest 记录（best-effort，损坏/非法文件跳过）。
+   * 供 RecordStore.collectRecords 投影 orphan 记录使用——替代对私有 dir 的反射访问。
+   * 仅返回通过 isValidManifest 校验的记录。
+   */
+  listAllSync(): readonly ManifestRecord[] {
+    let files: string[];
+    try {
+      files = fs.readdirSync(this.dir);
+    } catch {
+      return [];
+    }
+    const results: ManifestRecord[] = [];
+    for (const file of files) {
+      if (!file.endsWith(".json") || file.includes(".tmp.")) continue;
+      try {
+        const content = fs.readFileSync(path.join(this.dir, file), "utf-8");
+        const parsed: unknown = JSON.parse(content);
+        if (isValidManifest(parsed)) {
+          results.push(parsed);
+        }
+      } catch (fileErr) {
+        // best-effort：损坏/非法文件跳过（debug 记录便于排查）
+        bestEffort(fileErr, `read manifest ${file} (listAllSync)`);
+      }
+    }
+    return results;
+  }
+
+  /**
+   * 启动时恢复 tmp 文件。
+   * 3 分支逻辑：
+   * 1. manifest 已存在 → 删 tmp（陈旧）
+   * 2. tmp 合法 + manifest 缺失 → rename tmp 为 manifest
+   * 3. tmp 非法 + manifest 缺失 → 删 tmp
    */
   async recoverTmpFiles(): Promise<{ deleted: number; recovered: number }> {
     let deleted = 0;
@@ -84,19 +170,19 @@ export class ManifestStore {
       const manifestPath = path.join(this.dir, `${manifestId}.json`);
 
       if (fs.existsSync(manifestPath)) {
-        // Branch 1: Manifest exists, delete tmp
+        // 分支 1: manifest 已存在，删 tmp
         fs.unlinkSync(tmpPath);
         deleted++;
       } else {
-        // Try parse tmp
+        // 试解析 tmp
         try {
           const content = fs.readFileSync(tmpPath, "utf-8");
           JSON.parse(content);
-          // Branch 2: Tmp valid, rename to manifest
+          // 分支 2: tmp 合法，rename 为 manifest
           fs.renameSync(tmpPath, manifestPath);
           recovered++;
         } catch {
-          // Branch 3: Tmp invalid, delete
+          // 分支 3: tmp 非法，删
           fs.unlinkSync(tmpPath);
           deleted++;
         }

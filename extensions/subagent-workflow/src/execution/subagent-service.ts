@@ -3,8 +3,6 @@
 // session_start 时经 initSession 注入 pi；modelRegistry/entries 归 ModelConfigService.initModel。
 
 import { AsyncLocalStorage } from "node:async_hooks";
-
-import * as fs from "node:fs";
 import * as path from "node:path";
 
 import type { ExtensionMode } from "@mariozechner/pi-coding-agent";
@@ -23,7 +21,8 @@ import {
   snapshot,
   tryTransition,
 } from "./execution-record.ts";
-import { writeFinalized } from "./finalized-marker.ts";
+import { doFinalizeRecord } from "./finalize-record.ts";
+import { ManifestStore } from "./manifest-store.ts";
 import type { ModelConfigService } from "./model-config-service.ts";
 import type { AgentConfig, ModelInfo, ResolvedModel } from "./model-resolver.ts";
 import type { BgNotifyRecord, NotifierHost } from "./notifier.ts";
@@ -37,7 +36,6 @@ import type { StreamSink } from "./stream-sink.ts";
 import { SubagentStream } from "./stream-sink.ts";
 import { writeCancelledTombstone } from "./tombstone-store.ts";
 import type { WorktreeHandle } from "./types.ts";
-import { UiRequestObservability } from "./ui-request-observability.ts";
 import type {
   AgentEvent,
   AgentResult,
@@ -51,7 +49,7 @@ import type {
 } from "./types.ts";
 import { ForkDepthExceededError } from "./types.ts";
 import { DEFAULT_AGENT_NAME } from "./types.ts";
-import { ManifestStore } from "./manifest-store.ts";
+import { registerGlobalObservability, UiRequestObservability } from "./ui-request-observability.ts";
 import { WorktreeManager } from "./worktree-manager.ts";
 
 /** Pi ExtensionAPI 的最小接口（duck-typed）。
@@ -209,6 +207,10 @@ export class SubagentService {
     this.manifestStore = new ManifestStore(recordsDir);
     this.store = new RecordStore(sessionsDir, this.manifestStore);
     this.notifier = new BgNotifier(this.piAdapter());
+    // #11：注册进程级 observability 单例——ui-request-queue.handleUiRequest 经
+    // globalThis 桥接（notifyMissingHandlerGlobal）调到同一实例，共享
+    // warnedMissingHandlerSessions 去重集合。未注册时 queue 走 fallback warn（不去重）。
+    registerGlobalObservability(this.uiObservability);
   }
 
   // ── 生命周期（index.ts 调）──────────────────────────────
@@ -295,9 +297,11 @@ export class SubagentService {
 
   // ── 执行（subagent-tool 调）────────────────────────────
 
-  /** background 完成回注（record → BgNotifyRecord 映射 + notifier.notify）。 */
+  /** background 完成回注（record → BgNotifyRecord 映射 + notifier.notify）。
+   *  非终态 status（running/crashed）静默跳过——notify 只对 done/failed/cancelled 有意义。 */
   private notifyComplete(record: ExecutionRecord): void {
-    this.notifier.notify(this.toNotifyRecord(record));
+    const notify = this.toNotifyRecord(record);
+    if (notify) this.notifier.notify(notify);
   }
 
   /** notifier 的 NotifierHost 适配器（绑定到 pi.sendMessage + store 查询）。 */
@@ -312,12 +316,16 @@ export class SubagentService {
     };
   }
 
-  /** record → BgNotifyRecord（notifier.notify 入参映射，内部不外露）。 */
-  private toNotifyRecord(record: ExecutionRecord): BgNotifyRecord {
+  /** record → BgNotifyRecord（notifier.notify 入参映射，内部不外露）。
+   *  运行时守卫：非 done/failed/cancelled 返回 undefined（调用方 notifyComplete 跳过 notify）。
+   *  守卫后 status 已收窄为 BgNotifyRecord.status union，无需 cast。 */
+  private toNotifyRecord(record: ExecutionRecord): BgNotifyRecord | undefined {
     const snap = snapshot(record);
+    const s = snap.status;
+    if (s !== "done" && s !== "failed" && s !== "cancelled") return undefined;
     return {
       id: snap.id,
-      status: snap.status as "done" | "failed" | "cancelled",
+      status: s,
       agent: snap.agent,
       model: snap.model,
       result: snap.result,
@@ -695,7 +703,9 @@ export class SubagentService {
         }
       })
       .catch((err: unknown) => {
-        // detached 吞错：runAndFinalize 内部已 finalize record（含 emitPendingUnregister），不外抛
+        // detached 吞错：runAndFinalize 内部已 finalize record（含 emitPendingUnregister），
+        // 且 finalizeRecord 的 manifest 写入已降级为 best-effort（失败仅 console.error + appendEntry，
+        // 不外抛）。因此此处不应走到——但作为最后一道兼底，记录调试日志后吞下，不外抛。
         // 完成通知由 finalizeRecord 内的 emitPendingUnregister 承担（pending-notifications 消费）。
         // cancel 抢先时 status=cancelled，cancelBackground 自己 emit，此处无需重复。
         if (err instanceof Error) {
@@ -749,101 +759,27 @@ export class SubagentService {
   }
 
   /**
-   * D-017 时序收尾：collectPatch → completeRecord → archive → writeFinalized + cleanup + removeAliveMarker。
-   * B9 兜底：completeRecord/archive 抛错→ finalized/cleanup/aliveMarker 仍执行。
-   */
+   * D-017 时序收尾：委托 doFinalizeRecord（提取到 finalize-record.ts，降低本文件行数）。
+   * [Critical #1] cleanup 全部在 manifest 写之前，manifest best-effort 不阻断（详见 finalize-record.ts）。 */
   private async finalizeRecord(
     record: ExecutionRecord,
     result: AgentResult,
     status: "done" | "failed" | "cancelled",
   ): Promise<void> {
-    // 终态清节流状态：防 trailing timer 在 record 归档后误发陈旧 onUpdate
-    this.clearThrottle(record.id);
-    // ── Step 0: collectPatch（best-effort）──
-    // [MF#3] patchFile 写到 worktree 之外（sessionsDir/<branch>.patch），避免被 cleanup 删除；
-    //        路径回填 record.patchFile，供调用方（tool result / /subagents list）应用。
-    if (record.worktreeHandle) {
-      try {
-        const sessionsDir = getSubagentSessionDir(
-          this.modelService.getAgentDir(),
-          record.worktreeHandle.mainCwd,
-        );
-        fs.mkdirSync(sessionsDir, { recursive: true });
-        const patchFile = path.join(sessionsDir, `${record.worktreeHandle.branch}.patch`);
-        const patch = this.worktreeManager.collectPatch(record.worktreeHandle, patchFile);
-        if (patch.written) record.patchFile = patchFile;
-      } catch (pe: unknown) {
-        bestEffort(pe, "collectPatch (finalizeRecord Step0)");
-      }
-    }
-
-    // ── Step 1: completeRecord（B9: 抛错→3 仍执行）──
-    try {
-      completeRecord(record, result, status);
-    } catch (err) {
-      bestEffort(err, "completeRecord (finalizeRecord B9)", "error");
-    }
-
-    // ── Step 2: archive（B9: 抛错→3 仍执行）──
-    try {
-      this.store.archive(record);
-    } catch (err) {
-      bestEffort(err, "store.archive (finalizeRecord B9)", "error");
-    }
-
-    // ── Step 2.5: manifest持久化（FR-7: 失败向上抛错，不走 bestEffort）──
-    try {
-      await this.manifestStore.writeManifest({
-        id: record.id,
-        rootSessionId: record.rootSessionId ?? "",
-        agentName: record.agent,
-        status: status === "done" ? "completed" : status === "cancelled" ? "failed" : status,
-        createdAt: record.startedAt,
-        completedAt: record.endedAt ?? Date.now(),
-        sessionFile: record.sessionFile,
-        pid: process.pid,
-      });
-    } catch (err) {
-      // FR-7: manifest 写入失败向上抛错
-      throw new Error(`manifest 写入失败 (finalizeRecord Step2.5): ${err instanceof Error ? err.message : String(err)}`);
-    }
-
-    // ── Step 3: finalized + cleanup + aliveMarker（三件各自独立 try/catch）──
-    if (record.sessionFile) {
-      try {
-        // MF-1 fix: cancelled 状态写 tombstone 而非 finalized，防重建丢失 cancelled
-        if (status === "cancelled") {
-          writeCancelledTombstone(record.sessionFile, {
-            id: record.id,
-            status: "cancelled",
-            agent: record.agent,
-            startedAt: record.startedAt,
-            endedAt: record.endedAt ?? Date.now(),
-          });
-        } else {
-          writeFinalized(record.sessionFile);
-        }
-      } catch (err) {
-        bestEffort(err, "writeFinalized/tombstone (finalizeRecord Step3)");
-      }
-    }
-    if (record.worktreeHandle) {
-      try {
-        this.worktreeManager.cleanup(record.worktreeHandle);
-      } catch (err) {
-        bestEffort(err, "worktree cleanup (finalizeRecord Step3)");
-      }
-    }
-    if (record.sessionFile) {
-      try {
-        removeAliveMarker(record.sessionFile);
-      } catch (err) {
-        bestEffort(err, "removeAliveMarker (finalizeRecord Step3)");
-      }
-    }
-
-    // pending-notifications：终态注销（只记 registry 状态，通知由 BgNotifier 发）
-    emitPendingUnregister(this.pi, record.id, status);
+    await doFinalizeRecord(
+      {
+        manifestStore: this.manifestStore,
+        worktreeManager: this.worktreeManager,
+        store: this.store,
+        modelService: this.modelService,
+        pi: this.pi,
+        clearThrottle: (id) => this.clearThrottle(id),
+        emitUnregister: (id, st) => emitPendingUnregister(this.pi, id, st),
+      },
+      record,
+      result,
+      status,
+    );
   }
 
   /** run() 创建期异常的收尾（H1 修复）：createAndConfigureSession 失败会抛，本方法合成 failed

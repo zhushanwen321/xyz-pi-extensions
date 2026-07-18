@@ -40,6 +40,22 @@ const STATUS_PRIORITY: Record<ExecutionStatus, number> = {
 /** .alive sidecar 的 24 小时软超时（超过此时间即使 pid 存活也判 crashed）。 */
 const ALIVE_SOFT_TIMEOUT_MS = 3_600_000; // 1h in ms (reduced from 24h to minimize PID reuse window)
 
+/**
+ * manifest status → ExecutionStatus 运行时守卫映射。
+ *
+ * manifest 只写 running/completed/failed 三值（ManifestRecord.status union），但磁盘文件
+ * 可能陈旧（含历史 "error" 值）或被外部篡改。越界值一律降级为 failed——collectRecords
+ * 不应因单个坏文件崩溃，failed 是最安全的保守终态（会触发重试/告警而非误报成功）。
+ *
+ * 提取为纯函数：同时解决 PR#85 反射问题（三元 + `as ExecutionStatus` cast）。
+ */
+function mapManifestStatus(s: string): ExecutionStatus {
+  if (s === "completed") return "done";
+  if (s === "failed") return "failed";
+  if (s === "running") return "running";
+  return "failed"; // 越界降级（含历史 "error" 值）
+}
+
 /** store 变更监听器（返回取消订阅函数）。 */
 export type ChangeListener = () => void;
 
@@ -338,39 +354,21 @@ export class RecordStore {
     return b.startedAt - a.startedAt; // 新→旧
   }
 
-  /** FR-8: 同步读取所有 manifest 记录（best-effort，损坏文件跳过）。 */
-  private readManifestsSync(): ManifestRecord[] {
-    if (!this.manifestStore) return [];
-    try {
-      const dir = (this.manifestStore as unknown as { dir: string }).dir;
-      if (!fs.existsSync(dir)) return [];
-      const files = fs.readdirSync(dir).filter((f) => f.endsWith(".json") && !f.includes(".tmp."));
-      const results: ManifestRecord[] = [];
-      for (const file of files) {
-        try {
-          const content = fs.readFileSync(path.join(dir, file), "utf-8");
-          const parsed = JSON.parse(content) as ManifestRecord;
-          if (parsed && typeof parsed.id === "string") {
-            results.push(parsed);
-          }
-        } catch {
-          // best-effort：损坏文件跳过
-        }
-      }
-      return results;
-    } catch {
-      return [];
-    }
+  /** FR-8: 同步读取所有 manifest 记录（封装 ManifestStore.listAllSync，消除反射访问）。 */
+  private readManifestsSync(): readonly ManifestRecord[] {
+    return this.manifestStore?.listAllSync() ?? [];
   }
 
-  /** FR-8: ManifestRecord → SubagentRecord（manifest 源投影）。 */
+  /** FR-8: ManifestRecord → SubagentRecord（manifest 源投影）。
+   *  task/slug/model 从 manifest 真实值投影（配合 writeManifest 补字段），缺失兜底空串。 */
   private static manifestToSubagent(m: ManifestRecord): SubagentRecord {
+    const status = mapManifestStatus(m.status);
     return {
       id: m.id,
       agent: m.agentName,
-      task: "",
-      slug: "",
-      status: m.status === "completed" ? "done" : m.status === "error" ? "failed" : m.status as ExecutionStatus,
+      task: m.task ?? "",
+      slug: m.slug ?? "",
+      status,
       mode: "background" as const,
       startedAt: m.createdAt,
       rootSessionId: m.rootSessionId || undefined,
@@ -379,12 +377,12 @@ export class RecordStore {
       endedAt: m.completedAt,
       turns: 0,
       totalTokens: 0,
-      model: "",
+      model: m.model ?? "",
       thinkingLevel: undefined,
       eventLog: [],
       displayItems: [],
       result: undefined,
-      error: m.status === "failed" || m.status === "error" ? "manifest record" : undefined,
+      error: status === "failed" ? "manifest record" : undefined,
       sessionFile: m.sessionFile,
     };
   }
