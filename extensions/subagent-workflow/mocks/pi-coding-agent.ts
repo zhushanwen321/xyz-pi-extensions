@@ -29,8 +29,10 @@ export interface ExtensionAPI {
 
 export interface ExtensionContext {
   cwd: string;
-  /** Pi run mode（host-mode.ts 读此字段分流 tui/gui/headless）。 */
-  mode?: ExtensionMode;
+  /** Pi run mode（host-mode.ts 读此字段分流 tui/gui/headless）。
+   *  必填——真实 SDK 契约（core/extensions/types.ts ExtensionMode 字段在主进程 ctx 上始终存在）。
+   *  mock 此前为可选，导致测试构造 ctx 时易漏传——与 SDK 契约不一致。 */
+  mode: ExtensionMode;
   sessionManager: {
     getSessionId(): string;
     getSessionFile(): string | undefined;

@@ -33,6 +33,7 @@ declare module "@mariozechner/pi-coding-agent" {
 			confirm(title: string, message: string, opts?: unknown): Promise<boolean>;
 			select(title: string, options: string[], opts?: unknown): Promise<string | undefined>;
 			input(title: string, placeholder?: string, opts?: unknown): Promise<string | undefined>;
+			editor(title: string, prefill?: string): Promise<string | undefined>;
 			setStatus(key: string, text: string | undefined): void;
 			setWidget(key: string, content: unknown, options?: unknown): void;
 			setFooter(factory: unknown): void;
@@ -104,6 +105,8 @@ declare module "@mariozechner/pi-coding-agent" {
 	export type SessionBeforeTreeEvent = any;
 	export type SessionBeforeTreeResult = any;
 	export type SessionShutdownEvent = any;
+	export type ModelSelectEvent = any;
+	export type SessionTreeEvent = any;
 	export type SessionStartEvent = {
 		type: "session_start";
 		reason: "startup" | "reload" | "new" | "resume" | "fork";
