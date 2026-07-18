@@ -31,7 +31,7 @@ export interface BuiltinAgentRegistry {
  * manifest 缺失时 fallback 扫约定目录 agents/。
  *
  * [HISTORICAL] 此前 discoverAll 从未被调用，agentRegistry 永远为空——包内
- * agents/*.md（worker/reviewer/scout 等）pi install 后开箱不可用。修复：构造时扫描
+ * agents/*.md（worker/reviewer/explorer 等）pi install 后开箱不可用。修复：构造时扫描
  * 包内 agents/ 作为 builtin（优先级最低，被用户同名文件覆盖）。
  */
 export function createPackageBuiltinRegistry(): BuiltinAgentRegistry {

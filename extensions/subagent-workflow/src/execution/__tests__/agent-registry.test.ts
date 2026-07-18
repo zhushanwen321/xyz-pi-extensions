@@ -147,13 +147,13 @@ describe("AgentRegistry.discoverAll", () => {
 // ============================================================
 
 describe("createPackageBuiltinRegistry", () => {
-  it("discovers packaged agents/*.md (worker, reviewer, scout, etc.)", () => {
+  it("discovers packaged agents/*.md (worker, reviewer, explorer, etc.)", () => {
     // [HISTORICAL] S6: 包内 agents/ 此前未被接通——discoverAll 从未调用，
     // 导致 pi install 后包内 agent 定义开箱不可用。
     const builtin = createPackageBuiltinRegistry();
     const names = builtin.list();
-    // 包内至少有 worker/reviewer/scout 等核心 agent
-    expect(names).toEqual(expect.arrayContaining(["worker", "reviewer", "scout", "researcher", "planner", "oracle", "context-builder"]));
+    // 包内至少有 worker/reviewer/explorer 等核心 agent
+    expect(names).toEqual(expect.arrayContaining(["worker", "reviewer", "explorer", "researcher", "planner", "oracle", "context-builder"]));
     // 每个 agent 都有 systemPrompt
     for (const name of names) {
       const cfg = builtin.get(name);
