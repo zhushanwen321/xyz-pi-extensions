@@ -16,6 +16,8 @@ interface PiShape {
 	registerTool(t: unknown): void;
 	getAllTools(): { name: string }[];
 	setActiveTools(names: string[]): void;
+	// session_start handler（factory 注册透传 channel 用）；测试不覆盖透传，空实现。
+	on(event: string, handler: (...args: unknown[]) => unknown): void;
 }
 
 export interface E2EApi {
@@ -47,6 +49,9 @@ export function makeE2E(questions: Question[], opts: E2EOptions = {}): E2EApi {
 		},
 		setActiveTools(names) {
 			this.activeTools = names;
+		},
+		on() {
+			// no-op：session_start handler（透传 channel 注册），测试不覆盖
 		},
 	};
 

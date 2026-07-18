@@ -12,6 +12,7 @@ import {
 } from "@xyz-agent/extension-protocol";
 
 import { AskUserComponent } from "./component";
+import { createAskUserChannelHandler } from "./channel-handler";
 import { formatAnswer, parseAnswerParts } from "./answer-format";
 import {
 	type AskUserDetails,
@@ -208,6 +209,31 @@ async function runRpcInteraction(
 }
 
 export default function (pi: ExtensionAPI): void {
+	// 注册 ask_user channel handler：把 subagent 子进程的 ask_user 请求透传到主进程 UI。
+	// subagent-workflow 是可选 peerDep——未安装时动态 import 失败，catch 后静默跳过
+	//（主进程直接使用 ask_user 工具不受影响，仅失去子进程透传能力）。
+	//
+	// 模块说明符放变量而非字面量：避免 TS 对可选包做静态模块解析（未安装时 TS2307），
+	// 以及在已安装的 monorepo 中跟进解析 subagent-workflow 源码触发跨包类型误差。
+	// 运行时仍解析到真实包；形状通过 as 收窄（不声明 any）。
+	const SUBAGENT_WORKFLOW_SPEC = "@zhushanwen/pi-subagent-workflow";
+	pi.on("session_start", (_event, ctx) => {
+		void (async () => {
+			try {
+				const mod = (await import(SUBAGENT_WORKFLOW_SPEC)) as {
+					getOrCreateChannelRegistry?: () => {
+						register: (channel: string, handler: (req: unknown) => Promise<unknown>) => void;
+					};
+				};
+				const registry = mod.getOrCreateChannelRegistry?.();
+				if (!registry) return;
+				registry.register("ask_user", createAskUserChannelHandler(ctx));
+			} catch {
+				// subagent-workflow 未安装——透传功能降级，ask-user 主进程使用不受影响
+			}
+		})();
+	});
+
 	pi.registerTool({
 		name: "ask_user",
 		label: "Ask User",

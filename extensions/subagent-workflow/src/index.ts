@@ -23,7 +23,7 @@ import { getAgentDir } from "@mariozechner/pi-coding-agent";
 import type { AgentRegistry } from "./execution/agent-registry.ts";
 import { bestEffort } from "./execution/best-effort.ts";
 // ═══ execution/ 层（subagents 核心 + 运行时） ═══
-import { createUiChannelRegistry, type UiChannelRegistry } from "./execution/ui-channels.ts";
+import { getOrCreateChannelRegistry } from "./execution/channel-registry-access.ts";
 import { DialogGlobalQueue } from "./execution/dialog-queue.ts";
 import { createUiRequestHandlerForMode } from "./execution/ui-request-handler-factory.ts";
 import {
@@ -499,23 +499,9 @@ export default function subagentsWorkflowExtension(pi: ExtensionAPI): void {
 // 进程级单例（channel registry + dialog queue）
 // ============================================================
 
-// 与 SubagentService 单例同模式：用 globalThis[Symbol.for] 持有进程级单例，
-// 避免 jiti 因路径字符串不同加载多份模块导致单例分裂（详见 docs/standards.md §7.5）。
-// channel registry + dialog queue 跨 session 复用——ask-user 扩展注册的 channel handler
-// 持久化在 registry 内，session 切换（/new /resume /fork）时不丢失注册。
-const CHANNEL_REGISTRY_KEY = Symbol.for("@zhushanwen/pi-subagents.channelRegistry");
+// channel registry 经 channel-registry-access.ts 公开访问（跨扩展 API）。
+// dialog queue 仍为本模块私有——无外部消费者。
 const DIALOG_QUEUE_KEY = Symbol.for("@zhushanwen/pi-subagents.dialogQueue");
-
-/** 获取或创建进程级 channel registry 单例。
- *  ask-user 扩展（Stage 4a）经此 registry 注册 "ask_user" channel handler。 */
-function getOrCreateChannelRegistry(): UiChannelRegistry {
-  let registry = Reflect.get(globalThis, CHANNEL_REGISTRY_KEY) as UiChannelRegistry | undefined;
-  if (!registry) {
-    registry = createUiChannelRegistry();
-    Reflect.set(globalThis, CHANNEL_REGISTRY_KEY, registry);
-  }
-  return registry;
-}
 
 /** 获取或创建进程级 dialog queue 单例。
  *  L2 跨子进程串行队列——所有子进程的 dialog 类请求共享同一队列实例。 */
@@ -527,3 +513,18 @@ function getOrCreateDialogQueue(): DialogGlobalQueue {
   }
   return queue;
 }
+
+// ============================================================
+// Public cross-extension API（channel handler 注册入口）
+// ============================================================
+//
+// 跨扩展消费者（ask-user 等）通过包根 import 注册 channel handler，
+// 让 subagent 子进程的 UI 请求（ask_user 等）透传到主进程渲染。
+// 重新导出 channel-registry-access 的公开 API——稳定 surface，
+// 内部存储实现演进不影响消费者。
+
+export {
+  getOrCreateChannelRegistry,
+  type UiChannelRegistry,
+  type ChannelHandler,
+} from "./execution/channel-registry-access.ts";

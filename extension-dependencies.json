@@ -105,7 +105,13 @@
     {
       "name": "@zhushanwen/pi-ask-user",
       "directory": "extensions/ask-user",
-      "dependsOn": []
+      "dependsOn": [
+        {
+          "package": "@zhushanwen/pi-subagent-workflow",
+          "type": "optional",
+          "reason": "ask-user 在 session_start 动态 import subagent-workflow 的 getOrCreateChannelRegistry，注册 ask_user channel handler，让 subagent 子进程的 ask_user 请求透传到主进程渲染。缺失时透传功能降级（主进程直接使用 ask_user 工具不受影响）"
+        }
+      ]
     },
     {
       "name": "@zhushanwen/pi-pending-notifications",

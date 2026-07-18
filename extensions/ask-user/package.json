@@ -41,10 +41,14 @@
   "peerDependencies": {
     "@mariozechner/pi-coding-agent": "*",
     "@mariozechner/pi-tui": "*",
-    "@sinclair/typebox": "*"
+    "@sinclair/typebox": "*",
+    "@zhushanwen/pi-subagent-workflow": "*"
   },
   "peerDependenciesMeta": {
     "@mariozechner/pi-tui": {
+      "optional": true
+    },
+    "@zhushanwen/pi-subagent-workflow": {
       "optional": true
     }
   }

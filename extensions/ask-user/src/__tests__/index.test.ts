@@ -44,6 +44,9 @@ interface MockPi {
 	getAllTools(): { name: string }[];
 	activeTools?: string[] | null;
 	setActiveTools(names: string[]): void;
+	// session_start handler：factory 注册 ask_user channel handler 时调用（透传功能）。
+	// 测试不验证透传，提供空 on 让 factory 不抛错。
+	on(event: string, handler: (...args: unknown[]) => unknown): void;
 }
 
 /** Runs the factory, returns the captured registered tool. */
@@ -57,6 +60,10 @@ const getTool = (overrides: Partial<MockPi> = {}): RegisteredTool => {
 		},
 		setActiveTools(names) {
 			this.activeTools = names;
+		},
+		on() {
+			// no-op：session_start handler 注册透传 channel（subagent-workflow 可选），
+			// 测试不覆盖透传路径
 		},
 		...overrides,
 	};
