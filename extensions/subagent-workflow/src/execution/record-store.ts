@@ -37,7 +37,7 @@ const STATUS_PRIORITY: Record<ExecutionStatus, number> = {
 };
 
 /** .alive sidecar 的 24 小时软超时（超过此时间即使 pid 存活也判 crashed）。 */
-const ALIVE_SOFT_TIMEOUT_MS = 86_400_000; // 24h in ms
+const ALIVE_SOFT_TIMEOUT_MS = 3_600_000; // 1h in ms (reduced from 24h to minimize PID reuse window)
 
 /** store 变更监听器（返回取消订阅函数）。 */
 export type ChangeListener = () => void;
