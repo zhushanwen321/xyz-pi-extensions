@@ -58,6 +58,7 @@ import type {
 } from "./types.ts";
 import { ForkDepthExceededError } from "./types.ts";
 import { DEFAULT_AGENT_NAME } from "./types.ts";
+import { ManifestStore } from "./manifest-store.ts";
 import { WorktreeManager } from "./worktree-manager.ts";
 
 /** Pi ExtensionAPI 的最小接口（duck-typed）。
@@ -201,6 +202,8 @@ export class SubagentService {
    *  与 forkDepthAls 独立：后者只数 fork 链（fork=true 才递增），本 ALS 数所有 subagent 嵌套。 */
   private readonly execCtxAls = new AsyncLocalStorage<{ recordId: string | undefined; depth: number }>();
 
+  private readonly manifestStore: ManifestStore;
+
   constructor(init: SubagentServiceInit) {
     this.cwd = init.cwd;
     this.modelService = init.modelService;
@@ -209,6 +212,8 @@ export class SubagentService {
     this.pool = new DefaultConcurrencyPool(this.modelService.getGlobalConfig().maxConcurrent);
     this.worktreeManager = new WorktreeManager(this.modelService.getAgentDir());
     const sessionsDir = getSubagentSessionDir(this.modelService.getAgentDir(), init.cwd);
+    const recordsDir = path.join(this.modelService.getAgentDir(), "records");
+    this.manifestStore = new ManifestStore(recordsDir);
     this.store = new RecordStore(sessionsDir);
     this.notifier = new BgNotifier(this.piAdapter());
   }
@@ -791,6 +796,23 @@ export class SubagentService {
       this.store.archive(record);
     } catch (err) {
       bestEffort(err, "store.archive (finalizeRecord B9)", "error");
+    }
+
+    // ── Step 2.5: manifest持久化（FR-7: 失败向上抛错，不走 bestEffort）──
+    try {
+      await this.manifestStore.writeManifest({
+        id: record.id,
+        rootSessionId: record.rootSessionId ?? "",
+        agentName: record.agent,
+        status: status === "done" ? "completed" : status,
+        createdAt: record.startedAt,
+        completedAt: record.endedAt ?? Date.now(),
+        sessionFile: record.sessionFile,
+        pid: process.pid,
+      });
+    } catch (err) {
+      // FR-7: manifest 写入失败向上抛错
+      throw new Error(`manifest 写入失败 (finalizeRecord Step2.5): ${err instanceof Error ? err.message : String(err)}`);
     }
 
     // ── Step 3: finalized + cleanup + aliveMarker（三件各自独立 try/catch）──
