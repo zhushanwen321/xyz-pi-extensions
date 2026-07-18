@@ -488,12 +488,12 @@ describe("SubagentService", () => {
       // worktree create 抛错在 kickOffBackground 之前（execute 同步 catch），返回 background 形状
       expect(handle.mode).toBe("background");
 
-      // register emit：background mode → id 前缀 bg-
+      // register emit：background mode → id 是 UUID 格式
       expect(pi.events.emit).toHaveBeenCalledWith(
         "pending:register",
         expect.objectContaining({
           type: "subagent",
-          id: expect.stringMatching(/^bg-/),
+          id: expect.any(String),
           name: "general-purpose",
         }),
       );

@@ -10,7 +10,7 @@
 // session_start 时经 initSession 注入 pi；modelRegistry/entries 归 ModelConfigService.initModel。
 
 import { AsyncLocalStorage } from "node:async_hooks";
-import { createHash } from "node:crypto";
+
 import * as fs from "node:fs";
 import * as path from "node:path";
 
@@ -128,14 +128,6 @@ export interface SubagentServiceSessionInit {
 
 /** background 优先级（保留 priority 排序机制，单一值）。 */
 const PRIORITY_BACKGROUND = 1000;
-/** [MF#5] sessionId 短哈希前缀（6 hex）。两个并发 Pi 进程在同一 repo fork 时，seq 各自从 0
- *  自增 → recordId=run-1 / branch=pi-sub-run-1 冲突 → 第二个 git worktree add -b 失败。
- *  加 session 作用域前缀保证跨进程唯一。sessionId 缺失时用 'x' 兌底（空值不进 hash）。 */
-const SESSION_TAG_HEX_LEN = 6;
-function sessionTag(sessionId: string | null): string {
-  if (!sessionId) return "x";
-  return createHash("sha1").update(sessionId).digest("hex").slice(0, SESSION_TAG_HEX_LEN);
-}
 
 /** 触发 onUpdate 的事件类型（streaming delta 不触发，避免每 token 刷新）。 */
 const TRIGGERING_EVENT_TYPES = new Set<AgentEvent["type"]>([
@@ -552,10 +544,8 @@ export class SubagentService {
     opts: ExecuteOptions,
     mode: ExecutionMode,
   ): ExecutionRecord {
-    const seq = ++this._seq;
-    const tag = sessionTag(this.sessionId);
-    // mode 类型固定 "background"——保留参数以兼容签名，但 id/controller 无需再分支。
-    const id = `bg-${tag}-${seq}-${Date.now()}`;
+    // FR-1: record id 用全局 UUID，不依赖 transcript/PID
+    const id = crypto.randomUUID();
     const controller = new AbortController();
 
     // 从 async 调用链读父执行上下文：主 session 链上无 store → 顶层 record；
