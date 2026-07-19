@@ -17,13 +17,12 @@
 
 import type { ExtensionContext } from "@mariozechner/pi-coding-agent";
 import {
-	askUserInteract,
 	type AskUserAnswers,
+	askUserInteract,
 	type AskUserQuestion,
 } from "@xyz-agent/extension-protocol";
 
 import { AskUserComponent } from "./component";
-import { resolveHostMode } from "./host-mode-compat";
 import { ANSWER_COMMENT_SEPARATOR, type Option, type Question, type Result, type ThemeLike } from "./types";
 
 /**
@@ -186,11 +185,12 @@ export function createAskUserChannelHandler(ctx: ExtensionContext): ChannelHandl
 		}
 		const { questions, allowCancel } = payload;
 
-		// 按 host-mode 分流（PR #85 #13）：gui（rpc）走 askUserInteract（select 通道+sidecar），
-		// tui/headless 走 ctx.ui.custom+AskUserComponent。用 resolveHostMode 替代 ctx.mode==="rpc"
-		// 字面比较，集中化 mode 判定（host-mode.ts 设计）。两条路径都透传 allowCancel（#12）。
+		// 按 ctx.mode 分流（PR #85 #13 / #M6）：rpc 走 askUserInteract（select 通道+sidecar），
+		// 其余（tui/json/print/undefined）走 ctx.ui.custom+AskUserComponent。
+		// 用 ctx.mode === "rpc" 二值判定（与 index.ts execute 的 useRpc 判定一致）；
+		// 三值分类不需要——handler 只关心「rpc 转发」vs「TUI 内部渲染」两条路径。
 		const answers =
-			resolveHostMode(ctx.mode) === "gui"
+			ctx.mode === "rpc"
 				? await runRpcForward(questions, ctx, allowCancel ?? true)
 				: await runTuiProtoInteraction(questions, ctx, allowCancel ?? true);
 

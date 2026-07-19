@@ -109,7 +109,7 @@
         {
           "package": "@zhushanwen/pi-subagent-workflow",
           "type": "optional",
-          "reason": "ask-user 在 session_start 动态 import subagent-workflow 的 getOrCreateChannelRegistry，注册 ask_user channel handler，让 subagent 子进程的 ask_user 请求透传到主进程渲染。缺失时透传功能降级（主进程直接使用 ask_user 工具不受影响）"
+          "reason": "ask-user 在 session_start 通过 globalThis Symbol 握手协议（CHANNEL_HANDSHAKE_KEY = Symbol.for('@zhushanwen/pi-subagents.channelHandshake')）注册 ask_user channel handler：subagent-workflow 已就绪则直接 register，未就绪则入 pending 队列由 subagent-workflow flush。无代码层 import（纯运行时 globalThis 握手，加载顺序无关）。缺失时 ask_user channel 无 handler，subagent 子进程的 ask_user 请求降级为普通 select 渲染（主进程直接使用 ask_user 工具不受影响）。"
         }
       ]
     },
