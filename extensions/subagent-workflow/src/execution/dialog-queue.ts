@@ -141,6 +141,14 @@ interface QueueItem {
  *（enqueue 内仍防御性兼容 fire-and-forget，但不保证行为）
  *
  * 线程模型：纯 Promise + 微任务驱动，无锁。Node 单线程 event loop 保证队列状态一致。
+ *
+ * 单 session 假设（M-2，与 index.ts lastSessionId 同源）：本队列是进程级单例（实例挂在
+ * globalThis[Symbol.for("@zhushanwen/pi-subagents.dialogQueue")]，见 getOrCreateDialogQueue）。
+ * rejectAll()/clear() 清空所有 pending dialog——无 per-session 隔离。Pi 当前架构保证单进程
+ * 单 session 串行（同进程不会并发多个 session），故 session_shutdown 调 rejectAll() 只会清掉
+ * 当前 session 的 pending。若未来 Pi 支持同进程多 session 并发，session A 退出会误清 session B
+ * 的 pending dialog——届时需改为 per-session 隔离（入队项 QueueItem 带 sessionId，rejectAll
+ * 改 rejectAllForSession(sessionId)，session_shutdown 只清当前 session）。
  */
 export class DialogGlobalQueue {
   /** 等待处理的队列（FIFO）。正在处理的项从 queue shift 出后由 current 持有。 */
@@ -284,6 +292,10 @@ export class DialogGlobalQueue {
    * 顺序敏感（#19 推进点在 settleItem）：必须先清空 queue 数组再 settle current，
    * 否则 settleItem(current) 同步触发的 processNext 会从旧 queue 抢占下一项作为新 current，
    * 避开本方法的 cancel 语义。清空后 processNext 看到空队列直接返回，新 current 不会被抢占。
+   *
+   * 单 session 假设（M-2）：见类注释。本方法清空所有 pending 不分 session——依赖 Pi 单进程
+   * 单 session 串行保证。session_shutdown handler（index.ts）调用本方法时，进程内只会有当前
+   * session 的 pending dialog。多 session 并发场景的迁移策略（rejectAllForSession）见类注释。
    */
   rejectAll(): void {
     // 先捕获并清空队列——防 settleItem(current) 触发的 processNext 抢占同队列下一项

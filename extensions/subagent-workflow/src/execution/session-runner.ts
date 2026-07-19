@@ -54,6 +54,21 @@ function isSdkEvent(x: unknown): x is SdkEvent {
   return typeof (x as SdkEvent).type === "string";
 }
 
+/**
+ * M10：agent_end 事件守卫。抽出前调用处用 `(evt as { type: string }).type === "agent_end"`
+ * 和 `(evt as { willRetry?: boolean }).willRetry` 两处结构断言触发 taste/no-unsafe-cast
+ *（后者断言到全可选属性等于无校验）。守卫返回后 TS 自动窄化为
+ * { type: "agent_end"; willRetry?: boolean }，调用处无需任何 cast。
+ */
+function isAgentEndEvt(
+  x: unknown,
+): x is { type: "agent_end"; willRetry?: boolean } {
+  if (typeof x !== "object" || x === null) return false;
+  if (!("type" in x)) return false;
+  // `"type" in x` 已窄化，TS 允许直接访问 x.type（无需 cast）
+  return x.type === "agent_end";
+}
+
 // ============================================================
 // 常量
 // ============================================================
@@ -745,12 +760,8 @@ export async function runSpawn(
           // agent_end（willRetry=false）= agent 自然完成。rpc mode 子进程不自动退出
           //（runRpcMode 末尾 return new Promise(() => {}) 长驻等命令），需主动 kill
           // 触发 close → runSpawn resolve。willRetry=true 时 agent 会重试，不能 kill。
-          if (
-            evt && typeof evt === "object" && "type" in evt &&
-            (evt as { type: string }).type === "agent_end"
-          ) {
-            const willRetry = (evt as { willRetry?: boolean }).willRetry === true;
-            if (!willRetry) child.kill("SIGTERM");
+          if (isAgentEndEvt(evt)) {
+            if (!evt.willRetry) child.kill("SIGTERM");
           }
           if (isSdkEvent(parsed.event)) handleSdkEvent(parsed.event);
         } else if (parsed.kind === "response") {

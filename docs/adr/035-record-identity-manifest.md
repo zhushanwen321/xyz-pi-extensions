@@ -62,6 +62,16 @@ record 身份从 transcript 解耦，用独立 manifest文件作为 source of tr
 3. get_state 时序：session 初始化完成后再调，补充重试逻辑
 4. **移除 manifest pid 字段**：决策 2 早期草案把 `pid` 列入 manifest 字段，但与决策 5（「PID 仅作临时探测」）和不变量 2（「record 身份不依赖 PID」）冲突——manifest 是终态永久记录，冻结一个「临时探针」值进永久记录概念上不成立。liveness 独归 `.alive` sidecar（`child.pid` + `isProcessAlive`，`record-store.ts:328`），manifest 只需 sessionFile 指针。已从 `ManifestRecord` 接口（`manifest-store.ts`）与 `finalize-record.ts` 的 writeManifest 调用移除 `pid`；向后兼容（`isValidManifest` 从不校验 pid，旧文件仍可读）。
 
+## 修正 §5：manifest status 枚举扩展为 4 态
+
+`ManifestRecord.status` 从 3 态（running/completed/failed）扩展为 4 态（加 `cancelled`），取消 cancelled→failed 的归并。要点：
+
+- **(a) status 4 态**：union 变为 `"running" | "completed" | "failed" | "cancelled"`，`VALID_MANIFEST_STATUSES` 同步加 `cancelled`。`isValidManifest` 守卫扩展后自动接受 cancelled、拒绝 crashed 和未知值。
+- **(b) cancelled 直接透传**：`finalize-record.ts` 的 status 映射从 `done→completed, cancelled→failed, else 透传` 简化为 `done→completed, else 透传`。cancelled 在 manifest 里以本义存储，不再被掩盖为 failed。
+- **(c) crashed 不进 manifest 的架构理由**：crashed 是重启重建时靠 sidecar 四分支（`.cancelled` / `.finalized` / `.alive+pid` / 兜底）推断的派生态，不是 finalize 明确产出的终态。若把 crashed 持久化进 manifest，重建时 manifest 与 sidecar 会对 crashed 判定形成双源（manifest 说 crashed、sidecar 说 running/done），破坏 sidecar 作为 liveness source of truth 的职责纯粹性。manifest 只记录 finalize 明确产出的终态（done/failed/cancelled + 初始 running）。
+- **(d) mapManifestStatus 越界不再降级 failed**：原实现越界降级 failed（保守终态触发重试/告警）。新实现越界返回 `null`，`manifestToSubagent` 据此返回 null，`collectRecords` 跳过损坏 record + `console.warn`。原因：降级 failed 会把数据损坏的 record 误显示为 failed（错误触发重试/告警），跳过比误报更安全。
+- **(e) 不保证向前兼容旧文件**：含历史 `"error"` 值或意外 `crashed` 值的旧 manifest 文件，会被 `mapManifestStatus` 返回 null、被 collectRecords 跳过（不报错、不降级）。这是有意的——损坏数据不应污染投影。
+
 ## 关键文件
 
 - `extensions/subagent-workflow/src/execution/subagent-service.ts` — record 创建 + finalizeRecord

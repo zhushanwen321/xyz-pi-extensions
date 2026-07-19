@@ -112,7 +112,7 @@ describe("FR-8: Orphan Recovery from Manifest", () => {
     expect(recordsB[0].id).toBe("orphan-session-b");
   });
 
-  it("should map manifest status correctly", async () => {
+  it("should map manifest status correctly (4-state)", async () => {
     const store = new RecordStore(sessionsDir, manifestStore);
 
     await manifestStore.writeManifest({
@@ -131,18 +131,55 @@ describe("FR-8: Orphan Recovery from Manifest", () => {
       createdAt: 2000,
     });
 
-    // [Wave1] status: "error" 分支已删除——ManifestRecord.status 只接受 running/completed/failed
-    //（"error" 枚举已移除），且 listAllSync 的 isValidManifest 守卫会过滤非合法 status。
-    // 历史 error→failed 的降级语义仍由 mapManifestStatus 保留（越界降级 failed），
-    // 但合法写入路径不再产出 error 文件——该 case 语义已消亡，删除。
+    await manifestStore.writeManifest({
+      id: "status-cancelled",
+      rootSessionId: "session-main",
+      agentName: "worker",
+      status: "cancelled",
+      createdAt: 3000,
+    });
+
+    // M3: ManifestRecord.status 4 态（running/completed/failed/cancelled）。
+    // cancelled 不再归并 failed——finalize 直接透传 cancelled,mapManifestStatus 映射为
+    // cancelled ExecutionStatus。crashed 不进 manifest（crashed 是重启重建时靠 sidecar
+    // 四分支推断的派生态,见 record-store.ts reconstructAll）。
     const records = store.collectRecords(100, "all", "session-main");
-    expect(records).toHaveLength(2);
+    expect(records).toHaveLength(3);
 
-    const completed = records.find((r) => r.id === "status-completed");
-    expect(completed?.status).toBe("done");
+    expect(records.find((r) => r.id === "status-completed")?.status).toBe("done");
+    expect(records.find((r) => r.id === "status-failed")?.status).toBe("failed");
+    expect(records.find((r) => r.id === "status-cancelled")?.status).toBe("cancelled");
+  });
 
-    const failed = records.find((r) => r.id === "status-failed");
-    expect(failed?.status).toBe("failed");
+  it("mapManifestStatus 越界值返回 null：collectRecords 跳过损坏 record（不降级 failed）", async () => {
+    const store = new RecordStore(sessionsDir, manifestStore);
+
+    // 合法 record（对照组）
+    await manifestStore.writeManifest({
+      id: "good",
+      rootSessionId: "session-main",
+      agentName: "worker",
+      status: "completed",
+      createdAt: 1000,
+    });
+
+    // 直接写磁盘注入非法 status（绕过 writeManifest 的 TS 类型守卫）。
+    // crashed 不在 4 态枚举——它是重建派生态,意外出现在 manifest 应被跳过而非降级 failed。
+    fs.writeFileSync(path.join(recordsDir, "bad-crashed.json"), JSON.stringify({
+      id: "bad-crashed", rootSessionId: "session-main", agentName: "worker",
+      status: "crashed", createdAt: 2000,
+    }));
+    // 未知值同样跳过
+    fs.writeFileSync(path.join(recordsDir, "bad-unknown.json"), JSON.stringify({
+      id: "bad-unknown", rootSessionId: "session-main", agentName: "worker",
+      status: "totally-unknown", createdAt: 3000,
+    }));
+
+    const records = store.collectRecords(100, "all", "session-main");
+    // 只剩 good——损坏 record 被跳过 + console.warn,不误显示为 failed
+    expect(records).toHaveLength(1);
+    expect(records[0].id).toBe("good");
+    expect(records[0].status).toBe("done");
   });
 
   it("in-memory records should take priority over manifest records", async () => {

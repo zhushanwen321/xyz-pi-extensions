@@ -240,6 +240,51 @@ describe("ManifestStore", () => {
     });
   });
 
+  // ── M3: 4 态 status 枚举（running/completed/failed/cancelled；crashed 不进 manifest）──
+  describe("4 态 status 枚举 (M3)", () => {
+    it("cancelled 能写入 + 读回（不再归并 failed）", async () => {
+      const record = {
+        id: "test-cancelled-4state",
+        rootSessionId: "session-123",
+        agentName: "worker",
+        status: "cancelled" as const,
+        createdAt: Date.now(),
+        completedAt: Date.now(),
+      };
+      await store.writeManifest(record);
+      const result = await store.readManifest(record.id);
+      expect(result).not.toBeNull();
+      expect(result?.status).toBe("cancelled");
+    });
+
+    it("listAllSync 接受 4 态（含 cancelled）", async () => {
+      await store.writeManifest({ id: "s-running", rootSessionId: "s", agentName: "w", status: "running" as const, createdAt: 1 });
+      await store.writeManifest({ id: "s-completed", rootSessionId: "s", agentName: "w", status: "completed" as const, createdAt: 2 });
+      await store.writeManifest({ id: "s-failed", rootSessionId: "s", agentName: "w", status: "failed" as const, createdAt: 3 });
+      await store.writeManifest({ id: "s-cancelled", rootSessionId: "s", agentName: "w", status: "cancelled" as const, createdAt: 4 });
+      const all = store.listAllSync();
+      expect(all.length).toBe(4);
+      expect(all.map((r) => r.status).sort()).toEqual(["cancelled", "completed", "failed", "running"]);
+    });
+
+    it("isValidManifest 拒绝 crashed（crashed 不进 manifest）", async () => {
+      // 直接写磁盘绕过 TS 类型（crashed 不在 ManifestRecord.status union）——若意外出现于磁盘,
+      // isValidManifest 守卫拒绝,listAllSync / readManifest 均不返回该 record。
+      fs.writeFileSync(path.join(tmpDir, "crashed.json"), JSON.stringify({
+        id: "bad-crashed", rootSessionId: "s", agentName: "w", status: "crashed", createdAt: 1,
+      }));
+      expect(store.listAllSync()).toEqual([]);
+      expect(await store.readManifest("bad-crashed")).toBeNull();
+    });
+
+    it("isValidManifest 拒绝未知 status 值", async () => {
+      fs.writeFileSync(path.join(tmpDir, "unknown.json"), JSON.stringify({
+        id: "bad-unknown", rootSessionId: "s", agentName: "w", status: "totally-unknown", createdAt: 1,
+      }));
+      expect(store.listAllSync()).toEqual([]);
+    });
+  });
+
   describe("并发写 (C10)", () => {
     it("Promise.all 并发写 N 个不同 id：不丢不重，内容正确", async () => {
       const N = 10;

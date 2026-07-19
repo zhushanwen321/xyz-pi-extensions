@@ -43,17 +43,19 @@ const ALIVE_SOFT_TIMEOUT_MS = 3_600_000; // 1h in ms (reduced from 24h to minimi
 /**
  * manifest status → ExecutionStatus 运行时守卫映射。
  *
- * manifest 只写 running/completed/failed 三值（ManifestRecord.status union），但磁盘文件
- * 可能陈旧（含历史 "error" 值）或被外部篡改。越界值一律降级为 failed——collectRecords
- * 不应因单个坏文件崩溃，failed 是最安全的保守终态（会触发重试/告警而非误报成功）。
+ * manifest 写 running/completed/failed/cancelled 四态（ManifestRecord.status union），但磁盘
+ * 文件可能陈旧（含历史 "error" 值、被外部篡改、或意外出现 crashed 值）。越界值返回 null——
+ * manifestToSubagent 据此返回 null，collectRecords 跳过损坏 record 并 console.warn，不因单个
+ * 坏文件崩溃，也不把损坏 record 错误降级为 failed（failed 会触发重试/告警，是误报）。
  *
  * 提取为纯函数：同时解决 PR#85 反射问题（三元 + `as ExecutionStatus` cast）。
  */
-function mapManifestStatus(s: string): ExecutionStatus {
+function mapManifestStatus(s: string): ExecutionStatus | null {
   if (s === "completed") return "done";
   if (s === "failed") return "failed";
   if (s === "running") return "running";
-  return "failed"; // 越界降级（含历史 "error" 值）
+  if (s === "cancelled") return "cancelled";
+  return null; // 越界=数据损坏（含历史 "error"、意外 crashed 值），返回 null 让调用方跳过
 }
 
 /** store 变更监听器（返回取消订阅函数）。 */
@@ -181,6 +183,12 @@ export class RecordStore {
         if (byId.has(manifest.id)) continue; // 已被磁盘/内存源覆盖
         if (rootSessionFilter !== undefined && manifest.rootSessionId !== rootSessionFilter) continue;
         const rec = RecordStore.manifestToSubagent(manifest);
+        if (!rec) {
+          // manifest status 越界=数据损坏（含历史 "error"、意外 crashed 值）：跳过而非降级 failed，
+          // 避免损坏 record 被误显示为 failed（触发错误重试/告警）。
+          console.warn("[subagents] skip manifest with invalid status:", manifest.id, manifest.status);
+          continue;
+        }
         byId.set(rec.id, rec);
       }
     }
@@ -360,9 +368,11 @@ export class RecordStore {
   }
 
   /** FR-8: ManifestRecord → SubagentRecord（manifest 源投影）。
-   *  task/slug/model 从 manifest 真实值投影（配合 writeManifest 补字段），缺失兜底空串。 */
-  private static manifestToSubagent(m: ManifestRecord): SubagentRecord {
+   *  task/slug/model 从 manifest 真实值投影（配合 writeManifest 补字段），缺失兜底空串。
+   *  status 越界（mapManifestStatus 返回 null）时返回 null，由 collectRecords 跳过。 */
+  private static manifestToSubagent(m: ManifestRecord): SubagentRecord | null {
     const status = mapManifestStatus(m.status);
+    if (status === null) return null;
     return {
       id: m.id,
       agent: m.agentName,

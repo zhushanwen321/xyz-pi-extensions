@@ -141,7 +141,7 @@ export async function doFinalizeRecord(
       id: record.id,
       rootSessionId: record.rootSessionId ?? "",
       agentName: record.agent,
-      status: status === "done" ? "completed" : status === "cancelled" ? "failed" : status,
+      status: status === "done" ? "completed" : status,
       createdAt: record.startedAt,
       completedAt: record.endedAt ?? Date.now(),
       sessionFile: record.sessionFile,
