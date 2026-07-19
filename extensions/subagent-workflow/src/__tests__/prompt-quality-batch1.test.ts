@@ -6,10 +6,11 @@
 // U3: 5 处 not-found 错误含退路指引
 // U4: agent .md 无无效 frontmatter 键
 
-import { describe, expect, it } from "vitest";
-import { readFileSync, readdirSync } from "node:fs";
-import { join, dirname } from "node:path";
+import { readdirSync,readFileSync } from "node:fs";
+import { dirname,join } from "node:path";
 import { fileURLToPath } from "node:url";
+
+import { describe, expect, it } from "vitest";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const PKG_ROOT = join(__dirname, "..", "..");

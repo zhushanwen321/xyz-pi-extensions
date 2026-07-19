@@ -129,7 +129,11 @@ export class BgNotifier {
       content,
       display: true,
       details,
-    }, { triggerTurn: true, deliverAs: "followUp" });
+      // [W2 修复] followUp → steer：subagent 完成通知需立即抢占主 agent 下一个 turn，
+      // 即使主 agent 处于轮询 subagent_list 的 processing 状态（followUp 永远排不上）。
+      // 与 workflow helpers.ts:151 同语义对齐（commit d214d0d83 验证 steer 能避免
+      // 'Agent is already processing' 错误）。
+    }, { triggerTurn: true, deliverAs: "steer" });
   }
 
   private buildLlmContent(record: BgNotifyRecord): string {

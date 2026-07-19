@@ -8,12 +8,11 @@
 // adapter() 是纯函数，ctx.mode === "rpc" → details.__gui__ 被附加，
 // ctx.mode === "tui"/"json"/"print" → details.__gui__ 为 undefined。
 
+import type { GuiContext } from "@xyz-agent/extension-protocol";
 import { describe, expect, it } from "vitest";
 
-import type { GuiContext } from "@xyz-agent/extension-protocol";
-
-import { adapter } from "../../interface/subagent-actions.ts";
 import type { AdapterInput } from "../../interface/subagent-actions.ts";
+import { adapter } from "../../interface/subagent-actions.ts";
 
 function makeStartInput(): AdapterInput {
 	return {

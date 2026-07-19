@@ -1,0 +1,137 @@
+{
+  "testCases": [
+    {
+      "id": "U1",
+      "layer": "mock",
+      "priority": "P0",
+      "scenario": "ManifestStore.writeManifest 创建 UUID 命名的 manifest 文件",
+      "steps": "1. 创建 ManifestStore 实例 2. 调 writeManifest 写入 record 3. 验证 <uuid>.json 文件存在且内容正确",
+      "expected": {
+        "text": "manifest 文件以 UUID 命名，内容包含 id/rootSessionId/agentName/status/createdAt"
+      },
+      "executor": "vitest",
+      "redCheck": true,
+      "requiresScreenshot": false,
+      "dependsOn": []
+    },
+    {
+      "id": "U2",
+      "layer": "mock",
+      "priority": "P0",
+      "scenario": "writeManifest 使用原子写入（tmp + rename）",
+      "steps": "1. 调 writeManifest 2. 验证无残留 .tmp. 文件 3. 验证只有一个最终 manifest 文件",
+      "expected": {
+        "text": "写入完成后目录只有 1 个 .json 文件，无 .tmp. 残留"
+      },
+      "executor": "vitest",
+      "redCheck": true,
+      "requiresScreenshot": false,
+      "dependsOn": []
+    },
+    {
+      "id": "U3",
+      "layer": "mock",
+      "priority": "P0",
+      "scenario": "manifest 写入失败时抛错（不走 bestEffort）",
+      "steps": "1. 创建 ManifestStore 指向临时目录 2. 删除该目录 3. 调 writeManifest 4. 验证抛出错误",
+      "expected": {
+        "mode": "exact",
+        "text": "writeManifest 抛出错误（目录不存在导致 openSync 失败），不被静默吞掉"
+      },
+      "executor": "vitest",
+      "redCheck": true,
+      "requiresScreenshot": false,
+      "dependsOn": []
+    },
+    {
+      "id": "U4",
+      "layer": "mock",
+      "priority": "P0",
+      "scenario": "recoverTmpFiles 删除已有 manifest 对应的 tmp 文件",
+      "steps": "1. 创建 manifest 文件和对应 .tmp. 文件 2. 调 recoverTmpFiles 3. 验证 tmp 被删除、manifest 保留",
+      "expected": {
+        "text": "deleted=1, tmp 文件被删除, manifest 文件保留"
+      },
+      "executor": "vitest",
+      "redCheck": true,
+      "requiresScreenshot": false,
+      "dependsOn": []
+    },
+    {
+      "id": "U5",
+      "layer": "mock",
+      "priority": "P0",
+      "scenario": "recoverTmpFiles 恢复有效 tmp（manifest 缺失时 rename）",
+      "steps": "1. 只创建有效 .tmp. 文件（无 manifest） 2. 调 recoverTmpFiles 3. 验证 tmp 被 rename 为 manifest",
+      "expected": {
+        "text": "recovered=1, tmp 被 rename 为 manifest 文件"
+      },
+      "executor": "vitest",
+      "redCheck": true,
+      "requiresScreenshot": false,
+      "dependsOn": []
+    },
+    {
+      "id": "U6",
+      "layer": "mock",
+      "priority": "P0",
+      "scenario": "recoverTmpFiles 删除无效 tmp（JSON 解析失败）",
+      "steps": "1. 创建无效 JSON 内容的 .tmp. 文件 2. 调 recoverTmpFiles 3. 验证 tmp 被删除",
+      "expected": {
+        "text": "deleted=1, 无效 tmp 文件被删除"
+      },
+      "executor": "vitest",
+      "redCheck": true,
+      "requiresScreenshot": false,
+      "dependsOn": []
+    },
+    {
+      "id": "U7",
+      "layer": "mock",
+      "priority": "P0",
+      "scenario": "readManifest 返回 null（manifest 不存在）",
+      "steps": "1. 调 readManifest 传入不存在的 id 2. 验证返回 null",
+      "expected": {
+        "mode": "exact",
+        "text": "readManifest 返回 null（不是 undefined、不是空对象）"
+      },
+      "executor": "vitest",
+      "redCheck": true,
+      "requiresScreenshot": false,
+      "dependsOn": []
+    },
+    {
+      "id": "U8",
+      "layer": "mock",
+      "priority": "P0",
+      "scenario": "readManifest 返回 manifest 数据（happy path）",
+      "steps": "1. 调 writeManifest 写入 record 2. 调 readManifest 读取 3. 验证返回数据与写入一致",
+      "expected": {
+        "text": "返回 ManifestRecord 对象，id/status 与写入一致"
+      },
+      "executor": "vitest",
+      "redCheck": true,
+      "requiresScreenshot": false,
+      "dependsOn": ["U1"]
+    },
+    {
+      "id": "E1",
+      "layer": "real",
+      "priority": "P1",
+      "scenario": "e2e: subagent 执行完成后 manifest 文件存在",
+      "steps": "1. 启动 Pi session 2. 触发 subagent 执行 3. 等待完成 4. 检查 records/ 目录下 manifest 文件",
+      "expected": {
+        "text": "records/ 目录下存在以 UUID 命名的 .json 文件，status 为 completed"
+      },
+      "executor": "shell",
+      "redCheck": false,
+      "requiresScreenshot": true,
+      "dependsOn": []
+    }
+  ],
+  "testRunner": {
+    "mode": "nodejs",
+    "command": "pnpm --filter @zhushanwen/pi-subagent-workflow test",
+    "cwd": "."
+  }
+}

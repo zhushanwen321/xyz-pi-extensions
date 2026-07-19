@@ -40,7 +40,7 @@ const DEFAULT_LIST_LIMIT = 20;
 const MAX_LIST_LIMIT = 100;
 
 /** background 启动提示文案（spec FR-3 bgResponse.message）。 */
-const BG_MESSAGE = "detached, will notify on completion";
+const BG_MESSAGE = "detached, will notify on completion (auto-injected message, do not poll)";
 
 // ============================================================
 // 入参 / 出参类型
@@ -267,8 +267,15 @@ export function adapter(
     ? { ...result, __gui__: guiResult(buildGuiComponent(action, input, result)) }
     : result;
 
+  // [W3 修复] list action 追加 reminder text block：LLM 调 list 时提醒不要轮询。
+  // reminder 作为第二个 text block（独立追加，不污染 details/JSON schema）。
+  // 只有 list 触发——start 的 reminder 已在 BG_MESSAGE 里；cancel 无需。
+  const reminder = action === "list"
+    ? "\n\nReminder: Subagent completion is auto-notified via injected message (deliverAs: steer). Do NOT poll in a loop — there is no poll action. Use action:'list' only when you concretely need state, then continue working or stop."
+    : "";
+
   return {
-    content: [{ type: "text", text }],
+    content: [{ type: "text", text }, { type: "text", text: reminder }],
     details,
   };
 }

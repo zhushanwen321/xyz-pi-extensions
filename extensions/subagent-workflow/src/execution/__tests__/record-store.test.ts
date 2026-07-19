@@ -15,11 +15,12 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import { createRecord } from "../execution-record.ts";
 import { writeAliveMarker } from "../alive-store.ts";
+import { createRecord } from "../execution-record.ts";
 import { writeFinalized } from "../finalized-marker.ts";
+import type { ManifestRecord, ManifestStore } from "../manifest-store.ts";
 import type { StatusFilter } from "../record-store.ts";
 import { RecordStore } from "../record-store.ts";
 import { writeCancelledTombstone } from "../tombstone-store.ts";
@@ -540,6 +541,89 @@ describe("RecordStore", () => {
       const found = store.collectRecords(100, "all", "sess-A").find((r) => r.id === "bg-1");
       expect(found?.status).toBe("running");
       expect(found?.endedAt).toBeUndefined();
+    });
+  });
+
+  // ============================================================
+  // [BL-M1] 修复：损坏 manifest 上报 pi.appendEntry（用户可见）
+  // collectRecords 跳过 mapManifestStatus 返回 null 的 manifest 时，除 console.warn
+  // 外还需调 pi.appendEntry("subagent:manifest-invalid-status", ...) 让用户能在 session
+  // 内复盘事故——避免磁盘陈旧/损坏 manifest 被静默吞掉。
+  // ============================================================
+  describe("manifest status 越界（损坏 manifest）", () => {
+    /** 构造一个 status 越界的 manifest mock。
+     *  ManifestRecord.status union 是 4 态，运行时却可能收到陈旧 "error" / 意外 "crashed"
+     * 等越界值——isValidManifest 当前挡掉了大部分，但 manifestStore.listAllSync 与
+     *  mapManifestStatus 之间仍有防御层（[BL-M1] 修复记录）。本测试用 unknown-cast 模拟
+     *  一个越过 ManifestRecord 静态类型的对象，验证 collectRecords 反应正确。 */
+    function brokenManifest(): ManifestRecord {
+      // eslint-disable-next-line taste/no-unsafe-cast -- intentional: cast status 越界值模拟磁盘损坏 manifest（测试目的本身）
+      return {
+        id: "broken-1",
+        rootSessionId: "sess-current",
+        agentName: "worker",
+        status: "crashed", // 越界值（union 不含 "crashed"）
+        createdAt: 1000,
+      } as unknown as ManifestRecord;
+    }
+
+    /** Mock ManifestStore 让测试不依赖 fs 路径 + isValidManifest 守卫。
+     *  source/target 类型不兼容是 intentional（ManifestStore 有多个方法，测试仅需 listAllSync），
+     *  `as unknown as ManifestStore` 是 vitest mock 标准 pattern。*/
+    function makeManifestStoreMock(manifests: ManifestRecord[]): ManifestStore {
+      // eslint-disable-next-line taste/no-unsafe-cast -- intentional: ManifestStore 有多个方法，测试仅需 listAllSync
+      return {
+        // 复制 manifests 防调用方意外 mutate 共享数组；vi.fn 每次调用返回独立数组
+        listAllSync: vi.fn(() => [...manifests]),
+      } as unknown as ManifestStore;
+    }
+
+    it("collectRecords 跳过越界 status 时调用 pi.appendEntry('subagent:manifest-invalid-status', ...)", () => {
+      const pi = { appendEntry: vi.fn() };
+      // Mock ManifestStore：listAllSync 返回损坏 manifest，绕开真实 fs 路径与 isValidManifest 守卫。
+      const manifestStore = makeManifestStoreMock([brokenManifest()]);
+      const store = new RecordStore(tmpDir, manifestStore, pi);
+
+      const result = store.collectRecords(100);
+
+      // 损坏 manifest 不出现在结果中（status 越界被跳过，不降级为 failed——避免误告警）
+      expect(result.find((r) => r.id === "broken-1")).toBeUndefined();
+      // appendEntry 被调用，customType + data 字段正确
+      expect(pi.appendEntry).toHaveBeenCalledTimes(1);
+      expect(pi.appendEntry).toHaveBeenCalledWith("subagent:manifest-invalid-status", {
+        id: "broken-1",
+        status: "crashed",
+        rootSessionId: "sess-current",
+        agentName: "worker",
+      });
+    });
+
+    it("pi 为 null/undefined 时不抛错（向后兼容：不注入 pi 的旧调用路径）", () => {
+      const manifestStore = makeManifestStoreMock([brokenManifest()]);
+      // 不传 pi（undefined）—— 模拟 SubagentService 构造期 session_start 未触发的场景。
+      const store = new RecordStore(tmpDir, manifestStore);
+      expect(() => store.collectRecords(100)).not.toThrow();
+      // 损坏 manifest 仍被跳过（不降级）
+      const result = store.collectRecords(100);
+      expect(result.find((r) => r.id === "broken-1")).toBeUndefined();
+    });
+
+    it("setPi() 后 appendEntry 切换到新 pi（覆盖初始 undefined）", () => {
+      const pi1 = { appendEntry: vi.fn() };
+      const pi2 = { appendEntry: vi.fn() };
+      const manifestStore = makeManifestStoreMock([brokenManifest()]);
+      const store = new RecordStore(tmpDir, manifestStore, pi1);
+      store.setPi(pi2);
+
+      store.collectRecords(100);
+
+      // 切换后只调 pi2（pi1 不再被调用）
+      expect(pi1.appendEntry).not.toHaveBeenCalled();
+      expect(pi2.appendEntry).toHaveBeenCalledTimes(1);
+      expect(pi2.appendEntry).toHaveBeenCalledWith(
+        "subagent:manifest-invalid-status",
+        expect.objectContaining({ id: "broken-1" }),
+      );
     });
   });
 });

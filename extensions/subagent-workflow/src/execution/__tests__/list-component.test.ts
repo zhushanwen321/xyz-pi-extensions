@@ -12,10 +12,10 @@
 
 import { afterEach,beforeEach, describe, expect, it, vi } from "vitest";
 
-import type { SubagentService } from "../subagent-service.ts";
 import type { ThemeLike } from "../../interface/format.ts";
 import { SubagentsListComponent } from "../../interface/list-component.ts";
 import type { KeyHandler, KeyResult, TuiLike, ViewState } from "../../interface/list-shared.ts";
+import type { SubagentService } from "../subagent-service.ts";
 import type { SubagentRecord } from "../types.ts";
 
 // ── KeyResult 常量（语义清晰，避到处写字面量对象） ──

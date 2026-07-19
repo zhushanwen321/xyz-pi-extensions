@@ -10,6 +10,11 @@ export function getAgentDir(): string {
 
 // ── Type exports (minimal stubs for vitest resolution) ──
 // These approximate the real SDK shapes enough for structural tests.
+
+/** Pi run mode. Mirrors `ExtensionMode` from the real SDK
+ *  (core/extensions/types.ts:207). Used by host-mode.ts. */
+export type ExtensionMode = "tui" | "rpc" | "json" | "print";
+
 export interface ExtensionAPI {
   registerTool(tool: unknown): void;
   registerCommand(cmd: unknown): void;
@@ -24,6 +29,10 @@ export interface ExtensionAPI {
 
 export interface ExtensionContext {
   cwd: string;
+  /** Pi run mode（host-mode.ts 读此字段分流 tui/gui/headless）。
+   *  必填——真实 SDK 契约（core/extensions/types.ts ExtensionMode 字段在主进程 ctx 上始终存在）。
+   *  mock 此前为可选，导致测试构造 ctx 时易漏传——与 SDK 契约不一致。 */
+  mode: ExtensionMode;
   sessionManager: {
     getSessionId(): string;
     getSessionFile(): string | undefined;

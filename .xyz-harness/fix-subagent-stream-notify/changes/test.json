@@ -1,0 +1,57 @@
+{
+  "testCases": [
+    {
+      "id": "U1",
+      "layer": "mock",
+      "priority": "P0",
+      "scenario": "streamSink ctx.mode guard at injection point (FR-1/FR-2/AC-1/AC-2)",
+      "steps": "读 extensions/subagent-workflow/src/index.ts 源码，定位 streamSink: ctx.mode === 'rpc' 三元守卫，验证 TUI 下 streamSink=undefined，rpc mode 下注入 setWidget wrapper。",
+      "expected": { "text": "stream-sink-guard test file: 2 passed" },
+      "executor": "vitest",
+      "redCheck": true,
+      "requiresScreenshot": false,
+      "dependsOn": []
+    },
+    {
+      "id": "U2",
+      "layer": "mock",
+      "priority": "P0",
+      "scenario": "BgNotifier.flushPendingNotifications calls sendMessage with deliverAs='steer' (FR-3/AC-3)",
+      "steps": "1. mock NotifierHost.sendMessage 捕获调用 2. 构造 BgNotifier.notify(done record) 3. 验证 captured options.deliverAs === 'steer' 且 triggerTurn === true",
+      "expected": { "text": "notifier-flush test file: 2 passed" },
+      "executor": "vitest",
+      "redCheck": true,
+      "requiresScreenshot": false,
+      "dependsOn": []
+    },
+    {
+      "id": "U3",
+      "layer": "mock",
+      "priority": "P0",
+      "scenario": "subagent tool reminder 强化 (FR-4/FR-5/FR-6/AC-4)",
+      "steps": "1. adapter({action:'list', domain}) 返回 content 是数组且第二个 text block 含 'auto-notif'/'do not poll' 2. subagent-actions.ts 源码 BG_MESSAGE 常量含 'auto-injected' 3. subagent-tool.ts description 'After launching' 段含 'auto-injected'",
+      "expected": { "text": "subagent-actions test file: 4 passed" },
+      "executor": "vitest",
+      "redCheck": true,
+      "requiresScreenshot": false,
+      "dependsOn": []
+    },
+    {
+      "id": "R1",
+      "layer": "real",
+      "priority": "P1",
+      "scenario": "subagent-workflow 包 typecheck + unit test 全过 (AC-5/AC-6)",
+      "steps": "1. pnpm --filter @zhushanwen/pi-subagent-workflow typecheck 2. pnpm --filter @zhushanwen/pi-subagent-workflow test",
+      "expected": { "text": "80 test files passed / 1036 tests passed" },
+      "executor": "shell",
+      "redCheck": false,
+      "requiresScreenshot": false,
+      "dependsOn": ["U1", "U2", "U3"]
+    }
+  ],
+  "testRunner": {
+    "mode": "nodejs",
+    "command": "pnpm --filter @zhushanwen/pi-subagent-workflow test",
+    "cwd": "."
+  }
+}

@@ -8,7 +8,7 @@
 |------|------|------|
 | **coding-workflow** | 5 阶段编码工作流（spec → plan → dev → test → pr），门控 + review + retrospect | [→ README](./extensions/coding-workflow/README.md) |
 | **goal** | `/goal` 目标驱动自主循环，任务追踪 + 证据验证 + 预算控制 | [→ README](./extensions/goal/README.md) |
-| **subagent-workflow** | subagent + workflow 合并包：任务委派 + 多 Agent 编排（chain/parallel/scatter-gather/map-reduce），单包统一执行链 + 分层配额 | — |
+| **subagent-workflow** | subagent + workflow 合并包：任务委派 + 多 Agent 编排（chain/parallel/scatter-gather/map-reduce），单包统一执行链 + 分层配额 | [→ README](./extensions/subagent-workflow/README.md) |
 | ~~**workflow**~~ | ⚠️ **DEPRECATED**（ADR-030）。已合并入 `subagent-workflow`，新项目请用 `@zhushanwen/pi-subagent-workflow` | [→ README](./extensions/workflow/README.md) |
 | **context-engineering** | 渐进式上下文压缩（L0/L1/L2）+ recall 召回 | [→ README](./extensions/context-engineering/README.md) |
 | **todo** | 轻量级三态任务清单，session 持久化 | [→ README](./extensions/todo/README.md) |

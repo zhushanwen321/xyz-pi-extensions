@@ -10,8 +10,8 @@
 import { describe, expect, it, vi } from "vitest";
 
 import type { AgentCallOpts } from "../../orchestration/models/types.ts";
-import type { ModelInfo } from "../model-resolver.ts";
 import { mapToExecuteOptions, mergeTimeoutSignal } from "../execute-options-mapper.ts";
+import type { ModelInfo } from "../model-resolver.ts";
 
 describe("mapToExecuteOptions (D-A2)", () => {
   const baseOpts: AgentCallOpts = {

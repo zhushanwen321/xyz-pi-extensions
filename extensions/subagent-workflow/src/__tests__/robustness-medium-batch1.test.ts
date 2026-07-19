@@ -4,10 +4,11 @@
 // M7: handleWorkerMessage validates msg shape before dereferencing msg.opts
 // M8: session-reconstructor guards Array.isArray(msg.content) before for...of
 
-import { describe, expect, it } from "vitest";
 import { readFileSync } from "node:fs";
-import { join, dirname } from "node:path";
+import { dirname,join } from "node:path";
 import { fileURLToPath } from "node:url";
+
+import { describe, expect, it } from "vitest";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const PKG_ROOT = join(__dirname, "..", "..");

@@ -176,6 +176,8 @@ export function statusGlyph(status: ExecutionStatus): { icon: string | undefined
       return { icon: "✗", color: "error" };
     case "cancelled":
       return { icon: "■", color: "muted" };
+    case "crashed":
+      return { icon: "✝", color: "error" };
     default:
       // 防御:运行时 status 可能是意外值(SDK 投影异常/未来新增状态),兜底为 running 语义
       return { icon: undefined, color: "accent" };

@@ -888,6 +888,22 @@ ctx.ui.registerWidget(WIDGET_KEY, (theme: Theme) => {
 });
 ```
 
+#### 15.4.1 Widget 注入点要区分 TUI vs GUI 主进程
+
+当 widget 内容是从外部流（如 subagent 的 streaming）转发来的，注入逻辑必须区分主进程是 TUI 还是 GUI（xyz-agent）。TUI 主进程没有 GUI sidecar，raw streaming text 灌到 widget 会成噪音。
+
+**正确做法**：`ctx.mode === "rpc"` 守卫。**不要**用 `ctx.hasUI`（TUI 和 RPC 都 true）。
+
+```typescript
+// session_start 内
+const streamSink = ctx.mode === "rpc"
+  ? { setWidget: (key, lines) => ctx.ui.setWidget(key, lines) }
+  : undefined;
+service.initSession({ pi, streamSink });
+```
+
+完整章节（含 `ExtensionMode` 字面量定义、进程边界、与 spawn 参数的区别）：见 `docs/pi-tui-development-guide.md` 第四部分第 8 节。
+
 ---
 
 ## 16. 模块组织 **[指南]**

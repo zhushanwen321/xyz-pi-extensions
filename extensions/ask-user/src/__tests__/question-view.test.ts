@@ -1,7 +1,7 @@
 // src/__tests__/question-view.test.ts
 import { describe, expect, it } from "vitest";
 
-import { getSplitPaneWidths, renderQuestionView, type RenderContext } from "../question-view";
+import { getSplitPaneWidths, type RenderContext,renderQuestionView } from "../question-view";
 import { createQuestionState, type Question, type QuestionState } from "../types";
 import { stubTheme } from "./fixtures";
 

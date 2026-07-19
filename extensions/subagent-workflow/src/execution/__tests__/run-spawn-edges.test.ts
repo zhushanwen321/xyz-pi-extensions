@@ -6,53 +6,24 @@
 //   - [C1] orphan 进程兜底：killAllSpawnedChildren 对未退出 child 发 SIGTERM。
 //   - [M8] stdout 边界：损坏行（非法 JSON / 缺 type）静默忽略 + 残留尾行（close 前无 \n）
 //     由 close handler 再 parse。
+//   - [agent_end] rpc 长驻进程自然完成：agent_end（willRetry=false）→ kill SIGTERM 触发 close。
 //
-// mock 策略（与 run-spawn-integration.test.ts 一致，vi.mock 是文件作用域，每文件需独立声明）：
-//   - node:child_process.spawn → 返回 FakeChild（EventEmitter + PassThrough），
-//     测试用控制器 emit data/close/error 控制时序。
-//   - node:child_process.execFileSync → 返回空串（buildEnvBlock 的 git branch 调用避免副作用）。
-//   - node:fs 同步方法 → mock（mkdirSync/existsSync/appendFileSync/writeFileSync 等），
-//     避免 sessionDir/sessionFile 触碰真实文件系统。
-//   - fs.promises.* → 保留真实实现（temp-prompt 整体被 mock，不触发真实 I/O）。
-//   - temp-prompt → mock（writePromptToTempFile 返回固定路径，消除 fake-timers flaky）。
-//   - alive-store.writeAliveMarker → mock（避免写 .alive sidecar）。
+// mock 工厂 + FakeChild + 工具函数共享自 helpers/spawn-mock.ts（详见该文件头注释）。
+// vi.mock 必须各文件独立声明（文件作用域），工厂内用 `await import` 取回 FakeChild。
 
-import type { PassThrough } from "node:stream";
+import { execFileSync, spawn } from "node:child_process";
+import * as fs from "node:fs";
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-// ── mock modules ──
-//
-// vitest 会把 vi.mock 提升到文件顶部（早于其他 import / 声明）。mock 工厂若要引用
-// FakeChild，需在工厂内部 import（async 工厂可用 await import），而非引用顶部
-// 顶层 import（它们在 vi.mock 执行时尚未绑定）。
-
 vi.mock("node:child_process", async () => {
-  const { EventEmitter } = await import("node:events");
-  const { PassThrough } = await import("node:stream");
-
-  // FakeChild：模拟 ChildProcess（EventEmitter + PassThrough streams）。
-  // 测试通过 mockSpawn.mock.results.at(-1).value 取回实例，控制 emit data/close/error 时序。
-  class FakeChild extends EventEmitter {
-    pid = 12345;
-    stdout = new PassThrough();
-    stderr = new PassThrough();
-    killed = false;
-    killSignal: string | undefined;
-    kill(sig?: string): boolean {
-      this.killed = true;
-      this.killSignal = sig;
-      return true;
-    }
-  }
-
+  const { FakeChild } = await import("./helpers/spawn-mock.ts");
   return {
     spawn: vi.fn(() => new FakeChild()),
-    execFileSync: vi.fn(() => ""), // buildEnvBlock 的 git branch 调用，返回空避免副作用
+    execFileSync: vi.fn(() => ""),
   };
 });
 
-// node:fs：同步方法 mock（runSpawn 用到的全部），promises 保留真实实现（temp-prompt 用）。
 vi.mock("node:fs", async () => {
   const actual = await import("node:fs");
   return {
@@ -64,13 +35,11 @@ vi.mock("node:fs", async () => {
       writeFileSync: vi.fn(),
       readdirSync: vi.fn(() => []),
     },
-    // 具名导出与 default 保持一致
     mkdirSync: vi.fn(),
     existsSync: vi.fn(() => false),
     appendFileSync: vi.fn(),
     writeFileSync: vi.fn(),
     readdirSync: vi.fn(() => []),
-    // promises 保留真实实现——temp-prompt 已被 mock（见下方 vi.mock），不再触发真实 I/O
     promises: actual.promises,
   };
 });
@@ -79,8 +48,6 @@ vi.mock("../alive-store.ts", () => ({
   writeAliveMarker: vi.fn(),
 }));
 
-// temp-prompt：mock 掉真实 fs.promises I/O，消除 fake-timers 下的 flaky 竞态
-// （详见 run-spawn-integration.test.ts 同名 mock 的注释）。
 vi.mock("../temp-prompt.ts", () => ({
   writePromptToTempFile: vi.fn(async (agent: string) => {
     const safeName = agent.replace(/[^\w.-]+/g, "_");
@@ -89,123 +56,25 @@ vi.mock("../temp-prompt.ts", () => ({
   cleanupTempPrompt: vi.fn(async () => {}),
 }));
 
-import { execFileSync, spawn } from "node:child_process";
-import * as fs from "node:fs";
-
-import { createRecord } from "../execution-record.ts";
-import { killAllSpawnedChildren, type RunOptions, runSpawn, type SessionRunnerContext } from "../session-runner.ts";
+import { killAllSpawnedChildren, runSpawn, spawnedChildren } from "../session-runner.ts";
+import {
+  emitStdoutLine,
+  type FakeChild,
+  lastSpawnedChild as lastSpawnedChildOf,
+  makeCtx,
+  makeOpts,
+  makeRecord,
+  sessionHeader,
+  waitForSpawn as waitForSpawnOf,
+} from "./helpers/spawn-mock.ts";
 
 const mockSpawn = vi.mocked(spawn);
 const mockExec = vi.mocked(execFileSync);
 const mockExistsSync = vi.mocked(fs.existsSync);
 
-/**
- * spawn mock 返回的 fake child 类型。
- * 由于 FakeChild 定义在 vi.mock 工厂内部（作用域隔离），此处用结构子集类型描述，
- * 测试代码通过此类型访问 stdout/stderr/kill 等成员。
- */
-interface FakeChild {
-  pid: number;
-  stdout: PassThrough;
-  stderr: PassThrough;
-  killed: boolean;
-  killSignal: string | undefined;
-  kill(sig?: string): boolean;
-  emit(event: string, ...args: unknown[]): boolean;
-}
-
-/** 从最近一次 spawn 调用取回返回的 FakeChild（测试控制器）。 */
-function lastSpawnedChild(): FakeChild {
-  const result = mockSpawn.mock.results.at(-1);
-  if (!result) throw new Error("spawn was not called yet");
-  return result.value as FakeChild;
-}
-
-/**
- * 等待 runSpawn 内部调到 spawn（拿到 child 控制器）。
- *
- * runSpawn 是 async，spawn 在 mkdirSync + writePromptToTempFile 之后才调（均有微任务/
- * I/O 延迟）。用 setInterval 轮询 mockSpawn.mock.results，比 vi.waitFor 在该 vitest 版本
- * 下更可靠（vi.waitFor 偶发过早 resolve 导致后续读取竞态）。
- */
-async function waitForSpawn(timeoutMs = 1000): Promise<void> {
-  const start = Date.now();
-  while (mockSpawn.mock.results.length === 0) {
-    if (Date.now() - start > timeoutMs) {
-      throw new Error(`spawn was not called within ${timeoutMs}ms`);
-    }
-    await new Promise((r) => setTimeout(r, 5));
-  }
-}
-
-// ============================================================
-// 辅助：向 stdout 写一行（自动补换行，runSpawn 按 \n split 行）
-// ============================================================
-
-function emitStdoutLine(child: FakeChild, obj: Record<string, unknown>): void {
-  child.stdout.write(`${JSON.stringify(obj)}\n`);
-}
-
-/** 构造 session header 行（stdout 首行）。 */
-function sessionHeader(id = "sess-abc"): Record<string, unknown> {
-  return {
-    type: "session",
-    id,
-    timestamp: "2026-07-03T12-00-00-000Z",
-    cwd: "/tmp/test",
-  };
-}
-
-// ============================================================
-// 辅助：构造最小合法的 record / opts / ctx
-// ============================================================
-
-function makeRecord() {
-  return createRecord("run-1", {
-    agent: "general-purpose",
-    model: "test-model",
-    mode: "sync",
-    task: "do something",
-    startedAt: 1_000_000,
-    rootSessionId: "root-session",
-    parentRecordId: undefined,
-    depth: 0,
-  });
-}
-
-function makeOpts(overrides: Partial<RunOptions> = {}): RunOptions {
-  return {
-    resolved: {
-      model: {
-        id: "test-model",
-        name: "Test Model",
-        provider: "test",
-        reasoning: false,
-      },
-      thinkingLevel: undefined,
-    },
-    agentConfig: undefined,
-    appendSystemPrompt: undefined,
-    skillPath: undefined,
-    schema: undefined,
-    maxTurns: undefined,
-    graceTurns: undefined,
-    signal: undefined,
-    onEvent: undefined,
-    ...overrides,
-  };
-}
-
-function makeCtx(overrides: Partial<SessionRunnerContext> = {}): SessionRunnerContext {
-  return {
-    cwd: "/tmp/test",
-    agentDir: "/tmp/test/agents",
-    skillDirs: [],
-    mainCwd: "/tmp/test",
-    mainSessionFile: undefined,
-    ...overrides,
-  };
-}
+// 绑定到本文件 mockSpawn 的 lastSpawnedChild/waitForSpawn（需读 mockSpawn.mock.results）
+const lastSpawnedChild = (): FakeChild => lastSpawnedChildOf(mockSpawn);
+const waitForSpawn = (timeoutMs = 1000): Promise<void> => waitForSpawnOf(mockSpawn, timeoutMs);
 
 // ============================================================
 // 测试
@@ -313,6 +182,58 @@ describe("runSpawn", () => {
       expect(n).toBeGreaterThanOrEqual(2);
       expect(c1.killed).toBe(true);
       expect(c2.killed).toBe(true);
+
+      // 收尾
+      for (const { child, promise } of [
+        { child: c1, promise: p1 },
+        { child: c2, promise: p2 },
+      ]) {
+        emitStdoutLine(child, sessionHeader());
+        child.stdout.end();
+        child.emit("close", 143);
+        const r = await promise;
+        expect(r.success).toBe(true);
+      }
+    });
+
+    // [dispose-cleanup Minor 优化2] killAllSpawnedChildren 末尾 clear spawnedChildren Set。
+    // 防主进程崩溃/close 事件漏触发时 Set 无限增长。正常路径 close 事件会 delete（保留 per-child
+    // 精细清理语义）；killAllSpawnedChildren 是 dispose 全量兼底。
+    it("killAllSpawnedChildren 后 spawnedChildren Set 被 clear（size===0）", async () => {
+      // 前置清理：即他测试可能残留的 child（close 未触发场景）
+      killAllSpawnedChildren();
+      expect(spawnedChildren.size).toBe(0);
+
+      // spawn 两个未 close 的 child（模拟 close 事件漏触发的极端累积场景）
+      const rec1 = makeRecord();
+      const p1 = runSpawn(rec1, "Task: clear-1", makeOpts(), makeCtx());
+      await waitForSpawn();
+      const c1 = lastSpawnedChild();
+
+      const beforeCount = mockSpawn.mock.results.length;
+      const rec2 = makeRecord();
+      const p2 = runSpawn(rec2, "Task: clear-2", makeOpts(), makeCtx());
+      const start = Date.now();
+      while (mockSpawn.mock.results.length < beforeCount + 1) {
+        if (Date.now() - start > 1000) throw new Error("second spawn not called");
+        await new Promise((r) => setTimeout(r, 5));
+      }
+      const c2 = lastSpawnedChild();
+
+      // 两个 child 都在 Set 中
+      expect(spawnedChildren.size).toBe(2);
+
+      // dispose 兼底：kill + clear
+      const n = killAllSpawnedChildren();
+      expect(n).toBe(2);
+      expect(c1.killed).toBe(true);
+      expect(c2.killed).toBe(true);
+      // Set 被 clear（兑底防泄漏）
+      expect(spawnedChildren.size).toBe(0);
+
+      // 再次调用：Set 已空，返回 0（不会重复 kill 已 kill 的 child）
+      const n2 = killAllSpawnedChildren();
+      expect(n2).toBe(0);
 
       // 收尾
       for (const { child, promise } of [
@@ -434,6 +355,89 @@ describe("runSpawn", () => {
 
       expect(result.success).toBe(true);
       expect(record.turnCount).toBe(1); // 3 片拼接后解析为 1 次 turn_end
+    });
+  });
+
+  // ── 3. agent_end 自然完成（rpc 长驻进程不自动退出，需主动 kill）──
+  //
+  // [rpc agent_end] pi --mode rpc 是长驻进程（runRpcMode 末尾 return new Promise(() => {})），
+  // 处理完 prompt 后不退出。runSpawn 只靠 child.on("close") 判完成——如果不处理 agent_end，
+  // 子进程会卡到 watchdog 30 分钟兜底 kill。修复：收到 agent_end（willRetry=false）后
+  // 主动 child.kill("SIGTERM") 让子进程退出，触发 close → runSpawn resolve。
+  // willRetry=true 时 agent 会重试，不能 kill。
+  describe("agent_end 自然完成", () => {
+    it("agent_end（willRetry=false）→ child.kill(SIGTERM) 被调用，close 后 success=true", async () => {
+      const record = makeRecord();
+      const promise = runSpawn(record, "Task: done", makeOpts(), makeCtx());
+
+      await waitForSpawn();
+      const child = lastSpawnedChild();
+
+      emitStdoutLine(child, sessionHeader());
+      // agent 自然完成（willRetry=false）
+      emitStdoutLine(child, { type: "agent_end", messages: [], willRetry: false });
+      child.stdout.end();
+      child.stderr.end();
+      // agent_end 触发 kill(SIGTERM) → 子进程退出（exitCode 143 = 128+15）
+      child.emit("close", 143);
+
+      const result = await promise;
+
+      expect(child.killed).toBe(true);
+      expect(child.killSignal).toBe("SIGTERM");
+      // 信号终止（>=128）视为正常完成
+      expect(result.success).toBe(true);
+    });
+
+    it("agent_end（willRetry=true）→ child.kill 不被调用（agent 会重试，等下一个 agent_end）", async () => {
+      const record = makeRecord();
+      const promise = runSpawn(record, "Task: retry", makeOpts(), makeCtx());
+
+      await waitForSpawn();
+      const child = lastSpawnedChild();
+
+      emitStdoutLine(child, sessionHeader());
+      // willRetry=true：agent 会重试，不应 kill
+      emitStdoutLine(child, { type: "agent_end", messages: [], willRetry: true });
+      // 此时 child.killed 应仍为 false。给一点时间让 event pump 处理完。
+      await new Promise((r) => setTimeout(r, 10));
+      expect(child.killed).toBe(false);
+
+      // 收尾：模拟重试后的最终完成（willRetry=false）
+      emitStdoutLine(child, { type: "agent_end", messages: [], willRetry: false });
+      child.stdout.end();
+      child.stderr.end();
+      child.emit("close", 143);
+
+      const result = await promise;
+
+      // 最终的 agent_end（willRetry=false）触发 kill
+      expect(child.killed).toBe(true);
+      expect(child.killSignal).toBe("SIGTERM");
+      expect(result.success).toBe(true);
+    });
+
+    it("agent_end 后的后续 event 仍被 handleSdkEvent 处理（kill 不阻塞 event pump）", async () => {
+      const record = makeRecord();
+      const promise = runSpawn(record, "Task: flush", makeOpts(), makeCtx());
+
+      await waitForSpawn();
+      const child = lastSpawnedChild();
+
+      emitStdoutLine(child, sessionHeader());
+      // agent_end kill 是 fire-and-forget（SIGTERM 异步），后续 stdout 行仍被 event pump 处理
+      emitStdoutLine(child, { type: "agent_end", messages: [], willRetry: false });
+      emitStdoutLine(child, { type: "turn_end" }); // kill 后的 turn_end 仍应被处理
+      child.stdout.end();
+      child.stderr.end();
+      child.emit("close", 143);
+
+      const result = await promise;
+
+      expect(child.killed).toBe(true);
+      expect(result.success).toBe(true);
+      // turn_end 被处理 → turnCount=1
+      expect(record.turnCount).toBe(1);
     });
   });
 });

@@ -6,7 +6,7 @@ import * as path from "node:path";
 
 import { describe, expect, it } from "vitest";
 
-import { encodeCwd, getSubagentSessionDir } from "../path-encoding.ts";
+import { encodeCwd, getSubagentRecordsDir, getSubagentSessionDir } from "../path-encoding.ts";
 
 describe("encodeCwd", () => {
   it("encodes a normal unix absolute path", () => {
@@ -70,6 +70,35 @@ describe("getSubagentSessionDir", () => {
   it("produces different path for different mainCwd", () => {
     const a = getSubagentSessionDir("/agent", "/cwd1");
     const b = getSubagentSessionDir("/agent", "/cwd2");
+    expect(a).not.toBe(b);
+  });
+});
+
+describe("getSubagentRecordsDir", () => {
+  it("returns agentDir/subagents/<encodedCwd>/records", () => {
+    const result = getSubagentRecordsDir("/home/user/.pi/agent", "/Users/x/proj");
+    expect(result).toBe(
+      path.join("/home/user/.pi/agent", "subagents", "--Users-x-proj--", "records")
+    );
+  });
+
+  it("shares the same <enc> segment with getSubagentSessionDir for same cwd", () => {
+    // F1：records 与 sessions 在同一 <enc> 段下，仅尾段不同（records vs sessions）。
+    // worktree 场景三者恒等的前提就靠这个共享 enc。
+    const agentDir = "/home/user/.pi/agent";
+    const cwd = "/Users/x/proj";
+    const sessions = getSubagentSessionDir(agentDir, cwd);
+    const records = getSubagentRecordsDir(agentDir, cwd);
+    // 共享 enc：去掉尾段后剩同一路径前缀
+    expect(path.dirname(sessions)).toBe(path.dirname(records));
+    // 尾段不同
+    expect(path.basename(sessions)).toBe("sessions");
+    expect(path.basename(records)).toBe("records");
+  });
+
+  it("produces different path for different mainCwd", () => {
+    const a = getSubagentRecordsDir("/agent", "/cwd1");
+    const b = getSubagentRecordsDir("/agent", "/cwd2");
     expect(a).not.toBe(b);
   });
 });

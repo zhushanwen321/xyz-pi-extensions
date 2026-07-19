@@ -42,7 +42,10 @@ function createMockExtensionAPI() {
   return { api, tools, commands, eventHandlers, messageRenderers };
 }
 
-describe("wave-0: package structure merge", () => {
+describe("wave-0: package structure merge", { timeout: 30000 }, () => {
+  // [B6] `await import("../../index.js")` 首次加载会拉起整个 extension 模块图（含
+  //  orchestration/execution/interface 三层），全量跑时偶发超 vitest 默认 5s testTimeout（flaky）。
+  //  describe 级 30s timeout 覆盖本块所有 test（模块加载仅首 test 付一次成本，后续复用缓存）。
   it("AC-1.1: registers 3 tools (subagent + workflow + workflow-script)", async () => {
     const mod = await import("../../index.js");
     const factory = mod.default;

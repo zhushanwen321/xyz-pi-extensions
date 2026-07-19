@@ -1,6 +1,6 @@
 // src/core/session-runner.ts
 //
-// spawn pi --mode json 子进程执行 session 的编排器。零 mode 感知。
+// spawn pi --mode rpc 子进程执行 session 的编排器。零 mode 感知。
 //
 // spawn 改造后：session 在独立子进程跑（进程隔离），事件经 stdout JSON 流回流。
 // runSpawn 是唯一执行入口（sync/background 共用）。mode 分叉在 Runtime.execute 顶部。
@@ -9,24 +9,20 @@
 import { type ChildProcess,execFileSync, spawn } from "node:child_process";
 import * as fs from "node:fs";
 
+import type { ExtensionMode } from "@mariozechner/pi-coding-agent";
+
 import { writeAliveMarker } from "./alive-store.ts";
-import type {
-  AgentEvent,
-  AgentResult,
-  ExecutionRecord,
-  SdkEvent,
-  WorktreeHandle,
-} from "./types.ts";
+import { type DialogGlobalQueue, type UiRequestHandler } from "./dialog-queue.ts";
 import { updateFromEvent } from "./execution-record.ts";
-import type {
-  AgentConfig,
-  ResolvedModel,
-} from "./model-resolver.ts";
+import { type GetStateResult, performGetStateHandshake } from "./get-state-handshake.ts";
+import { willRespondToAskUser } from "./host-mode.ts";
+import type { AgentConfig, ResolvedModel } from "./model-resolver.ts";
 import { collectResult } from "./output-collector.ts";
 import { getSubagentSessionDir } from "./path-encoding.ts";
 import { getPiInvocation } from "./pi-invocation.ts";
 import { MAX_FORK_DEPTH } from "./session-context-resolver.ts";
 import { IDENTITY_CUSTOM_TYPE, type SubagentIdentityData } from "./session-reconstructor.ts";
+import { sendPromptCommand } from "./stdin-writer.ts";
 import {
   deriveSessionFilePath,
   findSessionFileByHeaderId,
@@ -38,7 +34,15 @@ import {
   cleanupTempPrompt,
   writePromptToTempFile,
 } from "./temp-prompt.ts";
+import type {
+  AgentEvent,
+  AgentResult,
+  ExecutionRecord,
+  SdkEvent,
+  WorktreeHandle,
+} from "./types.ts";
 import { createTurnLimiter, WRAP_UP_HINT } from "./turn-limiter.ts";
+import { createUiRequestQueue } from "./ui-request-queue.ts";
 
 /**
  * 运行时 guard：subscribe 回调收到的 event 形状未知，校验 type 字段后再交给 handle。
@@ -48,6 +52,21 @@ function isSdkEvent(x: unknown): x is SdkEvent {
   if (typeof x !== "object" || x === null) return false;
   if (!("type" in x)) return false;
   return typeof (x as SdkEvent).type === "string";
+}
+
+/**
+ * M10：agent_end 事件守卫。抽出前调用处用 `(evt as { type: string }).type === "agent_end"`
+ * 和 `(evt as { willRetry?: boolean }).willRetry` 两处结构断言触发 taste/no-unsafe-cast
+ *（后者断言到全可选属性等于无校验）。守卫返回后 TS 自动窄化为
+ * { type: "agent_end"; willRetry?: boolean }，调用处无需任何 cast。
+ */
+function isAgentEndEvt(
+  x: unknown,
+): x is { type: "agent_end"; willRetry?: boolean } {
+  if (typeof x !== "object" || x === null) return false;
+  if (!("type" in x)) return false;
+  // `"type" in x` 已窄化，TS 允许直接访问 x.type（无需 cast）
+  return x.type === "agent_end";
 }
 
 // ============================================================
@@ -90,6 +109,35 @@ function computeWatchdogMs(maxTurns: number | undefined | null): number {
 const STDERR_MAX_CHARS = 64 * 1024;
 
 // ============================================================
+// W4: ask_user RPC 系统提示词
+// ============================================================
+
+/**
+ * ask_user 工具的 RPC 使用指引。当子进程配置了 ask_user tool 时注入 appendParts，
+ * 告知 LLM：ask_user 的问题会通过 RPC 转发到主 agent UI，用户在主 agent 界面回答。
+ *
+ * 背景：spawn 模式下子进程没有 TUI 交互通道，ask_user 走 extension_ui_request RPC 协议
+ * 转发到父进程，父进程调用 uiRequestHandler 将问题呈现给用户，收到回答后通过 stdin
+ * 回写 JSON-RPC response。LLM 需要知道这个机制存在，才能正确使用 ask_user。
+ */
+export const ASK_USER_RPC_PROMPT = `
+## ask_user Tool Availability
+
+The \`ask_user\` tool is available in this session. When you call \`ask_user\`, your questions are forwarded via RPC to the main agent's UI, where the user will see them and provide answers. The response is delivered back to you automatically.
+
+**How it works:**
+1. You call \`ask_user\` with structured questions (each with options)
+2. The questions are forwarded to the main agent's UI via RPC
+3. The user sees the questions and selects answers in the main agent interface
+4. The answers are returned to you as the tool result
+
+**Important:**
+- The user may take some time to respond — this is normal
+- If the user cancels or the request times out, you'll receive a cancellation notice
+- Use ask_user only when you genuinely cannot resolve ambiguity yourself (see tool description for guidelines)
+`.trim();
+
+// ============================================================
 // 孤儿进程兜底（C1）
 // ============================================================
 //
@@ -103,7 +151,9 @@ const STDERR_MAX_CHARS = 64 * 1024;
 // 之后，遍历所有仍存活的子进程（含 sync）发 SIGTERM。正常退出路径（子进程 close）会从 Set 移除，
 // 不受影响。background 子进程可能被 controller.abort 路径先 kill 一次，再被本遍历 kill 一次
 // （对已退出的 child.kill 返回 false，无害）。
-const spawnedChildren = new Set<ChildProcess>();
+//
+// [export] 测试可观测（断言 dispose 后 size===0）。业务代码误外部修改。
+export const spawnedChildren = new Set<ChildProcess>();
 
 /**
  * kill 所有未退出的 spawned 子进程（dispose 兜底用）。
@@ -135,6 +185,11 @@ export function killAllSpawnedChildren(signal: NodeJS.Signals = "SIGTERM"): numb
       // best-effort：单个 kill 失败不影响其他子进程
     }
   }
+  // dispose 全量清理；正常路径的 close/error 事件 delete 保留作 per-child 精细清理，
+  // 这里兑底防 close 事件漏触发的极端累积（主进程崩溃后 close 回调可能不再触发，
+  // 不 clear 则下次 dispose 会重复向已 kill 的 child 发信号——虽然 killed=true 跳过，
+  // 但 Set 无限增长泄漏内存）。
+  spawnedChildren.clear();
   return n;
 }
 
@@ -160,6 +215,28 @@ export interface SessionRunnerContext {
    * 解耦 Core 与 Runtime——session-runner 不直接依赖 WorktreeManager。
    */
   onWorktreePid?: (branch: string, pid: number) => void;
+  /**
+   * UI 请求处理回调。子进程发 extension_ui_request 时调用。
+   *
+   * 入参 UiRequest（method + channel/channelPayload + method 特定字段），
+   * 返回 UiResponse（{value}/{confirmed}/{cancelled}/{ack}）。
+   * 实现方按 req.channel 分发业务路由（ask_user → AskUserComponent）+
+   * 默认转发（ctx.ui.*），收到用户回答后 resolve。
+   *
+   * 未设置时不再静默忽略——console.warn 兜底（FR-9 可观测性），
+   * W3 接入 SubagentService.notifyMissingHandler 的 appendEntry。
+   */
+  uiRequestHandler?: UiRequestHandler;
+  /**
+   * L2 跨子进程全局 dialog 串行队列（进程单例，由 SubagentService 注入）。
+   *
+   * SR-4：child close 时调 rejectChildDialogs 清理该 child 在 L2 的 pending dialog，
+   * 防 Promise 永挂（handler 等用户输入永不 settle）导致队列死锁（processing 永远 true，
+   * 其他子进程的 dialog 永久阻塞）。未注入（旧调用方/测试）时 onclose 只清 L1。
+   */
+  dialogQueue?: DialogGlobalQueue;
+  /** 主进程运行模式（W4 守卫：headless 不注入 ask_user RPC 提示词）。 */
+  mode?: ExtensionMode;
 }
 
 /** SessionRunner.run 的入参。 */
@@ -305,7 +382,7 @@ export function buildEnvBlock(
 }
 
 // ============================================================
-// [SPAWN 改造] runSpawn：spawn pi --mode json 子进程执行 session
+// [SPAWN 改造] runSpawn：spawn pi --mode rpc 子进程执行 session
 // ============================================================
 //
 // 替代 in-process run()。核心差异：session 在独立子进程跑（进程隔离），
@@ -346,9 +423,11 @@ export function buildSpawnArgs(
     forkSource: string | undefined;
     skillPaths: string[] | undefined;
   },
-  task: string,
 ): string[] {
-  const args: string[] = ["--mode", "json", "-p", "--session-dir", params.sessionDir];
+  // task 不通过命令行传——pi 的 runRpcMode 只消费 stdin RpcCommand，
+  // positional task arg / -p flag 在 rpc mode 下被 resolveAppMode 无视。
+  // task 由 runSpawn 内 sendPromptCommand 写 child.stdin 驱动。
+  const args: string[] = ["--mode", "rpc", "--session-dir", params.sessionDir];
   if (params.model) args.push("--model", params.model);
   if (params.thinkingLevel && params.model) {
     // thinking level 通过 model 后缀 :level 传递（pi CLI 约定）
@@ -372,7 +451,6 @@ export function buildSpawnArgs(
       args.push("--skill", sp);
     }
   }
-  args.push(task);
   return args;
 }
 
@@ -394,15 +472,16 @@ export async function runSpawn(
   const pendingTools = new Map<string, { toolName: string; args?: unknown }>();
 
   // b. turnLimiter（spawn 版：abort = proc.kill；steer 是 no-op）
-  // [M1] pi --mode json 是 single-shot，无运行时 steer 通道。补偿：启动时通过
-  // --append-system-prompt 预置 WRAP_UP_HINT（见上方 appendParts），让 agent 感知
-  // 接近上限时主动收尾。maxTurns soft limit 仍依赖 graceTurns 后的 abort 兑现。
+  // [M1] rpc mode 是长驻进程（agent_end 后不自动退出），maxTurns soft limit 依赖
+  // graceTurns 后的 abort（proc.kill SIGTERM）兑现。agent 自然结束时由 stdout pump
+  // 的 agent_end 拦截 kill（见下方）。steer 通道当前未接通（见下方 steer no-op 注释）。
   let proc: ChildProcess | undefined;
   const limiter = createTurnLimiter({
     maxTurns: opts.maxTurns ?? 0,
     graceTurns: opts.graceTurns ?? DEFAULT_GRACE_TURNS,
     steer: () => {
-      // no-op：spawn 无运行时 steer 通道，补偿已在启动时注入 WRAP_UP_HINT。
+      // no-op：当前 runSpawn 未接通 rpc stdin steer 通道（rpc mode 支持 steer/followUp，
+      // 但未实现写入逻辑）。补偿已在启动时注入 WRAP_UP_HINT 让 agent 主动收尾。
     },
     abort: () => {
       proc?.kill("SIGTERM");
@@ -510,10 +589,14 @@ export async function runSpawn(
   const appendParts: string[] = [buildEnvBlock(ctx.cwd, ownForkDepth, record.depth)];
   if (opts.agentConfig?.systemPrompt) appendParts.push(opts.agentConfig.systemPrompt);
   if (opts.appendSystemPrompt) appendParts.push(...opts.appendSystemPrompt);
-  // [M1 补偿] spawn 模式无运行时 steer 通道（pi --mode json 是 single-shot），
-  // 改为启动时预置 wrap-up 提示——agent 感知接近上限时主动收尾。
-  // 长期方案：切到 pi --mode rpc（支持运行时 steer），见 follow-up。
+  // [M1 补偿] rpc mode 的 steer 通道当前未接通，改为启动时预置 wrap-up 提示——
+  // agent 感知接近上限时主动收尾。
   if (opts.maxTurns && opts.maxTurns > 0) appendParts.push(WRAP_UP_HINT);
+  // W4: ask_user RPC 使用指引——当子进程配置了 ask_user tool 时，告知 LLM
+  // ask_user 的问题会通过 RPC 转发到主 agent UI，用户在主 agent 界面回答。
+  if (opts.agentConfig?.tools?.includes("ask_user") && willRespondToAskUser(ctx.mode)) {
+    appendParts.push(ASK_USER_RPC_PROMPT);
+  }
   if (appendParts.length > 0) {
     tempPromptFile = await writePromptToTempFile(record.agent, appendParts.join("\n\n"));
   }
@@ -543,7 +626,6 @@ export async function runSpawn(
       forkSource,
       skillPaths: skillPaths.length > 0 ? skillPaths : undefined,
     },
-    fullTask,
   );
   const invocation = getPiInvocation(spawnArgs);
 
@@ -556,7 +638,7 @@ export async function runSpawn(
     const child = spawn(invocation.command, invocation.args, {
       cwd: spawnCwd,
       shell: false,
-      stdio: ["ignore", "pipe", "pipe"],
+      stdio: ["pipe", "pipe", "pipe"],
       env: childEnv,
     });
     proc = child;
@@ -570,6 +652,11 @@ export async function runSpawn(
     //（下方）只清理 tempPromptFile，watchdog/signal listener 尚未注册则无需清理——避免泄漏。
     child.stdout.setEncoding("utf8");
     child.stderr.setEncoding("utf8");
+
+    // 喂 prompt 命令驱动子进程开始处理 task。pi runRpcMode 只消费 stdin RpcCommand，
+    // 不读 positional arg；必须在 spawn 后主动写，否则子进程阻塞、totalTokens 恒 0。
+    // 时机安全：pipe 内核缓冲不丢；pi 在 rebindSession 后才挂 stdin reader。
+    sendPromptCommand(child, fullTask);
 
     // d. signal → proc.kill 监听（一次性，替代 session.abort）
     const onAbort = (): void => {
@@ -591,8 +678,43 @@ export async function runSpawn(
     const watchdog = setTimeout(() => child.kill("SIGTERM"), watchdogMs);
     watchdog.unref();
 
-    // stdout pump：逐行解析 → handleSdkEvent
+    // stdout pump：逐行解析 → handleSdkEvent / enqueueUiRequest
+    const enqueueUiRequest = createUiRequestQueue(child, ctx);
+    // FR-4: get_state RPC response 监听器（id → resolver）。
+    // parseSpawnLine 返回 kind:"response" 时，按 command+id 匹配 resolver。
+    const get_stateListeners = new Map<string, (data: unknown) => void>();
     let stdoutBuffer = "";
+
+    // [#18] 握手状态变量在 stdout handler 注册之前定义，消除"handler 闭包依赖同 tick
+    // 后续 const 初始化"的隐式顺序假设——handler 现在直接引用已初始化的变量，不靠
+    // "data 事件必然在下一 tick 才触发”的运行时不变式兜底。
+    const handshakeResultRef: { current?: GetStateResult } = {};
+    let settleHandshake: (() => void) | undefined;
+    const handshakeSettled: Promise<void> = new Promise((resolveSettled) => {
+      settleHandshake = resolveSettled;
+    });
+    /** 握手完成统一入口：记录结果 + 回填 sessionFile + 写 alive marker + settle。 */
+    const finishHandshake = (r: GetStateResult): void => {
+      handshakeResultRef.current = r;
+      // 仅当 header 未先行设置 record.sessionFile 时回填（RPC mode 路径）。
+      if (r.sessionFile && !record.sessionFile) {
+        record.sessionFile = r.sessionFile;
+        if (child.pid) {
+          try {
+            writeAliveMarker(r.sessionFile, {
+              pid: child.pid,
+              id: r.sessionId ?? record.id,
+              startedAt: Date.now(),
+            });
+          } catch {
+            // best-effort：alive marker 失败不影响执行
+          }
+        }
+      }
+      settleHandshake?.();
+      settleHandshake = undefined;
+    };
+
     child.stdout.on("data", (data: string) => {
       stdoutBuffer += data;
       const lines = stdoutBuffer.split("\n");
@@ -623,11 +745,59 @@ export async function runSpawn(
           if (opts.worktree && child.pid) {
             ctx.onWorktreePid?.(opts.worktree.branch, child.pid);
           }
+          // FR-4 加速路径：header 到达即 finishHandshake（header 已提供 sessionId，
+          // 足以推导 sessionFile + 兜底查找，无需等 get_state response）。
+          // [#25] buildSpawnArgs 固定 --mode rpc，RPC mode 不发 header——此分支当前不触发，
+          // 仅为未来 mode 回切（如 json mode 调试）保留：届时 header 先到可省去 get_state 握手等待。
+          if (settleHandshake) {
+            finishHandshake({
+              ...(record.sessionFile ? { sessionFile: record.sessionFile } : {}),
+              sessionId: parsed.header.id,
+            });
+          }
         } else if (parsed.kind === "event") {
+          const evt = parsed.event;
+          // agent_end（willRetry=false）= agent 自然完成。rpc mode 子进程不自动退出
+          //（runRpcMode 末尾 return new Promise(() => {}) 长驻等命令），需主动 kill
+          // 触发 close → runSpawn resolve。willRetry=true 时 agent 会重试，不能 kill。
+          if (isAgentEndEvt(evt)) {
+            if (!evt.willRetry) child.kill("SIGTERM");
+          }
           if (isSdkEvent(parsed.event)) handleSdkEvent(parsed.event);
+        } else if (parsed.kind === "response") {
+          // FR-4: RPC response handling — 匹配 get_state 响应
+          if (parsed.command === "get_state" && parsed.success && parsed.id) {
+            const resolver = get_stateListeners.get(parsed.id);
+            if (resolver) {
+              get_stateListeners.delete(parsed.id);
+              resolver(parsed.data);
+            }
+          }
+        } else if (parsed.kind === "extension_ui_request") {
+          // W3: 子进程发 UI 请求（ask_user）。入队 FIFO 串行处理，防止并发询问用户。
+          enqueueUiRequest(parsed.id, parsed.request);
         }
         // invalid 行忽略（stdout 可能有调试输出）
       }
+    });
+
+    // FR-4: get_state RPC 握手——spawn 后无条件启动。
+    // RPC mode（pi --mode rpc）不向 stdout 输出 header，record.sessionFile 无法靠 header
+    // 推导，必须通过 get_state RPC 查询子进程回填。json mode 下 header 会先到达触发提前
+    // resolve（加速路径），握手仍启动但无害——response 到达时外层已 resolve，resolver
+    // 因 resolved=true 直接 return。
+    //
+    // 时序：握手在 stdout pump（get_stateListeners 已就绪）之后启动。get_state 命令写入
+    // stdin，pi rebindSession 后读取并返回 response，经 stdout pump 匹配 resolver 触发 resolve。
+    // close handler await handshakeSettled，保证无论 task 多快结束，close 时 sessionFile 已回填。
+    // [#18] 握手状态变量（handshakeResultRef/settleHandshake/handshakeSettled/finishHandshake）
+    // 已在上方 stdout handler 注册前定义，此处直接发起握手。
+    void performGetStateHandshake(child, (id, resolver) => {
+      get_stateListeners.set(id, resolver);
+    }).then((r) => {
+      // header 加速路径下 settleHandshake 已 undefined，跳过（避免覆盖 header 结果）。
+      // 超时兜底（r 为空对象）也经此分支 settle，但 record.sessionFile 不回填。
+      if (settleHandshake) finishHandshake(r);
     });
 
     child.stderr.on("data", (data: string) => {
@@ -637,9 +807,19 @@ export async function runSpawn(
 
     // 等待子进程退出
     const exitCode = await new Promise<number>((resolve) => {
-      child.on("close", (code: number | null) => {
+      child.on("close", async (code: number | null) => {
         // [C1] 子进程已退出，从 orphan-tracking Set 移除（dispose 兜底无需再 kill 它）
         spawnedChildren.delete(child);
+        // FR-4: 清理 get_state 监听器（子进程已退出，无更多 response）
+        get_stateListeners.clear();
+        // FR-4: 子进程已退出，get_state response 不会再来。若握手仍未 settle，立即放弃
+        //（record.sessionFile 未回填则走 findSessionFileByHeaderId 兜底）。避免子进程快速
+        // 失败/退出场景下 close handler 阻塞等待握手内部 6s 超时。
+        settleHandshake?.();
+        settleHandshake = undefined;
+        // await 立即返回（上方已 settle）：保证 header 加速路径或 get_state response 已
+        // 完成的回填结果对后续 identity 写入可见。
+        await handshakeSettled;
         // 处理 stdout 末尾残留行
         if (stdoutBuffer.trim()) {
           const parsed = parseSpawnLine(stdoutBuffer);
@@ -664,12 +844,16 @@ export async function runSpawn(
     // session.jsonl 由子进程写入，父进程在子进程退出后（写入完成）補写身份条目。
     // reconstructFromFile 依赖 IDENTITY_CUSTOM_TYPE custom entry 重建 record 身份，
     // 缺失则 /subagents list 磁盘源为空（终态 record 全丢失）。[回归修复]
-    if (sessionHeader && record.sessionFile) {
-      // 兜底：deriveSessionFilePath 推导的路径可能不存在（pi 命名规则变化），
+    if (record.sessionFile) {
+      // 兜底：deriveSessionFilePath 推导或握手返回的路径可能不存在（pi 命名规则变化），
       // 用 sessionId 后缀匹配实际文件。匹配到则修正 record.sessionFile。
+      // sessionId 来源：header（json mode）优先，其次握手结果（RPC mode）。
       if (!fs.existsSync(record.sessionFile)) {
-        const actual = findSessionFileByHeaderId(sessionDir, sessionHeader.id);
-        if (actual) record.sessionFile = actual;
+        const lookupId = sessionHeader?.id ?? handshakeResultRef.current?.sessionId;
+        if (lookupId) {
+          const actual = findSessionFileByHeaderId(sessionDir, lookupId);
+          if (actual) record.sessionFile = actual;
+        }
       }
       // 补写 identity custom entry（子进程已退出，append 安全）。
       if (fs.existsSync(record.sessionFile)) {

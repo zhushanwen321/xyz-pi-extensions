@@ -1,0 +1,65 @@
+{
+  "testCases": [
+    {
+      "id": "TC-W1",
+      "layer": "mock",
+      "priority": "P0",
+      "scenario": "子进程以 --mode rpc 启动，stdout 解析 response 行",
+      "steps": "1. 调 buildSpawnArgs 验证 --mode rpc 参数 2. 模拟 rpc response JSON 行喂给 parseSpawnLine 3. 验证 kind=response 类型守卫",
+      "expected": {
+        "text": "buildSpawnArgs 输出含 --mode rpc; parseSpawnLine 正确分类 response 行（success+error）"
+      },
+      "executor": "vitest",
+      "redCheck": true,
+      "requiresScreenshot": false,
+      "dependsOn": []
+    },
+    {
+      "id": "TC-W2",
+      "layer": "mock",
+      "priority": "P0",
+      "scenario": "extension_ui_request 从 stdout 解析后转发到主 agent UI",
+      "steps": "1. 模拟子进程 stdout 输出 extension_ui_request JSON 2. 验证 parsed.kind=extension_ui_request 3. 验证 questions/context/marker 被正确提取",
+      "expected": {
+        "text": "extension_ui_request 正确解析为 extension_ui_request kind，questions/context 被提取"
+      },
+      "executor": "vitest",
+      "redCheck": true,
+      "requiresScreenshot": false,
+      "dependsOn": []
+    },
+    {
+      "id": "TC-W3",
+      "layer": "mock",
+      "priority": "P0",
+      "scenario": "多个 extension_ui_request 按序排队处理",
+      "steps": "1. 连续发 2 个 extension_ui_request 2. 第一个未 resolve 前第二个不调用 uiRequestHandler 3. 第一个 resolve 后第二个自动触发",
+      "expected": {
+        "text": "队列 FIFO 保证串行询问用户"
+      },
+      "executor": "vitest",
+      "redCheck": true,
+      "requiresScreenshot": false,
+      "dependsOn": ["TC-W2"]
+    },
+    {
+      "id": "TC-E1",
+      "layer": "real",
+      "priority": "P0",
+      "scenario": "真实 subagent 调用 ask_user 完整链路",
+      "steps": "1. 启动 subagent with ask_user tool 2. subagent 调用 ask_user 3. 验证主 agent 收到 UI 请求 4. 模拟用户回答 5. 验证 subagent 收到回答",
+      "expected": {
+        "text": "ask_user 返回用户选择的答案"
+      },
+      "executor": "shell",
+      "redCheck": false,
+      "requiresScreenshot": true,
+      "dependsOn": []
+    }
+  ],
+  "testRunner": {
+    "mode": "nodejs",
+    "command": "pnpm --filter @zhushanwen/pi-subagent-workflow test",
+    "cwd": "."
+  }
+}

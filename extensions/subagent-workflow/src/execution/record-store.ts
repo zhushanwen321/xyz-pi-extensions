@@ -12,6 +12,7 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 
 import { getCurrentActivity, getDisplayItems, getEventLog, markReconstructedStatus, snapshot as toSnapshot } from "./execution-record.ts";
+import type { ManifestRecord, ManifestStore } from "./manifest-store.ts";
 import { reconstructFromFile } from "./session-reconstructor.ts";
 import type {
   ExecutionRecord,
@@ -37,13 +38,37 @@ const STATUS_PRIORITY: Record<ExecutionStatus, number> = {
 };
 
 /** .alive sidecar 的 24 小时软超时（超过此时间即使 pid 存活也判 crashed）。 */
-const ALIVE_SOFT_TIMEOUT_MS = 86_400_000; // 24h in ms
+const ALIVE_SOFT_TIMEOUT_MS = 3_600_000; // 1h in ms (reduced from 24h to minimize PID reuse window)
+
+/**
+ * manifest status → ExecutionStatus 运行时守卫映射。
+ *
+ * manifest 写 running/completed/failed/cancelled 四态（ManifestRecord.status union），但磁盘
+ * 文件可能陈旧（含历史 "error" 值、被外部篡改、或意外出现 crashed 值）。越界值返回 null——
+ * manifestToSubagent 据此返回 null，collectRecords 跳过损坏 record 并 console.warn，不因单个
+ * 坏文件崩溃，也不把损坏 record 错误降级为 failed（failed 会触发重试/告警，是误报）。
+ *
+ * 提取为纯函数：同时解决 PR#85 反射问题（三元 + `as ExecutionStatus` cast）。
+ */
+function mapManifestStatus(s: string): ExecutionStatus | null {
+  if (s === "completed") return "done";
+  if (s === "failed") return "failed";
+  if (s === "running") return "running";
+  if (s === "cancelled") return "cancelled";
+  return null; // 越界=数据损坏（含历史 "error"、意外 crashed 值），返回 null 让调用方跳过
+}
 
 /** store 变更监听器（返回取消订阅函数）。 */
 export type ChangeListener = () => void;
 
 /** status 过滤模式（collectRecords 的核心能力参数）。 */
 export type StatusFilter = "running" | "all";
+
+/** Pi ExtensionAPI 的最小子集（仅 collectRecords 跳过损坏 manifest 时上报用）。
+ *  解构为局部类型，避免与 subagent-service 的 PiLike 循环依赖。 */
+export type RecordStorePi = {
+    appendEntry?: (customType: string, data: unknown) => void;
+} | null | undefined;
 
 // ============================================================
 // RecordStore
@@ -62,11 +87,31 @@ export class RecordStore {
   private readonly records = new Map<string, ExecutionRecord>();
   private readonly listeners = new Set<ChangeListener>();
   private _disposed = false;
+  /** Pi handle（用于 appendEntry 上报损坏 manifest）。构造时可空，setPi() 后续注入。
+   *  显式存为字段而非构造参数 readonly：setPi 需要写权限。 */
+  private pi: RecordStorePi = null;
 
   /** 重建缓存：sessionFile → SubagentRecord。notifyChange 时失效。 */
   private reconCache: Map<string, SubagentRecord> | undefined;
 
-  constructor(private readonly sessionsDir: string) {}
+  constructor(
+    private readonly sessionsDir: string,
+    private readonly manifestStore?: ManifestStore,
+    /** Pi 入口（注入 appendEntry 用于上报损坏 manifest）。
+     *  SubagentService 构造时 this.pi 尚未注入（session_start 之前），传 undefined 兜底；
+     *  后续通过 setPi() 注入（见下）。允许 null = 兼容 PiLike 字段类型。 */
+    pi?: RecordStorePi,
+  ) {
+    this.pi = pi ?? null;
+  }
+
+  /** session_start 后由 SubagentService.initSession 调，注入真实 Pi handle。
+   *  设计为独立方法而非要求构造时必传——RecordStore 在 SubagentService 构造时即建
+   *  （与 sessionsDir/manifestStore 一同初始化），但 this.pi 此时尚未注入。
+   *  后续构造期外的 appendEntry 上报才有意义。 */
+  setPi(pi: RecordStorePi): void {
+    this.pi = pi ?? null;
+  }
 
   /** 注册新 record。触发 onChange。 */
   register(record: ExecutionRecord): void {
@@ -152,6 +197,32 @@ export class RecordStore {
     // 1. 磁盘源（重建终态 record）。 reconstructAll 已按 rootSessionFilter 过滤。
     for (const rec of this.reconstructAll(rootSessionFilter)) {
       byId.set(rec.id, rec);
+    }
+
+    // 1.5 FR-8: manifest 源补充 orphan 记录。
+    // 优先级：内存 > 磁盘重建 > manifest。manifest 仅补充 session.jsonl 重建失败的记录。
+    if (this.manifestStore) {
+      for (const manifest of this.readManifestsSync()) {
+        if (byId.has(manifest.id)) continue; // 已被磁盘/内存源覆盖
+        if (rootSessionFilter !== undefined && manifest.rootSessionId !== rootSessionFilter) continue;
+        const rec = RecordStore.manifestToSubagent(manifest);
+        if (!rec) {
+          // manifest status 越界=数据损坏（含历史 "error"、意外 crashed 值）：跳过而非降级 failed，
+          // 避免损坏 record 被误显示为 failed（触发错误重试/告警）。
+          // 双通道上报：console.warn 给开发者（终端调试）；pi.appendEntry 给用户（session 内可见，
+          // 即使退出后也能从 session.jsonl 复盘事故原因）。SubagentService 构造时 pi 未注入
+          // （session_start 之前），appendEntry 走可选链安全降级。
+          console.warn("[subagents] skip manifest with invalid status:", manifest.id, manifest.status);
+          this.pi?.appendEntry?.("subagent:manifest-invalid-status", {
+            id: manifest.id,
+            status: manifest.status,
+            rootSessionId: manifest.rootSessionId,
+            agentName: manifest.agentName,
+          });
+          continue;
+        }
+        byId.set(rec.id, rec);
+      }
     }
 
     // 2. 内存源覆盖（running record 优先——它是活态，比磁盘重建更新鲜）。同样按 session 过滤。
@@ -321,6 +392,41 @@ export class RecordStore {
     const pdiff = STATUS_PRIORITY[a.status] - STATUS_PRIORITY[b.status];
     if (pdiff !== 0) return pdiff;
     return b.startedAt - a.startedAt; // 新→旧
+  }
+
+  /** FR-8: 同步读取所有 manifest 记录（封装 ManifestStore.listAllSync，消除反射访问）。 */
+  private readManifestsSync(): readonly ManifestRecord[] {
+    return this.manifestStore?.listAllSync() ?? [];
+  }
+
+  /** FR-8: ManifestRecord → SubagentRecord（manifest 源投影）。
+   *  task/slug/model 从 manifest 真实值投影（配合 writeManifest 补字段），缺失兜底空串。
+   *  status 越界（mapManifestStatus 返回 null）时返回 null，由 collectRecords 跳过。 */
+  private static manifestToSubagent(m: ManifestRecord): SubagentRecord | null {
+    const status = mapManifestStatus(m.status);
+    if (status === null) return null;
+    return {
+      id: m.id,
+      agent: m.agentName,
+      task: m.task ?? "",
+      slug: m.slug ?? "",
+      status,
+      mode: "background" as const,
+      startedAt: m.createdAt,
+      rootSessionId: m.rootSessionId || undefined,
+      parentRecordId: undefined,
+      depth: 0,
+      endedAt: m.completedAt,
+      turns: 0,
+      totalTokens: 0,
+      model: m.model ?? "",
+      thinkingLevel: undefined,
+      eventLog: [],
+      displayItems: [],
+      result: undefined,
+      error: status === "failed" ? "manifest record" : undefined,
+      sessionFile: m.sessionFile,
+    };
   }
 
   /** ExecutionRecord → SubagentRecord（内存源投影）。 */

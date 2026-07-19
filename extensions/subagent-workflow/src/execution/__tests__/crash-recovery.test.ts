@@ -89,6 +89,8 @@ vi.mock("../model-config-service.ts", () => ({
 vi.mock("../subagent-service.ts", () => ({
   SubagentService: class {
     initSession = vi.fn();
+    // W3: index.ts session_start 注入 UI handler 时调用
+    setUiRequestHandler = vi.fn();
   },
   getSubagentService: () => null,
   setSubagentService: vi.fn(),
@@ -119,10 +121,10 @@ vi.mock("../../interface/commands.ts", () => ({
 import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
 
 import subagentsExtension from "../../index.ts";
-import { WorkflowRun } from "../../orchestration/models/workflow-run.ts";
 import { Budget } from "../../orchestration/models/budget.ts";
 import { Trace } from "../../orchestration/models/trace.ts";
 import type { WorkflowRun as WorkflowRunType } from "../../orchestration/models/workflow-run.ts";
+import { WorkflowRun } from "../../orchestration/models/workflow-run.ts";
 
 // ── helpers ──
 
@@ -195,6 +197,8 @@ function createMockPi(overrides: Record<string, unknown> = {}): {
 function createMockCtx(): Record<string, unknown> {
   return {
     cwd: "/home/user/project",
+    // [Wave1 #21] mode 必填（与 SDK ExtensionContext 契约一致）；默认 tui。
+    mode: "tui",
     modelRegistry: {
       getAvailable: () => [],
       find: () => undefined,

@@ -34,9 +34,9 @@ vi.mock("../orchestration/lifecycle.ts", () => ({
 // 被 mock 的模块——import 路径与被测源文件一致，确保 vitest 拦截同一模块实例。
 // 使用 import 副作用顺序：vi.mock 在文件顶部提升，此处 import 拿到的是 mock 版本。
 import { getSubagentService } from "../execution/subagent-service.ts";
-import { abortRun, pauseRun } from "../orchestration/lifecycle.ts";
 import { registerWorkflowsCommand } from "../interface/commands.ts";
 import { registerSubagentsCommand } from "../interface/subagents.ts";
+import { abortRun, pauseRun } from "../orchestration/lifecycle.ts";
 
 // ── 类型辅助 ────────────────────────────────────────────────
 

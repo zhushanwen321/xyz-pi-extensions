@@ -72,8 +72,8 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 
-import { encodeCwd } from "../path-encoding.ts";
 import { isProcessAlive } from "../alive-store.ts";
+import { encodeCwd } from "../path-encoding.ts";
 import { WorktreeManager } from "../worktree-manager.ts";
 
 const mockExec = vi.mocked(execFileSync);

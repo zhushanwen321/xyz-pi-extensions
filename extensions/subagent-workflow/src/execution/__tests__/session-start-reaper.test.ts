@@ -58,10 +58,12 @@ vi.mock("../session-file-gc.ts", () => ({
 }));
 
 // mock subagent-service：避免真正构造 SubagentService（它依赖 ModelConfigService 等）
-const { mockInitModel, mockInitSession, mockSetModelConfigService, mockSetSubagentService, capturedConstructorArg } =
+const { mockInitModel, mockInitSession, mockSetUiRequestHandler, mockSetModelConfigService, mockSetSubagentService, capturedConstructorArg } =
   vi.hoisted(() => ({
     mockInitModel: vi.fn(),
     mockInitSession: vi.fn(),
+    // W3: index.ts session_start 注入 UI handler 时调用
+    mockSetUiRequestHandler: vi.fn(),
     mockSetModelConfigService: vi.fn(),
     mockSetSubagentService: vi.fn(),
     capturedConstructorArg: { current: undefined as unknown },
@@ -80,6 +82,8 @@ vi.mock("../model-config-service.ts", () => ({
 vi.mock("../subagent-service.ts", () => ({
   SubagentService: class {
     initSession = mockInitSession;
+    // W3: index.ts session_start 注入 UI handler 时调用
+    setUiRequestHandler = mockSetUiRequestHandler;
     constructor(init: unknown) {
       capturedConstructorArg.current = init;
     }
@@ -136,6 +140,8 @@ function createMockPi(overrides: Record<string, unknown> = {}): {
 function createMockCtx(overrides: Record<string, unknown> = {}): Record<string, unknown> {
   return {
     cwd: "/home/user/project",
+    // [Wave1 #21] mode 必填（与 SDK ExtensionContext 契约一致）；默认 tui。
+    mode: "tui",
     modelRegistry: { getAvailable: () => [], find: () => undefined, hasConfiguredAuth: () => false },
     model: undefined,
     sessionManager: {
