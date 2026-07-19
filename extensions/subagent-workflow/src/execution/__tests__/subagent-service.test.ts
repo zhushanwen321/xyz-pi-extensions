@@ -21,6 +21,7 @@ import { createRecord } from "../execution-record.ts";
 import { ModelConfigService } from "../model-config-service.ts";
 import type { ModelInfo, ModelRegistryLike } from "../model-resolver.ts";
 import type { RecordStore } from "../record-store.ts";
+import type { UiRequest, UiRequestHandler } from "../dialog-queue.ts";
 import type { PiLike } from "../subagent-service.ts";
 import { getSubagentService, setSubagentService,SubagentService } from "../subagent-service.ts";
 import type { ExecutionRecord } from "../types.ts";
@@ -311,6 +312,75 @@ describe("SubagentService", () => {
       expect(syncRecord.controller).toBeUndefined();
 
       expect(() => service.dispose()).not.toThrow();
+    });
+  });
+
+  // ============================================================
+  // dispose uiRequestHandler stub（dispose-cleanup Minor 优化1）
+  // ============================================================
+  //
+  // [背景] Pi 单进程 session 串行接管。session A shutdown 发 SIGTERM 后、子进程彻底
+  // close 前（graceful shutdown 窗口几十~几百 ms），子进程的 trailing extension_ui_request
+  // 仍会被父进程 pump 解析，调到 A 的 handler 闭包（仍持有 A 的 ctx）。旧实现 dispose 不清
+  // uiRequestHandler，该闭包触发 ui-request-queue.ts catch 分支打 `[subagents] uiRequestHandler
+  // threw` 误导性 console.error。dispose 现注入 stub（始终返回 {cancelled:true}），让 trailing
+  // ui_request 干净降级，不再走旧 handler 闭包。
+  //
+  // 被测点是 SubagentService.dispose 内的 setUiRequestHandler(stub)。uiRequestHandler 是
+  // private 字段，用 Reflect.get 取（与 R0-D 块访问 store 同模式）。
+
+  describe("dispose uiRequestHandler stub (dispose-cleanup)", () => {
+    /** 从 service 取出 private uiRequestHandler（trailing ui_request 实际调用入口）。 */
+    function getHandler(service: SubagentService): UiRequestHandler | undefined {
+      return Reflect.get(service, "uiRequestHandler") as UiRequestHandler | undefined;
+    }
+
+    /** 最小 UiRequest（method 无关紧要——stub 不论 method 一律返回 cancelled）。 */
+    function makeTrailingRequest(id: string): UiRequest {
+      return { method: "notify", id };
+    }
+
+    it("dispose 后 uiRequestHandler 被 stub 替换，调用返回 {cancelled:true} 不抛错", async () => {
+      const service = new SubagentService({ cwd: agentDir, modelService });
+      service.initSession({ pi: makePi(), sessionId: "s1" });
+
+      service.dispose();
+
+      const handler = getHandler(service);
+      expect(handler).toBeDefined();
+      // 模拟 dispose 后子进程 trailing ui_request 被父进程 pump 调到 handler
+      await expect(handler!(makeTrailingRequest("trailing-1"))).resolves.toEqual({ cancelled: true });
+    });
+
+    it("dispose stub 覆盖旧 handler：trailing ui_request 不产生 [subagents] console.error 噪声", async () => {
+      // 模拟 session A 的真实 handler 闭包——在 ctx 已 disposed 后调用会抛错
+      const staleHandler: UiRequestHandler = async () => {
+        throw new Error("stale ctx");
+      };
+      const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+
+      const service = new SubagentService({ cwd: agentDir, modelService });
+      service.initSession({ pi: makePi(), sessionId: "s1" });
+      service.setUiRequestHandler(staleHandler);
+
+      service.dispose();
+
+      // dispose 后 handler 应被 stub 替换，不再是 staleHandler
+      const handler = getHandler(service);
+      expect(handler).not.toBe(staleHandler);
+
+      // trailing ui_request 调到的是 stub，不抛错、返回 cancelled
+      await expect(handler!(makeTrailingRequest("trailing-2"))).resolves.toEqual({ cancelled: true });
+
+      // 关键价值断言：无 "[subagents] uiRequestHandler threw" 误导性噪声
+      // （旧实现 dispose 不清 handler 时，trailing ui_request 走 staleHandler 抛错 →
+      //   ui-request-queue.ts catch 打该日志。stub 覆盖后该路径不再触发。）
+      const subagentsErrors = errorSpy.mock.calls.filter(
+        (args: unknown[]) => typeof args[0] === "string" && args[0].includes("[subagents]"),
+      );
+      expect(subagentsErrors).toHaveLength(0);
+
+      errorSpy.mockRestore();
     });
   });
 

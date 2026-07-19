@@ -56,7 +56,7 @@ vi.mock("../temp-prompt.ts", () => ({
   cleanupTempPrompt: vi.fn(async () => {}),
 }));
 
-import { killAllSpawnedChildren, runSpawn } from "../session-runner.ts";
+import { killAllSpawnedChildren, runSpawn, spawnedChildren } from "../session-runner.ts";
 import {
   emitStdoutLine,
   type FakeChild,
@@ -182,6 +182,58 @@ describe("runSpawn", () => {
       expect(n).toBeGreaterThanOrEqual(2);
       expect(c1.killed).toBe(true);
       expect(c2.killed).toBe(true);
+
+      // 收尾
+      for (const { child, promise } of [
+        { child: c1, promise: p1 },
+        { child: c2, promise: p2 },
+      ]) {
+        emitStdoutLine(child, sessionHeader());
+        child.stdout.end();
+        child.emit("close", 143);
+        const r = await promise;
+        expect(r.success).toBe(true);
+      }
+    });
+
+    // [dispose-cleanup Minor 优化2] killAllSpawnedChildren 末尾 clear spawnedChildren Set。
+    // 防主进程崩溃/close 事件漏触发时 Set 无限增长。正常路径 close 事件会 delete（保留 per-child
+    // 精细清理语义）；killAllSpawnedChildren 是 dispose 全量兼底。
+    it("killAllSpawnedChildren 后 spawnedChildren Set 被 clear（size===0）", async () => {
+      // 前置清理：即他测试可能残留的 child（close 未触发场景）
+      killAllSpawnedChildren();
+      expect(spawnedChildren.size).toBe(0);
+
+      // spawn 两个未 close 的 child（模拟 close 事件漏触发的极端累积场景）
+      const rec1 = makeRecord();
+      const p1 = runSpawn(rec1, "Task: clear-1", makeOpts(), makeCtx());
+      await waitForSpawn();
+      const c1 = lastSpawnedChild();
+
+      const beforeCount = mockSpawn.mock.results.length;
+      const rec2 = makeRecord();
+      const p2 = runSpawn(rec2, "Task: clear-2", makeOpts(), makeCtx());
+      const start = Date.now();
+      while (mockSpawn.mock.results.length < beforeCount + 1) {
+        if (Date.now() - start > 1000) throw new Error("second spawn not called");
+        await new Promise((r) => setTimeout(r, 5));
+      }
+      const c2 = lastSpawnedChild();
+
+      // 两个 child 都在 Set 中
+      expect(spawnedChildren.size).toBe(2);
+
+      // dispose 兼底：kill + clear
+      const n = killAllSpawnedChildren();
+      expect(n).toBe(2);
+      expect(c1.killed).toBe(true);
+      expect(c2.killed).toBe(true);
+      // Set 被 clear（兑底防泄漏）
+      expect(spawnedChildren.size).toBe(0);
+
+      // 再次调用：Set 已空，返回 0（不会重复 kill 已 kill 的 child）
+      const n2 = killAllSpawnedChildren();
+      expect(n2).toBe(0);
 
       // 收尾
       for (const { child, promise } of [

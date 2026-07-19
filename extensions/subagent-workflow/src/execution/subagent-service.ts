@@ -51,6 +51,23 @@ import { DEFAULT_AGENT_NAME } from "./types.ts";
 import { registerGlobalObservability, UiRequestObservability } from "./ui-request-observability.ts";
 import { WorktreeManager } from "./worktree-manager.ts";
 
+/** dispose 后注入的 stub UI 请求 handler。
+ *
+ * [背景] Pi 单进程 session 串行接管。session A shutdown 时 SIGTERM 子进程后、
+ * 子进程彻底 close 前（pi 子进程 trap SIGTERM 做 graceful shutdown，窗口几十~几百 ms），
+ * 子进程的 trailing extension_ui_request 仍可能被父进程 pump 解析，调到 A 的 handler 闭包。
+ * 若 dispose 不清 uiRequestHandler，旧 handler 闭包仍持有 A 的 ctx，触发
+ * ui-request-queue.ts 的 catch 分支打 `[subagents] uiRequestHandler threw` 误导性
+ * console.error（看起来像 bug，实际是预期竞态；三层兜底已确保功能正确）。
+ *
+ * stub 始终返回 {cancelled:true}，不调 ctx.ui、不捕获任何 ctx，让 trailing ui_request
+ * 干净降级为 cancelled（等价于子进程主动取消）。
+ *
+ * 不置 undefined —— 那会让 trailing ui_request 走 ui-request-queue.ts 的 handler-missing
+ * 分支触发 notifyMissingHandlerGlobal warn，噪声性质从 threw-error 变 missing-handler，
+ * 没真正解决。 */
+const disposedUiRequestStub: UiRequestHandler = () => Promise.resolve({ cancelled: true });
+
 /** Pi ExtensionAPI 的最小接口（duck-typed）。
  *  subagent-service 直接调 pi.sendMessage 发 background 完成通知（BgNotifier 滑动窗口合并），
  *  不委托 pending-notifications EventBus 中继——后者只管 registry 不参与通知发送。 */
@@ -283,6 +300,10 @@ export class SubagentService {
   dispose(): void {
     if (this._disposed) return;
     this._disposed = true;
+    // [dispose stub] 第一时间换 stub，防 trailing ui_request 调到 stale handler 闭包
+    // （仍持有 disposed session 的 ctx）产生误导性 console.error。stub 干净降级为 cancelled。
+    // 必须在 emit/abort 之前——这些步骤可能同步触发 trailing pump。
+    this.setUiRequestHandler(disposedUiRequestStub);
     // [T2 AC-4.3 双重记账一致性] 为每个 running record emit pending:unregister(reason=failed)，
     // 让 pending-notifications 清理 registry entry，避免进程退出后两侧状态不一致。
     // 必须在 abortRunningControllers 之前——此时 record 仍 running，listRunning 能取到。

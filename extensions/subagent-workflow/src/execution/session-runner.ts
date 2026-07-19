@@ -136,7 +136,9 @@ The \`ask_user\` tool is available in this session. When you call \`ask_user\`, 
 // 之后，遍历所有仍存活的子进程（含 sync）发 SIGTERM。正常退出路径（子进程 close）会从 Set 移除，
 // 不受影响。background 子进程可能被 controller.abort 路径先 kill 一次，再被本遍历 kill 一次
 // （对已退出的 child.kill 返回 false，无害）。
-const spawnedChildren = new Set<ChildProcess>();
+//
+// [export] 测试可观测（断言 dispose 后 size===0）。业务代码误外部修改。
+export const spawnedChildren = new Set<ChildProcess>();
 
 /**
  * kill 所有未退出的 spawned 子进程（dispose 兜底用）。
@@ -168,6 +170,11 @@ export function killAllSpawnedChildren(signal: NodeJS.Signals = "SIGTERM"): numb
       // best-effort：单个 kill 失败不影响其他子进程
     }
   }
+  // dispose 全量清理；正常路径的 close/error 事件 delete 保留作 per-child 精细清理，
+  // 这里兑底防 close 事件漏触发的极端累积（主进程崩溃后 close 回调可能不再触发，
+  // 不 clear 则下次 dispose 会重复向已 kill 的 child 发信号——虽然 killed=true 跳过，
+  // 但 Set 无限增长泄漏内存）。
+  spawnedChildren.clear();
   return n;
 }
 
