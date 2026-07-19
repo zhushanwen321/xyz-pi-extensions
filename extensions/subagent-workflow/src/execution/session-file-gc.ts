@@ -44,8 +44,11 @@ export function maybeCleanupExpiredSessionFiles(agentDir: string, cwd: string): 
   }
 }
 
-/** 递归扫描目录，unlink 超 TTL 的 .jsonl 文件及其 .cancelled sidecar。 */
-function walkAndClean(dir: string, now: number): void {
+/** 递归扫描目录，unlink 超 TTL 的 .jsonl 文件及其 .cancelled sidecar。
+ *  [F2] 进入名为 records 的子目录时，额外清理超 TTL 的 manifest .json（跳过 .tmp.——
+ *  recoverTmpFiles 同步处理）。allowManifestJson 仅由父调用按目录名开启，其他位置
+ *  （如 subagents/worktrees.json）不匹配 .json，避免误删 worktree reaper 状态文件。 */
+function walkAndClean(dir: string, now: number, allowManifestJson = false): void {
   let entries: fs.Dirent[];
   try {
     entries = fs.readdirSync(dir, { withFileTypes: true });
@@ -56,7 +59,26 @@ function walkAndClean(dir: string, now: number): void {
   for (const entry of entries) {
     const full = path.join(dir, entry.name);
     if (entry.isDirectory()) {
-      walkAndClean(full, now);
+      // 只在进入名为 records 的子目录时打开 manifest .json 清理。
+      // records 在 <enc>/records/ 下递归自动覆盖；其他位置（如 subagents/worktrees.json）
+      // 不能匹配 .json——否则会误删 worktree reaper 依赖的状态文件。
+      walkAndClean(full, now, entry.name === "records");
+    } else if (
+      allowManifestJson &&
+      entry.name.endsWith(".json") &&
+      // 跳过 .tmp.：recoverTmpFiles（session_start）同步处理 tmp，GC 不重复。
+      // 不校验内容——30 天 mtime 已是强 orphan 信号，扩展名 + 文件名足够。
+      !entry.name.includes(".tmp.")
+    ) {
+      try {
+        const stat = fs.statSync(full);
+        if (now - stat.mtimeMs > TTL_MS) {
+          fs.unlinkSync(full);
+        }
+      } catch (_e) {
+        // 文件可能已被删除，忽略
+        void _e;
+      }
     } else if (entry.name.endsWith(".jsonl")) {
       try {
         const stat = fs.statSync(full);

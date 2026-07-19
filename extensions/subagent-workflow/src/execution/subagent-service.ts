@@ -3,7 +3,6 @@
 // session_start 时经 initSession 注入 pi；modelRegistry/entries 归 ModelConfigService.initModel。
 
 import { AsyncLocalStorage } from "node:async_hooks";
-import * as path from "node:path";
 
 import type { ExtensionMode } from "@mariozechner/pi-coding-agent";
 
@@ -27,7 +26,7 @@ import type { ModelConfigService } from "./model-config-service.ts";
 import type { AgentConfig, ModelInfo, ResolvedModel } from "./model-resolver.ts";
 import type { BgNotifyRecord, NotifierHost } from "./notifier.ts";
 import { BgNotifier } from "./notifier.ts";
-import { getSubagentSessionDir } from "./path-encoding.ts";
+import { getSubagentRecordsDir, getSubagentSessionDir } from "./path-encoding.ts";
 import type { StatusFilter } from "./record-store.ts";
 import { RecordStore } from "./record-store.ts";
 import { MAX_FORK_DEPTH } from "./session-context-resolver.ts";
@@ -203,7 +202,7 @@ export class SubagentService {
     this.pool = new DefaultConcurrencyPool(this.modelService.getGlobalConfig().maxConcurrent);
     this.worktreeManager = new WorktreeManager(this.modelService.getAgentDir());
     const sessionsDir = getSubagentSessionDir(this.modelService.getAgentDir(), init.cwd);
-    const recordsDir = path.join(this.modelService.getAgentDir(), "records");
+    const recordsDir = getSubagentRecordsDir(this.modelService.getAgentDir(), init.cwd);
     this.manifestStore = new ManifestStore(recordsDir);
     this.store = new RecordStore(sessionsDir, this.manifestStore);
     this.notifier = new BgNotifier(this.piAdapter());

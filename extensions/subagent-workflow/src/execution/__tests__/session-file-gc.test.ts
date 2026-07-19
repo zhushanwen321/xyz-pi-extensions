@@ -244,4 +244,50 @@ describe("maybeCleanupExpiredSessionFiles", () => {
     expect(fs.existsSync(finalized)).toBe(false);
     expect(fs.existsSync(alive)).toBe(false);
   });
+
+  // ---- [F2] manifest .json 清理（仅 records 子目录内）----
+  // records 目录布局：subagents/<enc>/records/<id>.json（D-004 cwd 物理隔离）。
+  // allowManifestJson 仅在名为 records 的子目录内打开，防止误删 enc 外层的
+  // worktrees.json（worktree reaper 依赖的状态文件）。
+
+  it("[F2] deletes expired manifest .json inside records/ subdir", () => {
+    forceCleanupTrigger();
+    const manifest = createSessionFile(
+      path.join("--Users-x-proj--", "records", "rec-1.json"),
+      31,
+    );
+    maybeCleanupExpiredSessionFiles(tmpAgentDir, "/cwd");
+    expect(fs.existsSync(manifest)).toBe(false);
+  });
+
+  it("[F2] preserves manifest .json younger than TTL inside records/", () => {
+    forceCleanupTrigger();
+    const manifest = createSessionFile(
+      path.join("--Users-x-proj--", "records", "rec-young.json"),
+      5,
+    );
+    maybeCleanupExpiredSessionFiles(tmpAgentDir, "/cwd");
+    expect(fs.existsSync(manifest)).toBe(true);
+  });
+
+  it("[F2] CRITICAL: does NOT delete worktrees.json at subagents/ root (regression)", () => {
+    // 破坏性风险点：worktrees.json 在 agentDir/subagents/worktrees.json（enc 外层第一层）。
+    // 暴力匹配所有 .json 会误删 → worktree reaper 失效。allowManifestJson 只在名为 records
+    // 的子目录内打开，根层的 worktrees.json 必须保留。
+    forceCleanupTrigger();
+    const worktrees = createSessionFile("worktrees.json", 31);
+    maybeCleanupExpiredSessionFiles(tmpAgentDir, "/cwd");
+    expect(fs.existsSync(worktrees)).toBe(true);
+  });
+
+  it("[F2] preserves .json.tmp.* inside records/ (recoverTmpFiles owns them)", () => {
+    // 跳过 .tmp.：session_start 的 recoverTmpFiles 同步处理 tmp，GC 不重复。
+    forceCleanupTrigger();
+    const tmp = createSessionFile(
+      path.join("--Users-x-proj--", "records", "rec-2.json.tmp.123"),
+      31,
+    );
+    maybeCleanupExpiredSessionFiles(tmpAgentDir, "/cwd");
+    expect(fs.existsSync(tmp)).toBe(true);
+  });
 });

@@ -32,3 +32,21 @@ export function getSubagentSessionDir(agentDir: string, mainCwd: string): string
   // 本分支未发布，回退到既有布局即无需迁移、无数据丢失。
   return path.join(agentDir, "subagents", encodeCwd(mainCwd), "sessions");
 }
+
+/**
+ * 获取 subagent records（manifest）持久化目录路径。
+ *
+ * 与 getSubagentSessionDir 同用 encodeCwd(mainCwd)，保证 records 与 sessions 在同一
+ * <enc> 段下物理相邻——worktree 场景三者恒等（init.cwd /
+ * buildSessionRunnerContext.mainCwd / record.worktreeHandle.mainCwd 指向同一主 cwd）。
+ *
+ * D-004 同源：用主 cwd 编码做物理隔离，使 session-file-gc 按 <enc>/records/ 子目录
+ * 匹配 manifest .json 时天然限定在当前 cwd 范围内，不会越界清理其他 cwd 的 manifest。
+ *
+ * @param agentDir agent 配置目录（如 ~/.pi/agent）
+ * @param mainCwd 主 agent 的工作目录（非 subagent 的 effectiveCwd）
+ * @returns records 持久化目录绝对路径
+ */
+export function getSubagentRecordsDir(agentDir: string, mainCwd: string): string {
+  return path.join(agentDir, "subagents", encodeCwd(mainCwd), "records");
+}
