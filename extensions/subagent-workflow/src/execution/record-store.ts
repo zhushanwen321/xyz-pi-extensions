@@ -64,6 +64,12 @@ export type ChangeListener = () => void;
 /** status 过滤模式（collectRecords 的核心能力参数）。 */
 export type StatusFilter = "running" | "all";
 
+/** Pi ExtensionAPI 的最小子集（仅 collectRecords 跳过损坏 manifest 时上报用）。
+ *  解构为局部类型，避免与 subagent-service 的 PiLike 循环依赖。 */
+export type RecordStorePi = {
+    appendEntry?: (customType: string, data: unknown) => void;
+} | null | undefined;
+
 // ============================================================
 // RecordStore
 // ============================================================
@@ -81,6 +87,9 @@ export class RecordStore {
   private readonly records = new Map<string, ExecutionRecord>();
   private readonly listeners = new Set<ChangeListener>();
   private _disposed = false;
+  /** Pi handle（用于 appendEntry 上报损坏 manifest）。构造时可空，setPi() 后续注入。
+   *  显式存为字段而非构造参数 readonly：setPi 需要写权限。 */
+  private pi: RecordStorePi = null;
 
   /** 重建缓存：sessionFile → SubagentRecord。notifyChange 时失效。 */
   private reconCache: Map<string, SubagentRecord> | undefined;
@@ -88,7 +97,21 @@ export class RecordStore {
   constructor(
     private readonly sessionsDir: string,
     private readonly manifestStore?: ManifestStore,
-  ) {}
+    /** Pi 入口（注入 appendEntry 用于上报损坏 manifest）。
+     *  SubagentService 构造时 this.pi 尚未注入（session_start 之前），传 undefined 兜底；
+     *  后续通过 setPi() 注入（见下）。允许 null = 兼容 PiLike 字段类型。 */
+    pi?: RecordStorePi,
+  ) {
+    this.pi = pi ?? null;
+  }
+
+  /** session_start 后由 SubagentService.initSession 调，注入真实 Pi handle。
+   *  设计为独立方法而非要求构造时必传——RecordStore 在 SubagentService 构造时即建
+   *  （与 sessionsDir/manifestStore 一同初始化），但 this.pi 此时尚未注入。
+   *  后续构造期外的 appendEntry 上报才有意义。 */
+  setPi(pi: RecordStorePi): void {
+    this.pi = pi ?? null;
+  }
 
   /** 注册新 record。触发 onChange。 */
   register(record: ExecutionRecord): void {
@@ -186,7 +209,16 @@ export class RecordStore {
         if (!rec) {
           // manifest status 越界=数据损坏（含历史 "error"、意外 crashed 值）：跳过而非降级 failed，
           // 避免损坏 record 被误显示为 failed（触发错误重试/告警）。
+          // 双通道上报：console.warn 给开发者（终端调试）；pi.appendEntry 给用户（session 内可见，
+          // 即使退出后也能从 session.jsonl 复盘事故原因）。SubagentService 构造时 pi 未注入
+          // （session_start 之前），appendEntry 走可选链安全降级。
           console.warn("[subagents] skip manifest with invalid status:", manifest.id, manifest.status);
+          this.pi?.appendEntry?.("subagent:manifest-invalid-status", {
+            id: manifest.id,
+            status: manifest.status,
+            rootSessionId: manifest.rootSessionId,
+            agentName: manifest.agentName,
+          });
           continue;
         }
         byId.set(rec.id, rec);

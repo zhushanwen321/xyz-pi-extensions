@@ -221,7 +221,7 @@ export class SubagentService {
     const sessionsDir = getSubagentSessionDir(this.modelService.getAgentDir(), init.cwd);
     const recordsDir = getSubagentRecordsDir(this.modelService.getAgentDir(), init.cwd);
     this.manifestStore = new ManifestStore(recordsDir);
-    this.store = new RecordStore(sessionsDir, this.manifestStore);
+    this.store = new RecordStore(sessionsDir, this.manifestStore, this.pi ?? undefined);
     this.notifier = new BgNotifier(this.piAdapter());
     // #11：注册进程级 observability 单例——ui-request-queue.handleUiRequest 经
     // globalThis 桥接（notifyMissingHandlerGlobal）调到同一实例，共享
@@ -248,6 +248,10 @@ export class SubagentService {
   /** session_start 注入 pi + revive（modelRegistry/entries 归 ModelConfigService.initModel）。 */
   initSession(init: SubagentServiceSessionInit): void {
     this.pi = init.pi;
+    // 同步注入 pi 到 RecordStore（构造时 this.pi 为 null，session_start 后才有真实 handle）。
+    // RecordStore 跳过损坏 manifest 时调 appendEntry 上报用户可见——若不重新注入，
+    // 上报通道永远是 no-op，事故排查依然静默。
+    this.store.setPi(this.pi);
     this.sessionId = init.sessionId;
     this.streamSink = init.streamSink ?? null;
     // 读取 mode（W4 守卫透传给 session-runner）+ session 级 handler 覆盖。

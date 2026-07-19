@@ -106,4 +106,68 @@ describe("doFinalizeRecord — manifest status 透传 (M3 4 态)", () => {
     const manifest = await manifestStore.readManifest("rec-failed");
     expect(manifest?.status).toBe("failed");
   });
+
+  it("manifest write 抛错时 cleanup-first 顺序仍执行（Step 3 before Step 4 throw）", async () => {
+    // record 带 sessionFile 让 Step 3 finalized/aliveMarker 走真实路径；
+    // 不设 worktreeHandle → Step 0 (collectPatch) 和 Step 3 worktree cleanup 都跳过。
+    const sessionFile = path.join(tmpDir, "session.jsonl");
+    const record = makeMinimalRecord({ id: "rec-cleanup-first", sessionFile });
+
+    // 预写 .alive marker（让 removeAliveMarker 真实生效；不预写因 ENOENT 静默也 OK，
+    // 但预写后用 fs.existsSync 验证更直观）。
+    fs.writeFileSync(
+      `${sessionFile}.alive`,
+      `${JSON.stringify({ pid: 99999, id: "rec-cleanup-first", startedAt: 1000 })}\n`,
+      "utf-8",
+    );
+
+    // mock writeManifest 抛错（模拟 disk full）。在 mock 内捕获「writeManifest 被调用时
+    // finalized marker 是否已存在」——这是 cleanup-first 顺序的关键断言：若有人把
+    // manifest write 前移到 cleanup 之前，本标志会是 false（[Critical #1] 反例）。
+    const finalizedBeforeManifestWrite = { value: false };
+    vi.spyOn(manifestStore, "writeManifest").mockImplementation(async () => {
+      finalizedBeforeManifestWrite.value = fs.existsSync(`${sessionFile}.finalized`);
+      throw new Error("disk full");
+    });
+    const consoleErrorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+
+    const deps = makeDeps();
+
+    // ── 核心 claim 1：不抛错（cleanup-first → manifest write 失败不 throw）──
+    await expect(
+      doFinalizeRecord(deps, record, makeMinimalResult(), "done"),
+    ).resolves.toBeUndefined();
+
+    // ── 核心 claim 2：Step 3 cleanup 先执行 —— finalized marker 真实写入 ──
+    expect(fs.existsSync(`${sessionFile}.finalized`)).toBe(true);
+
+    // ── 核心 claim 3：Step 3 aliveMarker 被移除（预写的 .alive 不再存在）──
+    expect(fs.existsSync(`${sessionFile}.alive`)).toBe(false);
+
+    // ── 核心 claim 4：pending-notifications 注销仍触发（emitUnregister）──
+    expect(deps.emitUnregister).toHaveBeenCalledWith("rec-cleanup-first", "done");
+
+    // ── 核心 claim 5：manifest 写失败被 console.error 记录（含 record id + error）──
+    expect(consoleErrorSpy).toHaveBeenCalledWith(expect.stringContaining("manifest 写入失败"));
+    const errMsg = consoleErrorSpy.mock.calls[0]?.[0];
+    expect(errMsg).toContain("rec-cleanup-first");
+    expect(errMsg).toContain("disk full");
+
+    // ── 核心 claim 6：pi.appendEntry 记录 "subagent:manifest-write-failed" 事件 ──
+    expect(deps.pi.appendEntry).toHaveBeenCalledWith(
+      "subagent:manifest-write-failed",
+      expect.objectContaining({ id: "rec-cleanup-first", error: "disk full" }),
+    );
+
+    // ── 核心 claim 7：manifest 实际未写入（writeManifest 抛错被吞咽）──
+    expect(await manifestStore.readManifest("rec-cleanup-first")).toBeNull();
+
+    // ── 核心 claim 8：[Critical #1] cleanup 在 manifest 写之前 —— 顺序锁定 ──
+    // 若有人把 manifest write 前移到 cleanup 之前，本标志会是 false（mock 捕获时刻
+    // .finalized 尚未被 Step 3 写入），保护 Critical #1 时序不变量。
+    expect(finalizedBeforeManifestWrite.value).toBe(true);
+
+    // 清理 spy 防止污染其他测试
+    consoleErrorSpy.mockRestore();
+  });
 });

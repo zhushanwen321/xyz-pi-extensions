@@ -33,6 +33,7 @@ declare module "@mariozechner/pi-coding-agent" {
 			confirm(title: string, message: string, opts?: unknown): Promise<boolean>;
 			select(title: string, options: string[], opts?: unknown): Promise<string | undefined>;
 			input(title: string, placeholder?: string, opts?: unknown): Promise<string | undefined>;
+			// verified against Pi SDK d.ts (pi-coding-agent v0.80.3, types.d.ts:134) — signature matches exactly
 			editor(title: string, prefill?: string): Promise<string | undefined>;
 			setStatus(key: string, text: string | undefined): void;
 			setWidget(key: string, content: unknown, options?: unknown): void;
@@ -105,7 +106,13 @@ declare module "@mariozechner/pi-coding-agent" {
 	export type SessionBeforeTreeEvent = any;
 	export type SessionBeforeTreeResult = any;
 	export type SessionShutdownEvent = any;
+	// verified against Pi SDK d.ts (pi-coding-agent v0.80.3, types.d.ts:579).
+	// Real shape: { type: "model_select"; model: Model<any>; previousModel: Model<any> | undefined; source: "set"|"cycle"|"restore" }.
+	// Stub keeps `any` to stay consistent with TurnEndEvent / SessionBeforeCompactEvent / etc.
 	export type ModelSelectEvent = any;
+	// verified against Pi SDK d.ts (pi-coding-agent v0.80.3, types.d.ts:480).
+	// Real shape: { type: "session_tree"; newLeafId: string | null; oldLeafId: string | null; summaryEntry?: BranchSummaryEntry; fromExtension?: boolean }.
+	// Stub keeps `any` to stay consistent with other SessionEvent payloads.
 	export type SessionTreeEvent = any;
 	export type SessionStartEvent = {
 		type: "session_start";
