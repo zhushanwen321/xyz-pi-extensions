@@ -38,6 +38,9 @@ importers:
       '@xyz-agent/extension-protocol':
         specifier: ^0.2.0
         version: 0.2.0
+      '@zhushanwen/pi-subagent-workflow':
+        specifier: '*'
+        version: 0.2.0(@mariozechner/pi-ai@0.73.1(ws@8.21.0)(zod@4.4.3))(@mariozechner/pi-coding-agent@0.73.1(ws@8.21.0)(zod@4.4.3))(@mariozechner/pi-tui@0.73.1)(@sinclair/typebox@0.34.49)(@zhushanwen/pi-structured-output@0.2.1(@mariozechner/pi-coding-agent@0.73.1(ws@8.21.0)(zod@4.4.3))(@sinclair/typebox@0.34.49))
     devDependencies:
       '@earendil-works/pi-tui':
         specifier: '*'
@@ -1067,6 +1070,21 @@ packages:
     peerDependencies:
       '@mariozechner/pi-coding-agent': '*'
       '@sinclair/typebox': '*'
+
+  '@zhushanwen/pi-subagent-workflow@0.2.0':
+    resolution: {integrity: sha512-RrMAVf2TcIHZir4YRyRJYKVvotJL+rRjYq4sMY26ORE9CtOwIpPWPMo8pjFK8w7NMCI6qepRaoF9FsUUUN6yYg==}
+    engines: {node: '>=18'}
+    peerDependencies:
+      '@mariozechner/pi-ai': '*'
+      '@mariozechner/pi-coding-agent': '*'
+      '@mariozechner/pi-tui': '*'
+      '@sinclair/typebox': '*'
+      '@zhushanwen/pi-structured-output': '*'
+    peerDependenciesMeta:
+      '@mariozechner/pi-coding-agent':
+        optional: true
+      '@zhushanwen/pi-structured-output':
+        optional: true
 
   acorn-jsx@5.3.2:
     resolution: {integrity: sha512-rq9s+JNhf0IChjtDXxllJ7g41oZk5SlXtp0LHwyA5cejwn7vKmKp4pPri6YEePv2PU65sAsegbXtIinmDFDXgQ==}
@@ -3416,6 +3434,16 @@ snapshots:
       '@mariozechner/pi-coding-agent': 0.73.1(ws@8.21.0)(zod@4.4.3)
       '@sinclair/typebox': 0.34.49
       ajv: 8.20.0
+
+  '@zhushanwen/pi-subagent-workflow@0.2.0(@mariozechner/pi-ai@0.73.1(ws@8.21.0)(zod@4.4.3))(@mariozechner/pi-coding-agent@0.73.1(ws@8.21.0)(zod@4.4.3))(@mariozechner/pi-tui@0.73.1)(@sinclair/typebox@0.34.49)(@zhushanwen/pi-structured-output@0.2.1(@mariozechner/pi-coding-agent@0.73.1(ws@8.21.0)(zod@4.4.3))(@sinclair/typebox@0.34.49))':
+    dependencies:
+      '@mariozechner/pi-ai': 0.73.1(ws@8.21.0)(zod@4.4.3)
+      '@mariozechner/pi-tui': 0.73.1
+      '@sinclair/typebox': 0.34.49
+      '@xyz-agent/extension-protocol': 0.2.0
+    optionalDependencies:
+      '@mariozechner/pi-coding-agent': 0.73.1(ws@8.21.0)(zod@4.4.3)
+      '@zhushanwen/pi-structured-output': 0.2.1(@mariozechner/pi-coding-agent@0.73.1(ws@8.21.0)(zod@4.4.3))(@sinclair/typebox@0.34.49)
 
   acorn-jsx@5.3.2(acorn@8.16.0):
     dependencies:
