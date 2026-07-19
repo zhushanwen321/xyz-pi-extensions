@@ -16,7 +16,11 @@ set -euo pipefail
 
 # ── 日志支持（由 merge-and-publish.sh 通过 MERGE_LOG_FILE 环境变量注入）──
 _ci_log() {
-    [[ -n "${MERGE_LOG_FILE:-}" ]] && echo "[$(date +%Y-%m-%dT%H:%M:%S)] [CI] $*" >> "$MERGE_LOG_FILE"
+    # [HISTORICAL] 函数末尾必须 || return 0：
+    # 当 MERGE_LOG_FILE 未设时，[[ -n ... ]] 返回 false（exit 1），
+    # 作为函数最后一条命令会使函数返回非零，配合 set -euo pipefail
+    # 导致调用处立即退出。症状：只输出 "等待 CI 完成..." 就 exit 1。
+    [[ -n "${MERGE_LOG_FILE:-}" ]] && echo "[$(date +%Y-%m-%dT%H:%M:%S)] [CI] $*" >> "$MERGE_LOG_FILE" || return 0
 }
 
 REF="${1:?Usage: wait-for-ci.sh <commit-sha> [--timeout 600] [--workflow <name>] [--verify-release <tag>]}"
