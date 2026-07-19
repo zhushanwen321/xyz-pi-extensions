@@ -23,7 +23,7 @@ subagent 完成后从 `/subagents` TUI overlay 消失。根因链路：
 record 身份从 transcript 解耦，用独立 manifest文件作为 source of truth：
 
 1. **record id**：改为 `crypto.randomUUID()`（当前 `bg-${tag}-${seq}-${Date.now()}` 在 `subagent-service.ts:558`）
-2. **manifest文件**：`<uuid>.json`，包含 id, rootSessionId, agentName, status, createdAt, completedAt, sessionFile, pid
+2. **manifest文件**：`<uuid>.json`，包含 id, rootSessionId, agentName, status, createdAt, completedAt, sessionFile
 3. **原子写入**：write-tmp + fsync + rename + fsync dir
 4. **RPC 握手**：spawn 后调 `get_state` 获取 `sessionFile` + `sessionId`（rpc.md 文档化协议，rpc-mode.ts:442-452 实现）
 5. **PID 仅作临时探测**：`ALIVE_SOFT_TIMEOUT_MS` 从 24h 改为 1h
@@ -55,11 +55,12 @@ record 身份从 transcript 解耦，用独立 manifest文件作为 source of tr
 4. legacy 数据兼容承认无法无损迁移
 5. 任何 record 持久化失败不静默吞
 
-## 3 处修正（subagent 验证发现）
+## 4 处修正（subagent 验证发现）
 
 1. `ALIVE_SOFT_TIMEOUT_MS` 从 24h→1h（当前值在 `alive-store.ts`）
 2. tmp 残留恢复补充 3 分支判定
 3. get_state 时序：session 初始化完成后再调，补充重试逻辑
+4. **移除 manifest pid 字段**：决策 2 早期草案把 `pid` 列入 manifest 字段，但与决策 5（「PID 仅作临时探测」）和不变量 2（「record 身份不依赖 PID」）冲突——manifest 是终态永久记录，冻结一个「临时探针」值进永久记录概念上不成立。liveness 独归 `.alive` sidecar（`child.pid` + `isProcessAlive`，`record-store.ts:328`），manifest 只需 sessionFile 指针。已从 `ManifestRecord` 接口（`manifest-store.ts`）与 `finalize-record.ts` 的 writeManifest 调用移除 `pid`；向后兼容（`isValidManifest` 从不校验 pid，旧文件仍可读）。
 
 ## 关键文件
 

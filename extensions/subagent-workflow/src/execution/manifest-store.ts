@@ -17,7 +17,6 @@ export interface ManifestRecord {
   createdAt: number;
   completedAt?: number;
   sessionFile?: string;
-  pid?: number;
   /** FR-7 补字段：manifest 写入时从 ExecutionRecord 抓取，供 manifestToSubagent 投影真实值。 */
   task?: string;
   slug?: string;

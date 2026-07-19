@@ -145,7 +145,6 @@ export async function doFinalizeRecord(
       createdAt: record.startedAt,
       completedAt: record.endedAt ?? Date.now(),
       sessionFile: record.sessionFile,
-      pid: process.pid,
       task: record.task,
       slug: record.slug,
       model: record.model,
