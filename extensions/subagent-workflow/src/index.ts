@@ -261,6 +261,18 @@ export default function subagentsWorkflowExtension(pi: ExtensionAPI): void {
       console.warn("[subagents] expired session file cleanup failed:", err);
     }
 
+    // ADR-035 启动恢复：扫描 manifest tmp 残留（崩溃打断的 writeManifest 留下），
+    // 每次 session_start 都调（与上方 maybeCleanupExpiredSessionFiles 一致）。
+    try {
+      const recovered = await service.recoverManifestTmpFiles();
+      if (recovered.recovered > 0 || recovered.deleted > 0) {
+        console.warn(`[subagents] manifest tmp recovery: ${recovered.recovered} promoted, ${recovered.deleted} deleted`);
+      }
+    } catch (err) {
+      void err;
+      console.warn("[subagents] manifest tmp recovery failed:", err);
+    }
+
     try {
       const wtm = new WorktreeManager(agentDir);
       wtm.scan();

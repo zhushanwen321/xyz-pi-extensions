@@ -72,12 +72,15 @@ const {
   mockSetUiRequestHandler,
   mockInitSession,
   mockLoadAll,
+  mockRecoverManifestTmpFiles,
   /** existing service 引用——测试可改写以模拟 /resume /fork 复用。 */
   existingServiceRef,
 } = vi.hoisted(() => ({
   mockSetUiRequestHandler: vi.fn(),
   mockInitSession: vi.fn(),
   mockLoadAll: vi.fn(async () => []),
+  // ADR-035 启动恢复接线守护：session_start 必须调 service.recoverManifestTmpFiles
+  mockRecoverManifestTmpFiles: vi.fn(async () => ({ deleted: 0, recovered: 0 })),
   existingServiceRef: { current: null as unknown },
 }));
 
@@ -87,6 +90,7 @@ vi.mock("../subagent-service.ts", () => ({
   SubagentService: class {
     initSession = mockInitSession;
     setUiRequestHandler = mockSetUiRequestHandler;
+    recoverManifestTmpFiles = mockRecoverManifestTmpFiles;
     getStreamSink = () => null;
     dispose = vi.fn();
   },
@@ -247,6 +251,9 @@ describe("session_start UI handler 注入链路（SR-3）", () => {
     existingServiceRef.current = {
       initSession: mockInitSession,
       setUiRequestHandler: mockSetUiRequestHandler,
+      // ADR-035：与 SubagentService mock class 形状一致——session_start
+      // 会调 service.recoverManifestTmpFiles()，缺方法会抛 TypeError 被吞为 console.warn
+      recoverManifestTmpFiles: mockRecoverManifestTmpFiles,
       getStreamSink: () => null,
       dispose: vi.fn(),
     };
@@ -263,6 +270,11 @@ describe("session_start UI handler 注入链路（SR-3）", () => {
     expect(mockSetUiRequestHandler).toHaveBeenCalledTimes(1);
     const injected = mockSetUiRequestHandler.mock.calls[0]?.[0];
     expect(typeof injected).toBe("function");
+
+    // ADR-035 existing 路径守护：/resume /fork 复用 service 时 session_start
+    // 也必须调 recoverManifestTmpFiles。守护 case 走 new 路径抓不到 existing 误删，
+    // 此处对称断言（与 setUiRequestHandler 在本 case 的独立断言同模式）。
+    expect(mockRecoverManifestTmpFiles).toHaveBeenCalledTimes(1);
   });
 
   it("headless mode（json）：createUiRequestHandlerForMode 返回 undefined → setUiRequestHandler(undefined)", async () => {
@@ -314,5 +326,17 @@ describe("session_start UI handler 注入链路（SR-3）", () => {
     expect(initArg).toHaveProperty("dialogQueue");
     // handler 经 setUiRequestHandler 注入（单一入口）——前面 case 已断言，此处复断不再赘述。
     expect(mockSetUiRequestHandler).toHaveBeenCalledTimes(1);
+  });
+
+  it("session_start 调用 recoverManifestTmpFiles（接线守护，防 ADR-035 启动恢复再次断线）", async () => {
+    const { pi, getSessionStartHandler } = createMockPi();
+    subagentsExtension(pi);
+
+    const handler = getSessionStartHandler();
+    expect(handler).toBeDefined();
+    await handler!({ type: "session_start" }, createMockCtx("tui"));
+
+    // ADR-035 接线断言：session_start 必须调 service.recoverManifestTmpFiles（防死代码回退）
+    expect(mockRecoverManifestTmpFiles).toHaveBeenCalledTimes(1);
   });
 });

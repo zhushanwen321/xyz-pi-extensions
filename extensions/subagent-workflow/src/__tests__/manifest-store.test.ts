@@ -10,14 +10,33 @@ import { ManifestStore } from "../execution/manifest-store";
 // [C10] 磁盘满测试需要可控的 fs.promises.rename（拖 ENOSPC/EACCES）。
 // hoisted flag + vi.mock 透传：默认 renameErrorRef.current=null 走真实 rename，
 // 磁盘满 it 里置入 Error 让 rename 拖出（拖一次后自动重置），其它 it 不受影响。
-const { renameErrorRef } = vi.hoisted(() => ({
+const { renameErrorRef, dirSyncErrorPathRef } = vi.hoisted(() => ({
   renameErrorRef: { current: null as NodeJS.ErrnoException | null },
+  // T-fsync：设置为目标 dir 路径后，open(dir, "r") 返回的 handle.sync() 会抛错
+  dirSyncErrorPathRef: { current: null as string | null },
 }));
 
 vi.mock("node:fs/promises", async (importOriginal) => {
   const actual = await importOriginal<typeof fsPromises>();
   return {
     ...actual,
+    open: async (...args: Parameters<typeof actual.open>) => {
+      const realHandle = await actual.open(...args);
+      // T-fsync：仅对目标 dir（flags="r"）注入 sync 抛错，不影响 tmp 文件的 open("w")。
+      // 覆盖实例 own 属性 sync（遮蔽原型方法）；close 仍走原型（this=真实实例，fd 完好）。
+      const openPath = args[0];
+      if (
+        typeof openPath === "string" &&
+        dirSyncErrorPathRef.current !== null &&
+        openPath === dirSyncErrorPathRef.current &&
+        args[1] === "r"
+      ) {
+        realHandle.sync = async (): Promise<void> => {
+          throw new Error("EIO: simulated dir fsync failure");
+        };
+      }
+      return realHandle;
+    },
     rename: async (...args: Parameters<typeof actual.rename>) => {
       if (renameErrorRef.current) {
         const err = renameErrorRef.current;
@@ -116,7 +135,15 @@ describe("ManifestStore", () => {
       const tmpPath = path.join(tmpDir, `${id}.json.tmp.12345`);
       const manifestPath = path.join(tmpDir, `${id}.json`);
 
-      fs.writeFileSync(tmpPath, JSON.stringify({ id, status: "running" }));
+      // F2 后 recoverTmpFiles 用 isValidManifest 严格校验——tmp 必须含全部必填字段
+      // （id/rootSessionId/agentName/createdAt/status）才会 promote，否则走删除分支 3b。
+      fs.writeFileSync(tmpPath, JSON.stringify({
+        id,
+        rootSessionId: "session-123",
+        agentName: "worker",
+        status: "running",
+        createdAt: Date.now(),
+      }));
 
       const result = await store.recoverTmpFiles();
 
@@ -134,6 +161,17 @@ describe("ManifestStore", () => {
       const result = await store.recoverTmpFiles();
 
       expect(result.deleted).toBe(1);
+      expect(fs.existsSync(tmpPath)).toBe(false);
+    });
+
+    // F2：合法 JSON 但缺必填字段（非合法 manifest）应走删除（分支 3b），不能 promote
+    it("should delete tmp when JSON valid but not a valid manifest (missing required fields)", async () => {
+      const id = "test-recovery-4";
+      const tmpPath = path.join(tmpDir, `${id}.json.tmp.12345`);
+      fs.writeFileSync(tmpPath, JSON.stringify({ foo: "bar" })); // 合法 JSON，非 manifest
+      const result = await store.recoverTmpFiles();
+      expect(result.deleted).toBe(1);
+      expect(result.recovered).toBe(0);
       expect(fs.existsSync(tmpPath)).toBe(false);
     });
   });
@@ -252,6 +290,34 @@ describe("ManifestStore", () => {
       const files = fs.readdirSync(tmpDir);
       expect(files.filter((f) => f.includes(".tmp.")).length).toBe(0);
       expect(files.some((f) => f === "perm-denied.json")).toBe(false);
+    });
+  });
+
+  // F3：dir fsync 失败时 writeManifest 不应 throw（rename 已成功则视为成功，POSIX 不要求目录 fsync）
+  describe("dir fsync 失败容忍（F3）", () => {
+    afterEach(() => {
+      dirSyncErrorPathRef.current = null; // 保险：防 flag 残留污染后续测试
+    });
+
+    it("writeManifest 应容忍 dir fsync 失败（rename 已成功则视为成功）", async () => {
+      const record = {
+        id: "fsync-fail",
+        rootSessionId: "session-123",
+        agentName: "worker",
+        status: "running" as const,
+        createdAt: Date.now(),
+      };
+      // 激活 dir sync 抛错：open(tmpDir, "r") 返回的 handle.sync() 会 throw
+      dirSyncErrorPathRef.current = tmpDir;
+
+      // 不 throw（best-effort 吞掉 dir fsync 错误，rename 已成功）
+      await store.writeManifest(record);
+
+      const manifestPath = path.join(tmpDir, `${record.id}.json`);
+      expect(fs.existsSync(manifestPath)).toBe(true); // 正式 manifest 已落盘
+      // tmp 已被 rename 消费（不存在）
+      const tmpFiles = fs.readdirSync(tmpDir).filter((f) => f.includes(".tmp."));
+      expect(tmpFiles.length).toBe(0);
     });
   });
 });

@@ -262,6 +262,19 @@ export class SubagentService {
     this.notifier.revive();
   }
 
+  /** 启动恢复：扫描 manifest tmp 残留（崩溃打断的 writeManifest 留下的 *.json.tmp.<pid>），
+   *  3 分支判定（manifest已存在删tmp / tmp合法promote / tmp非法删）。幂等，不 throw。
+   *  ADR-035 启动恢复接线——session_start 每次都调（与 maybeCleanupExpiredSessionFiles 一致）。
+   *  manifestStore 保持 private 封装，本方法是唯一公开入口。 */
+  async recoverManifestTmpFiles(): Promise<{ deleted: number; recovered: number }> {
+    try {
+      return await this.manifestStore.recoverTmpFiles();
+    } catch (err) {
+      bestEffort(err, "recoverManifestTmpFiles", "error");
+      return { deleted: 0, recovered: 0 };
+    }
+  }
+
   /** session 结束清理（清定时器，丢弃 pending 通知）。幂等。
    *
    * [M-7] dispose 顺序假设：pending:unregister emit 依赖 pending-notifications 扩展的

@@ -84,12 +84,16 @@ export class ManifestStore {
       await fsPromises.rename(tmpPath, filePath);
       renamed = true;
 
-      // 3. fsync 目录（保证 rename 落盘）
-      const dirFh = await fsPromises.open(this.dir, "r");
+      // 3. fsync 目录（best-effort：POSIX 不要求，失败不否定已成功的 rename）
       try {
-        await dirFh.sync();
-      } finally {
-        await dirFh.close();
+        const dirFh = await fsPromises.open(this.dir, "r");
+        try {
+          await dirFh.sync();
+        } finally {
+          await dirFh.close();
+        }
+      } catch (dirSyncErr) {
+        bestEffort(dirSyncErr, "fsync dir (writeManifest)");
       }
     } catch (err) {
       // rename 未成功 → 清理残留 tmp（best-effort，不掩盖原错误）
@@ -177,12 +181,18 @@ export class ManifestStore {
         // 试解析 tmp
         try {
           const content = fs.readFileSync(tmpPath, "utf-8");
-          JSON.parse(content);
-          // 分支 2: tmp 合法，rename 为 manifest
-          fs.renameSync(tmpPath, manifestPath);
-          recovered++;
+          const parsed: unknown = JSON.parse(content);
+          if (isValidManifest(parsed)) {
+            // 分支 2: tmp 是合法 manifest，rename 为正式文件
+            fs.renameSync(tmpPath, manifestPath);
+            recovered++;
+          } else {
+            // 分支 3b: 合法 JSON 但非合法 manifest（缺必填字段），删
+            fs.unlinkSync(tmpPath);
+            deleted++;
+          }
         } catch {
-          // 分支 3: tmp 非法，删
+          // 分支 3a: JSON.parse 失败，删
           fs.unlinkSync(tmpPath);
           deleted++;
         }
