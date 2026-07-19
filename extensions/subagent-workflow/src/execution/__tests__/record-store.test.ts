@@ -557,6 +557,7 @@ describe("RecordStore", () => {
      *  mapManifestStatus 之间仍有防御层（[BL-M1] 修复记录）。本测试用 unknown-cast 模拟
      *  一个越过 ManifestRecord 静态类型的对象，验证 collectRecords 反应正确。 */
     function brokenManifest(): ManifestRecord {
+      // eslint-disable-next-line taste/no-unsafe-cast -- intentional: cast status 越界值模拟磁盘损坏 manifest（测试目的本身）
       return {
         id: "broken-1",
         rootSessionId: "sess-current",
@@ -566,12 +567,21 @@ describe("RecordStore", () => {
       } as unknown as ManifestRecord;
     }
 
+    /** Mock ManifestStore 让测试不依赖 fs 路径 + isValidManifest 守卫。
+     *  source/target 类型不兼容是 intentional（ManifestStore 有多个方法，测试仅需 listAllSync），
+     *  `as unknown as ManifestStore` 是 vitest mock 标准 pattern。*/
+    function makeManifestStoreMock(manifests: ManifestRecord[]): ManifestStore {
+      // eslint-disable-next-line taste/no-unsafe-cast -- intentional: ManifestStore 有多个方法，测试仅需 listAllSync
+      return {
+        // 复制 manifests 防调用方意外 mutate 共享数组；vi.fn 每次调用返回独立数组
+        listAllSync: vi.fn(() => [...manifests]),
+      } as unknown as ManifestStore;
+    }
+
     it("collectRecords 跳过越界 status 时调用 pi.appendEntry('subagent:manifest-invalid-status', ...)", () => {
       const pi = { appendEntry: vi.fn() };
       // Mock ManifestStore：listAllSync 返回损坏 manifest，绕开真实 fs 路径与 isValidManifest 守卫。
-      const manifestStore = {
-        listAllSync: vi.fn(() => [brokenManifest()]),
-      } as unknown as ManifestStore;
+      const manifestStore = makeManifestStoreMock([brokenManifest()]);
       const store = new RecordStore(tmpDir, manifestStore, pi);
 
       const result = store.collectRecords(100);
@@ -589,9 +599,7 @@ describe("RecordStore", () => {
     });
 
     it("pi 为 null/undefined 时不抛错（向后兼容：不注入 pi 的旧调用路径）", () => {
-      const manifestStore = {
-        listAllSync: vi.fn(() => [brokenManifest()]),
-      } as unknown as ManifestStore;
+      const manifestStore = makeManifestStoreMock([brokenManifest()]);
       // 不传 pi（undefined）—— 模拟 SubagentService 构造期 session_start 未触发的场景。
       const store = new RecordStore(tmpDir, manifestStore);
       expect(() => store.collectRecords(100)).not.toThrow();
@@ -603,9 +611,7 @@ describe("RecordStore", () => {
     it("setPi() 后 appendEntry 切换到新 pi（覆盖初始 undefined）", () => {
       const pi1 = { appendEntry: vi.fn() };
       const pi2 = { appendEntry: vi.fn() };
-      const manifestStore = {
-        listAllSync: vi.fn(() => [brokenManifest()]),
-      } as unknown as ManifestStore;
+      const manifestStore = makeManifestStoreMock([brokenManifest()]);
       const store = new RecordStore(tmpDir, manifestStore, pi1);
       store.setPi(pi2);
 
