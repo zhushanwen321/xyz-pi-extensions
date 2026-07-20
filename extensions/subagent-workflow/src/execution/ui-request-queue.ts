@@ -17,6 +17,7 @@ import type { UiRequest } from "./dialog-queue.ts";
 // 类型再导出：dialog-queue.ts 是 UiRequest/UiResponse/UiRequestHandler 的规范来源，
 // 本模块再导出供测试 import（避免测试直接依赖 dialog-queue 内部实现）。
 export type { UiRequest, UiRequestHandler, UiResponse } from "./dialog-queue.ts";
+import type { ChildRpcChannel } from "./rpc-channel.ts";
 import type { SessionRunnerContext } from "./session-runner.ts";
 import type { ExtensionUiRequest } from "./spawn-event-adapter.ts";
 import { respond } from "./stdin-writer.ts";
@@ -33,12 +34,14 @@ import { notifyMissingHandlerGlobal } from "./ui-request-observability.ts";
  * 设计：队列是 runSpawn 生命周期内的闭包状态（非模块级），
  * 每个子进程实例独立队列，无跨 session 泄漏。
  *
- * @param child 子进程（stdin 写入 extension_ui_response）
+ * @param child 子进程（生命周期监听用：close/error 触发 abort + rejectChildDialogs）
+ * @param channel RPC 写入通道（extension_ui_response 写入 child.stdin）
  * @param ctx SessionRunnerContext（含 uiRequestHandler 回调）
  * @returns enqueue 函数：(id, request) => void，将请求入队并触发顺序处理
  */
 export function createUiRequestQueue(
   child: ChildProcess,
+  channel: ChildRpcChannel,
   ctx: SessionRunnerContext,
 ): (id: string, request: ExtensionUiRequest) => void {
   // [R3] AbortController 取消 pending handler——子进程退出时队列不再阻塞
@@ -51,7 +54,7 @@ export function createUiRequestQueue(
     if (processing || queue.length === 0 || closed) return;
     processing = true;
     const { id, request, signal } = queue.shift()!;
-    handleUiRequest(child, id, request, ctx, signal).finally(() => {
+    handleUiRequest(channel, id, request, ctx, signal).finally(() => {
       processing = false;
       processNext();
     });
@@ -93,7 +96,7 @@ export function createUiRequestQueue(
  * handler 未设置时不再静默忽略——console.warn 兜底（FR-9 可观测性），
  * W3 接入 SubagentService.notifyMissingHandler 的 appendEntry。
  *
- * @param child 子进程（stdin 写入响应）
+ * @param channel RPC 写入通道（响应写入 child.stdin）
  * @param id 请求 id（子进程用它关联 response）
  * @param request ExtensionUiRequest（method 平铺，从 enqueueUiRequest 传入）
  * @param ctx SessionRunnerContext（含 uiRequestHandler 回调）
@@ -101,7 +104,7 @@ export function createUiRequestQueue(
  * @returns Promise（队列等待用：resolve 表示响应已写入 stdin 或已放弃）
  */
 async function handleUiRequest(
-  child: ChildProcess,
+  channel: ChildRpcChannel,
   id: string,
   request: ExtensionUiRequest,
   ctx: SessionRunnerContext,
@@ -113,23 +116,26 @@ async function handleUiRequest(
     //   - notifyMissingHandlerGlobal：经 globalThis 桥接到 observability 单例做 per-session 去重告警
     //     （FR-9 可观测性；未注册时走 fallback warn 不丢日志）
     //   - respond(cancelled)：让子进程收到明确取消，不再永久挂起。等价于用户主动取消的语义。
-    // 去重 key 用 child.pid（队列内拿不到真实 sessionId；pid 是子进程会话的稳定标识，
+    // 去重 key 用 channel.pid（队列内拿不到真实 sessionId；pid 是子进程会话的稳定标识，
     // 去重粒度正确——同一子进程多次 handler 缺失只告警一次）。
-    notifyMissingHandlerGlobal(child.pid?.toString() ?? id);
-    respond(child, id, { cancelled: true }, signal);
+    notifyMissingHandlerGlobal(channel.pid?.toString() ?? id);
+    respond(channel, id, { cancelled: true }, signal);
     return;
   }
 
   // 从 ExtensionUiRequest 构造 UiRequest（含 channel/channelPayload）
-  const { channel, channelPayload } = parseChannel(request);
-  // [SR-4] 填入 child.pid 作为内部元数据：L2 队列的 rejectChildDialogs 据此关联 child close
+  // 注意：局部变量 channel 与参数 channel 同名遮蔽——parseChannel 返回的是 UI method 通道
+  // 概念（'ask_user' 等），与参数 channel（RPC 写入通道）语义不同。重命名为 uiChannel 避免
+  // 遮蔽引发的阅读混淆。
+  const { channel: uiChannel, channelPayload } = parseChannel(request);
+  // [SR-4] 填入 channel.pid 作为内部元数据：L2 队列的 rejectChildDialogs 据此关联 child close
   //   清理。factory 层 enqueue 时读 req._childPid 传给 opts.child。pid undefined（spawn 后极短
   //   窗口）时不填——rejectChildDialogs 也匹配不到（onClose 同样用 child.pid 守卫），无副作用。
   const uiReq: UiRequest = {
     id,
     method: request.method,
-    ...(child.pid !== undefined ? { _childPid: child.pid } : {}),
-    ...(channel !== undefined ? { channel } : {}),
+    ...(channel.pid !== undefined ? { _childPid: channel.pid } : {}),
+    ...(uiChannel !== undefined ? { channel: uiChannel } : {}),
     ...(channelPayload !== undefined ? { channelPayload } : {}),
     ...extractMethodFields(request),
   };
@@ -138,12 +144,12 @@ async function handleUiRequest(
     const result = await handler(uiReq);
     // [R3] 子进程已退出，跳过写入
     if (signal?.aborted) return;
-    respond(child, id, result, signal);
+    respond(channel, id, result, signal);
   } catch (err) {
     // [R3] 子进程已退出，跳过写入
     if (signal?.aborted) return;
     console.error("[subagents] uiRequestHandler threw:", err);
-    respond(child, id, { cancelled: true }, signal);
+    respond(channel, id, { cancelled: true }, signal);
   }
 }
 

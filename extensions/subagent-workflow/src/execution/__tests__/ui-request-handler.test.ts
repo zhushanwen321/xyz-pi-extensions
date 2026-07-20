@@ -18,6 +18,7 @@ import { PassThrough } from "node:stream";
 
 import { describe, expect, it, vi } from "vitest";
 
+import { ChildRpcChannel } from "../rpc-channel.ts";
 import { ASK_USER_RPC_PROMPT } from "../session-runner.ts";
 import { parseSpawnLine } from "../spawn-event-adapter.ts";
 import { parseChannel } from "../ui-channels.ts";
@@ -110,15 +111,16 @@ describe("handleUiRequest — stdin 回写 extension_ui_response（Pi 原生格�
     const child = { stdin, on: vi.fn(), removeListener: vi.fn() } as unknown as Parameters<
       typeof createUiRequestQueue
     >[0];
+    const channel = new ChildRpcChannel(child);
 
     const handler: UiRequestHandler = vi.fn(
       async (req: UiRequest) => ({ value: `answer-for-${req.id}` }),
     );
     const ctx = { uiRequestHandler: handler } as unknown as Parameters<
       typeof createUiRequestQueue
-    >[1];
+    >[2];
 
-    const enqueue = createUiRequestQueue(child, ctx);
+    const enqueue = createUiRequestQueue(child, channel, ctx);
     // W2 新签名：enqueue(id, request) —— request 是 ExtensionUiRequest（method 平铺）
     enqueue("ui-req-002", {
       method: "select",
@@ -151,6 +153,7 @@ describe("handleUiRequest — handler 抛错兜底回 cancelled", () => {
     const child = { stdin, on: vi.fn(), removeListener: vi.fn() } as unknown as Parameters<
       typeof createUiRequestQueue
     >[0];
+    const channel = new ChildRpcChannel(child);
 
     // handler 抛错（reject）
     const handler: UiRequestHandler = vi.fn(
@@ -158,9 +161,9 @@ describe("handleUiRequest — handler 抛错兜底回 cancelled", () => {
     );
     const ctx = { uiRequestHandler: handler } as unknown as Parameters<
       typeof createUiRequestQueue
-    >[1];
+    >[2];
 
-    const enqueue = createUiRequestQueue(child, ctx);
+    const enqueue = createUiRequestQueue(child, channel, ctx);
     enqueue("ui-req-err", {
       method: "select",
       title: ASK_USER_MARKER,

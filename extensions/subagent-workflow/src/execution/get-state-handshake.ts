@@ -13,8 +13,7 @@
 //   - 加速路径：sessionFile 一旦拿到立即 resolve（不等剩余重试）。
 //   - 全部超时：resolve 空对象（调用方走兜底查找）。
 
-import type { ChildProcess } from "node:child_process";
-
+import type { ChildRpcChannel } from "./rpc-channel.ts";
 import { sendGetStateCommand } from "./stdin-writer.ts";
 
 /** FR-4: get_state RPC 握手最大重试次数。 */
@@ -37,12 +36,16 @@ export interface GetStateResult {
  * 最多重试 GET_STATE_MAX_RETRIES 次，单次超时 GET_STATE_TIMEOUT_MS 后等待
  * GET_STATE_RETRY_INTERVAL_MS 再发起下一次重试。
  *
- * @param child 子进程（stdin 写入 get_state 命令）
+ * [W2] 接受 RPC 写入通道而非裸 child——sendGetStateCommand 内部走 channel.write（永不抛 +
+ * dead 置位 + EPIPE 降级）。channel 由调用方（session-runner）与 child 同生命周期构造，
+ * 内部持有 child 引用。
+ *
+ * @param channel RPC 写入通道（sendGetStateCommand 经此写 stdin）
  * @param addResponseListener 注册 response 监听器的函数（stdout pump 中调用）
  * @returns 握手结果（可能为空——所有重试均超时/失败）
  */
 export function performGetStateHandshake(
-  child: ChildProcess,
+  channel: ChildRpcChannel,
   addResponseListener: (id: string, resolver: (data: unknown) => void) => void,
 ): Promise<GetStateResult> {
   return new Promise<GetStateResult>((resolve) => {
@@ -53,7 +56,7 @@ export function performGetStateHandshake(
     function tryOnce(): void {
       if (resolved) return;
       attempts++;
-      const reqId = sendGetStateCommand(child);
+      const reqId = sendGetStateCommand(channel);
 
       // [#15] 本次 tryOnce 私有的 timer（2s 超时 + 超时后派生的 retry）。
       // 关键：response 回调通过闭包引用的是"本次 tryOnce 对应的 timer"，而非某个

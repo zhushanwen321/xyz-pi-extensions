@@ -5,12 +5,16 @@
 // pi --mode rpc 通过 stdin 的 JSON RpcCommand / RpcExtensionUIResponse 驱动：
 //   - extension_ui_response（主进程回答子进程的 UI 请求，如 ask_user）
 //   - prompt（驱动子进程开始处理 task）
-// 两者共用 child.stdin.write + 背压检查，提取到此模块统一维护。
+//   - get_state（握手期查询子进程 session 状态）
+//
+// 三者共用 ChildRpcChannel.write（自动补换行 + 通道存活判断 + 写入降级），
+// 提取到此模块统一维护协议形状与序列化逻辑。ChildRpcChannel 由调用方（session-runner）
+// 构造并传入，是 stdin 写入维度的单一真相源（详见 rpc-channel.ts）。
 
-import type { ChildProcess } from "node:child_process";
 import * as crypto from "node:crypto";
 
 import type { UiResponse } from "./dialog-queue.ts";
+import type { ChildRpcChannel } from "./rpc-channel.ts";
 
 /**
  * 按 UiResponse 形状构造 Pi 原生 extension_ui_response 并写 stdin。
@@ -18,17 +22,23 @@ import type { UiResponse } from "./dialog-queue.ts";
  * SR-5：ack（fire-and-forget）不写 stdin——Pi 对 fire-and-forget method 不期待响应，
  * 写入会触发协议错配。其他三种 shape（value/confirmed/cancelled）按对应字段写。
  *
- * [R1] 背压检查：child.stdin.write 返回 false 时记 warn（不阻塞，内核缓冲会随后排空）。
  * [R2] 序列化在本函数内逐分支完成。JSON.stringify 可能抛错（out.value 含循环引用 /
  *     BigInt 等不可序列化结构），try/catch 降级为 cancelled——宁可取消单次 dialog 也不让
  *     父进程崩溃（UI 请求通道不应被脏数据拖垮）。
  *
- * @param child 子进程（stdin 写入响应）
+ * 写入失败（通道已断/EPIPE）由 channel.write 返回 false 静默处理，不再抛错。
+ *
+ * @param channel RPC 写入通道（封装 child.stdin 写入 + 存活判断）
  * @param id 请求 id（关联 response）
  * @param out UiResponse（{value}/{confirmed}/{cancelled}/{ack}）
  * @param signal abort signal（已 aborted 时跳过写入）
  */
-export function respond(child: ChildProcess, id: string, out: UiResponse, signal?: AbortSignal): void {
+export function respond(
+  channel: ChildRpcChannel,
+  id: string,
+  out: UiResponse,
+  signal?: AbortSignal,
+): void {
   if (signal?.aborted) return;
   let line: string | undefined;
   try {
@@ -42,7 +52,7 @@ export function respond(child: ChildProcess, id: string, out: UiResponse, signal
   }
   // ack: fire-and-forget，不写 stdin（SR-5）
   if (line === undefined) return;
-  writeStdinLine(child, line, `ui response for request ${id}`);
+  channel.write(line);
 }
 
 /**
@@ -56,17 +66,18 @@ export function respond(child: ChildProcess, id: string, out: UiResponse, signal
  * pi 在 await rebindSession() 后才挂 stdin reader（rpc-mode.ts:778-781），
  * reader 处理 prompt 时 session 已就绪。
  *
- * @param child 子进程（stdin 写入 prompt 命令）
+ * 通道已断/写失败由 channel.write 静默处理（返回 false），不抛错。
+ *
+ * @param channel RPC 写入通道（封装 child.stdin 写入 + 存活判断）
  * @param task 完整 task 文本（含 schema 指令）
  */
-export function sendPromptCommand(child: ChildProcess, task: string): void {
-  if (!child.stdin || child.stdin.destroyed) return;
+export function sendPromptCommand(channel: ChildRpcChannel, task: string): void {
   const command = JSON.stringify({
     id: crypto.randomUUID(),
     type: "prompt",
     message: task,
   });
-  writeStdinLine(child, command, "prompt command");
+  channel.write(command);
 }
 
 /**
@@ -76,44 +87,18 @@ export function sendPromptCommand(child: ChildProcess, task: string): void {
  * 通过此命令向子进程查询当前 session 状态。子进程收到后返回
  * {type:"response", command:"get_state", success:true, data:{sessionFile, sessionId}}。
  *
- * @param child 子进程（stdin 写入 get_state 命令）
+ * 通道已断/写失败由 channel.write 静默处理（返回 false），不抛错。调用方仍拿到 id
+ * 用于匹配 response（即使写入失败，response 永不到达，由握手超时兜底）。
+ *
+ * @param channel RPC 写入通道（封装 child.stdin 写入 + 存活判断）
  * @returns 请求 id（用于匹配 response）
  */
-export function sendGetStateCommand(child: ChildProcess): string {
+export function sendGetStateCommand(channel: ChildRpcChannel): string {
   const id = crypto.randomUUID();
   const command = JSON.stringify({
     id,
     type: "get_state",
   });
-  writeStdinLine(child, command, "get_state command");
+  channel.write(command);
   return id;
-}
-
-/**
- * 向子进程 stdin 写一行（自动补换行），带背压检查。
- *
- * [R1] write 返回 false 时记 warn（不阻塞，内核缓冲会随后排空）。
- * stdin 已关闭/销毁时跳过——respond 已检查 signal，sendPromptCommand 已检查 destroyed。
- * [R3] write 同步抛 EPIPE 时降级 warn 不抛（止血）：子进程在父进程等待 UI 响应期间退出，
- *     stdin 写端已关闭，write 触发 EPIPE。这是 RPC 通道断开的预期信号——父进程不应崩溃，
- *     子进程死亡由 'close' 事件正常处理。其他 write error（非 EPIPE）同样降级 warn 不抛：
- *     RPC 通道断了不管什么原因，父进程都不该死（W2 会用 ChildRpcChannel 统一治理，W1 仅止血）。
- *     异步 stream 'error' 事件由 session-runner spawn 后挂的 listener 吸收，本函数只接同步 throw。
- *
- * @param child 子进程
- * @param line JSON 行（不含换行）
- * @param warnTag warn 日志的语义标记
- */
-function writeStdinLine(child: ChildProcess, line: string, warnTag: string): void {
-  if (!child.stdin || child.stdin.destroyed) return;
-  let ok: boolean;
-  try {
-    ok = child.stdin.write(line + "\n");
-  } catch (err) {
-    const code = (err as NodeJS.ErrnoException).code;
-    // EPIPE 语义最明确（子进程已死）；其他 write error 同样降级——通道断了父进程不该崩
-    console.warn(`[subagents] stdin write failed on ${warnTag} (${code ?? "unknown"}):`, err);
-    return;
-  }
-  if (!ok) console.warn(`[subagents] stdin backpressure on ${warnTag}`);
 }

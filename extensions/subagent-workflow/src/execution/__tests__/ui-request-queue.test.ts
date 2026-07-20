@@ -16,6 +16,7 @@ import { PassThrough } from "node:stream";
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
+import { ChildRpcChannel } from "../rpc-channel.ts";
 import {
   createUiRequestQueue,
   type UiRequest,
@@ -42,6 +43,11 @@ function makeFakeChild(): ChildProcess {
   } as unknown as ChildProcess;
 }
 
+/** 包裹 makeFakeChild 返回的 child 为 ChildRpcChannel（写入维度统一入口）。 */
+function makeFakeChannel(): ChildRpcChannel {
+  return new ChildRpcChannel(makeFakeChild());
+}
+
 /** 构造 select method 的 ExtensionUiRequest（ask_user 借道 select dialog 通道）。 */
 function makeSelectReq(question: string): { method: "select"; title: string; options: string[] } {
   return {
@@ -65,10 +71,11 @@ describe("UI 请求队列", () => {
     }) as unknown as UiRequestHandler;
 
     const child = makeFakeChild();
+    const channel = makeFakeChannel();
     const ctx = { uiRequestHandler: handler } as Parameters<
       typeof createUiRequestQueue
-    >[1];
-    const enqueue = createUiRequestQueue(child, ctx);
+    >[2];
+    const enqueue = createUiRequestQueue(child, channel, ctx);
 
     // 快速入队三个请求（handler 被调用但不 resolve）
     enqueue("r1", makeSelectReq("Q1"));
@@ -107,10 +114,11 @@ describe("UI 请求队列", () => {
     }) as unknown as UiRequestHandler;
 
     const child = makeFakeChild();
+    const channel = makeFakeChannel();
     const ctx = { uiRequestHandler: handler } as Parameters<
       typeof createUiRequestQueue
-    >[1];
-    const enqueue = createUiRequestQueue(child, ctx);
+    >[2];
+    const enqueue = createUiRequestQueue(child, channel, ctx);
 
     enqueue("r1", makeSelectReq("Q1"));
     enqueue("r2", makeSelectReq("Q2"));

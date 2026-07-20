@@ -20,20 +20,22 @@ import type { AgentConfig, ResolvedModel } from "./model-resolver.ts";
 import { collectResult } from "./output-collector.ts";
 import { getSubagentSessionDir } from "./path-encoding.ts";
 import { getPiInvocation } from "./pi-invocation.ts";
+import { ChildRpcChannel } from "./rpc-channel.ts";
 import { MAX_FORK_DEPTH } from "./session-context-resolver.ts";
 import { IDENTITY_CUSTOM_TYPE, type SubagentIdentityData } from "./session-reconstructor.ts";
-import { sendPromptCommand } from "./stdin-writer.ts";
 import {
   deriveSessionFilePath,
   findSessionFileByHeaderId,
   parseSpawnLine,
   type SpawnSessionHeader,
 } from "./spawn-event-adapter.ts";
+import { sendPromptCommand } from "./stdin-writer.ts";
 import type { SubagentStream } from "./stream-sink.ts";
 import {
   cleanupTempPrompt,
   writePromptToTempFile,
 } from "./temp-prompt.ts";
+import { createTurnLimiter, WRAP_UP_HINT } from "./turn-limiter.ts";
 import type {
   AgentEvent,
   AgentResult,
@@ -41,7 +43,6 @@ import type {
   SdkEvent,
   WorktreeHandle,
 } from "./types.ts";
-import { createTurnLimiter, WRAP_UP_HINT } from "./turn-limiter.ts";
 import { createUiRequestQueue } from "./ui-request-queue.ts";
 
 /**
@@ -653,10 +654,16 @@ export async function runSpawn(
     child.stdout.setEncoding("utf8");
     child.stderr.setEncoding("utf8");
 
+    // [W2] 构造 RPC 写入通道——与 child 同生命周期，作为 stdin 写入维度的单一真相源。
+    // 构造时统一挂载 child close/error + child.stdin 'error' listener（吸收 stream error，
+    // 根治 uncaughtException），取代 W1 在此处加的临时 ad-hoc listener。详见 rpc-channel.ts。
+    const rpcChannel = new ChildRpcChannel(child);
+
     // 喂 prompt 命令驱动子进程开始处理 task。pi runRpcMode 只消费 stdin RpcCommand，
     // 不读 positional arg；必须在 spawn 后主动写，否则子进程阻塞、totalTokens 恒 0。
     // 时机安全：pipe 内核缓冲不丢；pi 在 rebindSession 后才挂 stdin reader。
-    sendPromptCommand(child, fullTask);
+    // [W2] 写入经 channel.write（永不抛 + dead 置位 + EPIPE 降级 warn）。
+    sendPromptCommand(rpcChannel, fullTask);
 
     // d. signal → proc.kill 监听（一次性，替代 session.abort）
     const onAbort = (): void => {
@@ -679,7 +686,7 @@ export async function runSpawn(
     watchdog.unref();
 
     // stdout pump：逐行解析 → handleSdkEvent / enqueueUiRequest
-    const enqueueUiRequest = createUiRequestQueue(child, ctx);
+    const enqueueUiRequest = createUiRequestQueue(child, rpcChannel, ctx);
     // FR-4: get_state RPC response 监听器（id → resolver）。
     // parseSpawnLine 返回 kind:"response" 时，按 command+id 匹配 resolver。
     const get_stateListeners = new Map<string, (data: unknown) => void>();
@@ -792,7 +799,7 @@ export async function runSpawn(
     // close handler await handshakeSettled，保证无论 task 多快结束，close 时 sessionFile 已回填。
     // [#18] 握手状态变量（handshakeResultRef/settleHandshake/handshakeSettled/finishHandshake）
     // 已在上方 stdout handler 注册前定义，此处直接发起握手。
-    void performGetStateHandshake(child, (id, resolver) => {
+    void performGetStateHandshake(rpcChannel, (id, resolver) => {
       get_stateListeners.set(id, resolver);
     }).then((r) => {
       // header 加速路径下 settleHandshake 已 undefined，跳过（避免覆盖 header 结果）。
@@ -803,17 +810,6 @@ export async function runSpawn(
     child.stderr.on("data", (data: string) => {
       // 截断防 OOM：失控子进程持续打 stderr 会耗尽父进程内存。保留尾部便于诊断。
       stderrBuffer = (stderrBuffer + data).slice(-STDERR_MAX_CHARS);
-    });
-
-    // [W1止血] 吸收 child.stdin stream 'error' 事件，防止异步 stream error 升级为 uncaughtException
-    // 冲垮父进程。writeStdinLine 的 try/catch 只接同步 throw；子进程退出后 stdin 的 RST 在
-    // 事件循环里异步触发 'error'，没有 listener 会直接变成 uncaughtException。
-    // EPIPE 是最常见场景（writeStdinLine 已 warn 过，这里静默避免重复噪音）；其他 error
-    // warn 但不抛。W2 会用 ChildRpcChannel 构造时统一挂载，W1 仅在 spawn 处加临时 listener。
-    child.stdin?.on("error", (err: Error) => {
-      const code = (err as NodeJS.ErrnoException).code;
-      if (code === "EPIPE") return; // 子进程已退出，预期
-      console.warn(`[subagents] child.stdin stream error:`, err);
     });
 
     // 等待子进程退出

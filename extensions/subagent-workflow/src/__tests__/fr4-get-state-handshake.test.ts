@@ -1,23 +1,32 @@
-import { describe, expect,it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
+import { ChildRpcChannel } from "../execution/rpc-channel";
 import { parseSpawnLine } from "../execution/spawn-event-adapter";
 import { sendGetStateCommand } from "../execution/stdin-writer";
+
+/** 构造 minimal child (EventEmitter) + 包成 ChildRpcChannel，供 sendGetStateCommand 测试。 */
+function makeChannel(stdin: { destroyed: boolean; write: (data: string) => boolean; on?: unknown } | null): ChildRpcChannel {
+  const child = {
+    stdin,
+    on: vi.fn(),
+  } as unknown as ConstructorParameters<typeof ChildRpcChannel>[0];
+  return new ChildRpcChannel(child);
+}
 
 describe("FR-4: get_state RPC handshake", () => {
   describe("sendGetStateCommand", () => {
     it("should write get_state command to stdin", () => {
       const written: string[] = [];
-      const child = {
-        stdin: {
-          destroyed: false,
-          write: (data: string) => {
-            written.push(data);
-            return true;
-          },
+      const channel = makeChannel({
+        destroyed: false,
+        write: (data: string) => {
+          written.push(data);
+          return true;
         },
-      } as unknown as Parameters<typeof sendGetStateCommand>[0];
+        on: vi.fn(),
+      });
 
-      const id = sendGetStateCommand(child);
+      const id = sendGetStateCommand(channel);
 
       expect(written).toHaveLength(1);
       const parsed = JSON.parse(written[0]);
@@ -28,28 +37,29 @@ describe("FR-4: get_state RPC handshake", () => {
 
     it("should not write if stdin is destroyed", () => {
       const written: string[] = [];
-      const child = {
-        stdin: {
-          destroyed: true,
-          write: (data: string) => {
-            written.push(data);
-            return true;
-          },
+      const channel = makeChannel({
+        destroyed: true,
+        write: (data: string) => {
+          written.push(data);
+          return true;
         },
-      } as unknown as Parameters<typeof sendGetStateCommand>[0];
+        on: vi.fn(),
+      });
 
-      sendGetStateCommand(child);
+      sendGetStateCommand(channel);
 
       expect(written).toHaveLength(0);
+      expect(channel.isDead).toBe(true);
     });
 
     it("should not write if stdin is null", () => {
-      const child = {
-        stdin: null,
-      } as unknown as Parameters<typeof sendGetStateCommand>[0];
+      // stdin=null 时 ChildRpcChannel 构造不挂 stdin listener（optional chaining 短路），
+      // channel.write guard 跳过写入并置位 dead。
+      const channel = makeChannel(null);
 
       // Should not throw
-      sendGetStateCommand(child);
+      sendGetStateCommand(channel);
+      expect(channel.isDead).toBe(true);
     });
   });
 
