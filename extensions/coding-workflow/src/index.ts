@@ -93,7 +93,7 @@ export type CwParams = {
 
 // ── dispatch（action → handler 路由） ────────────────────────
 
-export function dispatch(params: CwParams, deps: ActionDeps): ActionResult {
+function dispatch(params: CwParams, deps: ActionDeps): ActionResult {
   switch (params.action) {
     case "create":
       return handleCreate(params as CreateParams, deps);

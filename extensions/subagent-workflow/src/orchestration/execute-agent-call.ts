@@ -46,7 +46,7 @@ const MAX_ATTEMPTS = 3;
  * pi session context 被 compact/cancel 时报告的模式。这种情况下重试无意义——
  * 同样的 call 会再次失败。直接 markDone failed 终止单次调用。
  */
-export const STALE_CONTEXT_PATTERNS = [
+const STALE_CONTEXT_PATTERNS = [
   "stale context",
   "stalecontext",
   "context canceled",
@@ -57,7 +57,7 @@ export const STALE_CONTEXT_PATTERNS = [
  * 判断错误信息是否表示 stale/canceled pi session context。
  * 命中时不重试——重试只会再次失败（P1-5）。
  */
-export function isStaleContextErrorMsg(msg: string | undefined): boolean {
+function isStaleContextErrorMsg(msg: string | undefined): boolean {
   if (!msg) return false;
   const lower = msg.toLowerCase();
   return STALE_CONTEXT_PATTERNS.some((p) => lower.includes(p));

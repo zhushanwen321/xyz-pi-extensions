@@ -300,7 +300,7 @@ export function formatEventLine(entry: AgentEventLogEntry, theme: ThemeLike): st
  *   grep/find/ls → 对应格式
  *   default → `<toolName> <argsJSON 预览>`
  */
-export function formatToolCall(
+function formatToolCall(
   toolName: string,
   args: Record<string, unknown>,
   theme: ThemeLike,

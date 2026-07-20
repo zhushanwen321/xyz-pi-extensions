@@ -11,8 +11,6 @@
  * 契约来源：lib/gates/__tests__/review-gate.test.ts（每个 DoneReason 分支 + workflowName 推导）。
  */
 
-import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
-
 import { Gate,type GateContext, type GateResult } from "./gate.js";
 import type { WorkflowRunResult } from "./workflow-types.js";
 
@@ -82,17 +80,4 @@ export class ReviewGate extends Gate {
     };
   }
 
-}
-
-// ── 工具：供上层 phase runner 用（类型导出） ─────────────────
-
-/**
- * 类型守卫：ExtensionAPI 是否具备 gate 所需的 __workflowRun。
-   *
-   * 双重断言理由：__workflowRun 是 workflow 扩展的私有 RPC，SDK 公共类型不
-   * 暴露，运行时探测必需。phase runner 可在调 gate.run 前用它预检，给出更
-   * 友好的提示（而非等到 gate.run 内部抛错）。
-   */
-export function hasReviewWorkflowApi(pi: ExtensionAPI): boolean {
-  return typeof (pi as unknown as { __workflowRun?: unknown }).__workflowRun === "function";
 }

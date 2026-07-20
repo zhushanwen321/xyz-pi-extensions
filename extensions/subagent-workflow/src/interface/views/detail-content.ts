@@ -40,7 +40,7 @@ import {
 const DETAIL_LEN_PROBE_WIDTH = 9999;
 
 /** status → 语义色标签（L2 detail 头用）。 */
-export function statusLabel(status: string, theme: ThemeLike): string {
+function statusLabel(status: string, theme: ThemeLike): string {
   switch (status) {
     case "completed": return theme.fg("success", status);
     case "running": return theme.fg("warning", status);

@@ -492,16 +492,6 @@ export function extractIssueIds(mdPath: string): string[] {
   return findAll(mdPath, "#(\\d+)");
 }
 
-/** 提取所有 UC 编号（UC-N 形式），返回 ['1', '2', ...]。 */
-export function extractUcIds(mdPath: string): string[] {
-  return findAll(mdPath, "UC-(\\d+)");
-}
-
-/** 提取所有测试用例 ID（T{UC}.{N} 形式），返回 ['1.1', '1.2', ...]。 */
-export function extractTestIds(mdPath: string): string[] {
-  return findAll(mdPath, "T(\\d+\\.\\d+)");
-}
-
 /**
  * 提取每个 issue 的 P 级。
  *
@@ -549,16 +539,6 @@ export function extractBlockedBy(mdPath: string): Record<string, string[]> {
   }
   return result;
 }
-
-// ── 共享常量（供各 check 脚本复用） ──────────────────────────
-
-/**
- * issue 分段正则片段（提取 `## #N` 或 `### #N` 标题定义的「真 issue」）。
- * 区分表格引用（行中 #N）和标题定义（行首 ## #N）。
- *
- * 用法：`new RegExp(ISSUE_HEADING_RE)` 或 findAll(mdPath, ISSUE_HEADING_RE)。
- */
-export const ISSUE_HEADING_RE = "^#{2,3}\\s+#(\\d+)";
 
 /**
  * 从 topicDir 推算 project_root（`.xyz-harness` 上层）。check-closeout 用。

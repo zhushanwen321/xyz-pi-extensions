@@ -317,7 +317,7 @@ function dispatchAgentCall(
   const signal = runtime.controller.signal;
   // D-005: onEvent 签名升级——executeAndAwait 直接出 AgentEvent（强类型，
   // session-runner handleSdkEvent 出口），不再有 raw JSONL 中间层。
-  // 删 jsonlToAgentEvent 翻译——直接 updateFromEvent。
+  // 不再有 raw JSONL → AgentEvent 翻译中间层——直接 updateFromEvent。
   // TUI 靠 tick 轮询 trace.toArray() 读 node.live，无需显式通知。
   const onEvent = (event: AgentEvent): void => {
     updateFromEvent(liveRecord, event);

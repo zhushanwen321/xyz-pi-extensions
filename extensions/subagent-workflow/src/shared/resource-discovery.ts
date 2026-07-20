@@ -386,7 +386,7 @@ export async function discoverResources(config: ScanConfig): Promise<DiscoveredR
  * agent .md 发现需要 mtime 缓存（hot-reload），不能走 async 全量扫描。
  * 此函数提供目录级同步扫描，npm/dev 包内发现仍需 async（agent-registry 用 builtin 兜底）。
  */
-export function scanDirectorySync(dirPath: string, kind: ResourceKind): string[] {
+function scanDirectorySync(dirPath: string, kind: ResourceKind): string[] {
   try {
     fsSync.accessSync(dirPath);
   } catch {
@@ -412,7 +412,7 @@ export function scanDirectorySync(dirPath: string, kind: ResourceKind): string[]
  * 同步版：读取 package.json 的 pi.{kind} manifest。
  * 供 agent-registry 同步路径使用。
  */
-export function readPackageManifestSync(pkgDir: string, kind: ResourceKind): string[] | undefined {
+function readPackageManifestSync(pkgDir: string, kind: ResourceKind): string[] | undefined {
   const pkgJsonPath = resolve(pkgDir, "package.json");
   try {
     const content = fsSync.readFileSync(pkgJsonPath, "utf-8");
@@ -473,7 +473,7 @@ export function processPackageSync(pkgDir: string, kind: ResourceKind): Discover
  * 同步版：扫描 npm node_modules 目录。
  * 供 agent-registry 同步路径使用。
  */
-export function scanNpmDirSync(nodeModulesDir: string, kind: ResourceKind): DiscoveredResource[] {
+function scanNpmDirSync(nodeModulesDir: string, kind: ResourceKind): DiscoveredResource[] {
   let entries: string[];
   try {
     entries = fsSync.readdirSync(nodeModulesDir);

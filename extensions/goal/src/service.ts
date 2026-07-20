@@ -14,7 +14,6 @@
 
 import {
 	accumulateTokens,
-	checkBudgetOnResume,
 	checkBudgetOnTurnEnd,
 	tick,
 } from "./engine/budget";
@@ -267,10 +266,3 @@ export function applyEvent(
 	return effects;
 }
 
-// ── resume 预算重检（供 command-adapter 调用）─────────
-
-export function checkResumeBudget(
-	state: GoalRuntimeState,
-): { type: "exceeded"; dimension: "token" | "time" } | null {
-	return checkBudgetOnResume(state);
-}

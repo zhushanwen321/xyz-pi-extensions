@@ -51,7 +51,7 @@ export function toSingleLine(text: string): string {
  * 把 token 数缩写为紧凑形式：≥1000 用 k 单位（12000 → "12k"，1500 → "1.5k"）。
  * 用于 widget 状态栏，避免长数字挤占空间。
  */
-export function formatTokens(n: number): string {
+function formatTokens(n: number): string {
 	if (n >= TOKEN_K_THRESHOLD) {
 		const k = n / TOKEN_K_THRESHOLD;
 		// 整数 k 不带小数（12k），非整数保留一位小数（1.5k）
@@ -65,7 +65,7 @@ export function formatTokens(n: number): string {
 /**
  * 返回 widget 标题：优先 slug，无 slug fallback objective 截断（单行）。
  */
-export function getTitle(state: GoalRuntimeState): string {
+function getTitle(state: GoalRuntimeState): string {
 	if (state.slug) return state.slug;
 	const objSingleLine = toSingleLine(state.objective);
 	return objSingleLine.length > OBJECTIVE_DISPLAY_LIMIT

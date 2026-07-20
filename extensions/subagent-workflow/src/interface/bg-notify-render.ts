@@ -111,7 +111,7 @@ export function renderBgNotifyMessage(
  *
  * 导出以便其他 message renderer 复用边框样式。
  */
-export class BorderedBgBox implements Component {
+class BorderedBgBox implements Component {
   private lines: string[];
   private t: ThemeLike;
   private cache: { width: number; lines: string[] } | undefined;

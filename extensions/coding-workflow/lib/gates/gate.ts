@@ -185,7 +185,7 @@ export abstract class Gate {
    *
    * 双重断言理由：__workflowRun 是 workflow 扩展挂到 pi 的私有 RPC（不在
    * ExtensionAPI 公共类型里），但运行时确实存在。SDK 类型不暴露，故需 unknown
-   * 中转。这是跨扩展 RPC 探测的标准模式（见 review-gate.ts:hasReviewWorkflowApi）。
+   * 中转。这是跨扩展 RPC 探测的标准模式。
    */
   private requireWorkflowRun(ctx: GateContext): WorkflowRunFn {
     const fn = (ctx.pi as unknown as { __workflowRun?: unknown }).__workflowRun;

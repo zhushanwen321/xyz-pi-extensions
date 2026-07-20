@@ -45,7 +45,7 @@ import { WorkflowRun } from "./models/workflow-run.ts";
  *
  * 升级格式时 bump 此常量并在 deserializeRun 中适配——旧文件返回 null（被 loadAll 跳过）。
  */
-export const SNAPSHOT_VERSION = "wf-run-v1" as const;
+const SNAPSHOT_VERSION = "wf-run-v1" as const;
 
 /**
  * 持久化快照形态——WorkflowRun 公共字段的 JSON 可序列化投影。

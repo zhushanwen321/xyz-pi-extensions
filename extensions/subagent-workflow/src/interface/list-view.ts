@@ -240,7 +240,7 @@ export async function createSubagentsView(
  * 注：KeyResult/KeyHandler 类型定义在 list-shared.ts（list-component 也用 KeyHandler 做构造
  * 参数类型，避免组件 import list-view）。本函数由 list-view factory 注入组件（依赖注入）。
  */
-export const processKey: KeyHandler = (
+const processKey: KeyHandler = (
   data,
   records,
   state,

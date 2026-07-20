@@ -55,15 +55,6 @@ import {
   visibleLen,
 } from "./format.ts";
 
-// L2 详情内容构建 + 滚动按键（纯函数）抽到 detail-content.ts；此处 re-export 保持
-// view 的对外 API 不变（测试仍从 WorkflowsView 导入）。
-export {
-  buildDetailContent,
-  detailContentLength,
-  type DetailKeyResult,
-  type DetailScrollContext,
-  processDetailKey,
-} from "./detail-content.ts";
 import { buildDetailContent, detailContentLength, type DetailScrollContext,processDetailKey } from "./detail-content.ts";
 
 // ── TUI layout constants ──────────────────────────────────────
