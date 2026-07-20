@@ -14,6 +14,8 @@
 // 红灯原因：handleUiRequest 签名仍是旧的 (child, id, params, ctx, signal)
 //   + parseChannel 未接入 session-runner，编译失败。W2 改完签名后转绿。
 
+import type { ChildProcess } from "node:child_process";
+import { EventEmitter } from "node:events";
 import { PassThrough } from "node:stream";
 
 import { describe, expect, it, vi } from "vitest";
@@ -22,7 +24,12 @@ import { ChildRpcChannel } from "../rpc-channel.ts";
 import { ASK_USER_RPC_PROMPT } from "../session-runner.ts";
 import { parseSpawnLine } from "../spawn-event-adapter.ts";
 import { parseChannel } from "../ui-channels.ts";
-import { createUiRequestQueue, type UiRequest, type UiRequestHandler } from "../ui-request-queue.ts";
+import {
+  createUiRequestQueue,
+  type UiRequest,
+  type UiRequestHandler,
+  type UiResponse,
+} from "../ui-request-queue.ts";
 
 // ── Pi 原生协议样本构造 ────────────────────────────────────
 // 真实格式：{type:"extension_ui_request", id, method:"select",
@@ -214,6 +221,150 @@ describe("handleUiRequest — handler 抛错兜底回 cancelled", () => {
     const writtenArg = writeSpy.mock.calls[0]?.[0] as string;
     expect(writtenArg).toContain('"cancelled":true');
     expect(writtenArg).toContain('"id":"ui-req-once"');
+  });
+});
+
+// ── W5 竞态场景：handler 在 await 期间 child 退出 ──────────────
+//
+// 006 文档「验证标准 #3」：handleUiRequest 在 await handler 期间 child 退出 → 不抛、不写、
+// handler 结果被丢弃。
+//
+// 双重保险：(1) createUiRequestQueue 的 child.on("close") 触发 abortController.abort() →
+// handleUiRequest 在 await 后 `signal?.aborted` 短路 return；(2) ChildRpcChannel 的
+// child.on("close") 触发 dead=true → 即使走到 respond，channel.write 也短路返回 false。
+// 两者由同一 child.emit("close") 同步触发（EventEmitter emit 同步调 listener）。
+//
+// 用真实 EventEmitter 作 child（非 vi.fn() on()），使两路 close listener 都能被 emit 触发。
+
+describe("handleUiRequest — handler 在 await 期间 child 退出（W5 竞态）", () => {
+  it("handler resolve 前 child.emit(close) → channel.isDead + signal.aborted 双保险，不写 stdin、不抛", async () => {
+    const stdin = new PassThrough();
+    const writeSpy = vi.spyOn(stdin, "write");
+
+    // 真实 EventEmitter 作 child：支持 emit，且两路 close listener 都能挂上
+    const child = new EventEmitter() as ChildProcess & { stdin: PassThrough };
+    // EventEmitter 本身无 stdin 字段，强制造型后挂载（运行时安全）
+    Object.assign(child, { stdin });
+
+    const channel = new ChildRpcChannel(child);
+
+    // 可控的慢 Promise：测试外部控制何时 resolve
+    let resolveHandler!: (v: UiResponse) => void;
+    const handler: UiRequestHandler = vi.fn(
+      () =>
+        new Promise<UiResponse>((resolve) => {
+          resolveHandler = resolve;
+        }),
+    );
+    const ctx = { uiRequestHandler: handler } as unknown as Parameters<
+      typeof createUiRequestQueue
+    >[2];
+
+    const enqueue = createUiRequestQueue(child, channel, ctx);
+    enqueue("ui-req-race", {
+      method: "select",
+      title: ASK_USER_MARKER,
+      options: [JSON.stringify(askUserPayload)],
+    });
+
+    // 等微任务让 handler 开始执行
+    await new Promise((r) => setImmediate(r));
+    expect(handler).toHaveBeenCalledTimes(1);
+
+    // 模拟 child 退出：同步触发 channel + queue 两路 close listener
+    child.emit("close", 0, null);
+
+    // 双保险均已生效
+    expect(channel.isDead).toBe(true);
+
+    // handler 晚到的 resolve（不应触达 stdin）
+    resolveHandler({ value: "late-answer" });
+
+    // 等微任务让 handleUiRequest 的 await 后代码执行
+    await new Promise((r) => setImmediate(r));
+    await new Promise((r) => setImmediate(r));
+
+    // 不写 stdin：signal.aborted 短路在前，channel.isDead 短路在后，respond 未被调
+    expect(writeSpy).not.toHaveBeenCalled();
+  });
+
+  it("handler reject 期间 child 退出 → catch 降级 cancelled，但 signal.aborted 仍跳过 write", async () => {
+    const stdin = new PassThrough();
+    const writeSpy = vi.spyOn(stdin, "write");
+
+    const child = new EventEmitter() as ChildProcess & { stdin: PassThrough };
+    Object.assign(child, { stdin });
+
+    const channel = new ChildRpcChannel(child);
+
+    let rejectHandler!: (e: Error) => void;
+    const handler: UiRequestHandler = vi.fn(
+      () =>
+        new Promise<UiResponse>((_resolve, reject) => {
+          rejectHandler = reject;
+        }),
+    );
+    const ctx = { uiRequestHandler: handler } as unknown as Parameters<
+      typeof createUiRequestQueue
+    >[2];
+
+    const enqueue = createUiRequestQueue(child, channel, ctx);
+    enqueue("ui-req-race-reject", {
+      method: "select",
+      title: ASK_USER_MARKER,
+      options: [JSON.stringify(askUserPayload)],
+    });
+
+    await new Promise((r) => setImmediate(r));
+
+    // child 先退出（abort 触发）
+    child.emit("close", 0, null);
+    expect(channel.isDead).toBe(true);
+
+    // handler 后 reject → catch 降级 result={cancelled:true}，但 signal.aborted 跳过 write
+    expect(() => rejectHandler(new Error("handler boom"))).not.toThrow();
+
+    await new Promise((r) => setImmediate(r));
+    await new Promise((r) => setImmediate(r));
+
+    expect(writeSpy).not.toHaveBeenCalled();
+  });
+
+  it("handler 返回后 child 才退出（无竞态）→ 正常写一次 stdin", async () => {
+    // 对照组：handler 正常 resolve 后 child 退出，write 已发生，不受 close 影响
+    const stdin = new PassThrough();
+    const written: string[] = [];
+    stdin.on("data", (chunk: Buffer) => written.push(chunk.toString()));
+
+    const child = new EventEmitter() as ChildProcess & { stdin: PassThrough };
+    Object.assign(child, { stdin });
+
+    const channel = new ChildRpcChannel(child);
+
+    const handler: UiRequestHandler = vi.fn(
+      async () => Promise.resolve<UiResponse>({ value: "normal-answer" }),
+    );
+    const ctx = { uiRequestHandler: handler } as unknown as Parameters<
+      typeof createUiRequestQueue
+    >[2];
+
+    const enqueue = createUiRequestQueue(child, channel, ctx);
+    enqueue("ui-req-normal", {
+      method: "select",
+      title: ASK_USER_MARKER,
+      options: [JSON.stringify(askUserPayload)],
+    });
+
+    // handler resolve → write 发生
+    await new Promise((r) => setImmediate(r));
+    await new Promise((r) => setImmediate(r));
+
+    // child 才退出（write 已完成）
+    child.emit("close", 0, null);
+
+    const raw = written.join("");
+    expect(raw).toContain('"id":"ui-req-normal"');
+    expect(raw).toContain('"value":"normal-answer"');
   });
 });
 
