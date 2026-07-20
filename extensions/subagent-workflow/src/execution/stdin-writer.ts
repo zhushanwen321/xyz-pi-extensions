@@ -94,6 +94,11 @@ export function sendGetStateCommand(child: ChildProcess): string {
  *
  * [R1] write 返回 false 时记 warn（不阻塞，内核缓冲会随后排空）。
  * stdin 已关闭/销毁时跳过——respond 已检查 signal，sendPromptCommand 已检查 destroyed。
+ * [R3] write 同步抛 EPIPE 时降级 warn 不抛（止血）：子进程在父进程等待 UI 响应期间退出，
+ *     stdin 写端已关闭，write 触发 EPIPE。这是 RPC 通道断开的预期信号——父进程不应崩溃，
+ *     子进程死亡由 'close' 事件正常处理。其他 write error（非 EPIPE）同样降级 warn 不抛：
+ *     RPC 通道断了不管什么原因，父进程都不该死（W2 会用 ChildRpcChannel 统一治理，W1 仅止血）。
+ *     异步 stream 'error' 事件由 session-runner spawn 后挂的 listener 吸收，本函数只接同步 throw。
  *
  * @param child 子进程
  * @param line JSON 行（不含换行）
@@ -101,6 +106,14 @@ export function sendGetStateCommand(child: ChildProcess): string {
  */
 function writeStdinLine(child: ChildProcess, line: string, warnTag: string): void {
   if (!child.stdin || child.stdin.destroyed) return;
-  const ok = child.stdin.write(line + "\n");
+  let ok: boolean;
+  try {
+    ok = child.stdin.write(line + "\n");
+  } catch (err) {
+    const code = (err as NodeJS.ErrnoException).code;
+    // EPIPE 语义最明确（子进程已死）；其他 write error 同样降级——通道断了父进程不该崩
+    console.warn(`[subagents] stdin write failed on ${warnTag} (${code ?? "unknown"}):`, err);
+    return;
+  }
   if (!ok) console.warn(`[subagents] stdin backpressure on ${warnTag}`);
 }

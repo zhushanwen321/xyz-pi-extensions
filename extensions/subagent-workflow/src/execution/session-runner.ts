@@ -805,6 +805,17 @@ export async function runSpawn(
       stderrBuffer = (stderrBuffer + data).slice(-STDERR_MAX_CHARS);
     });
 
+    // [W1止血] 吸收 child.stdin stream 'error' 事件，防止异步 stream error 升级为 uncaughtException
+    // 冲垮父进程。writeStdinLine 的 try/catch 只接同步 throw；子进程退出后 stdin 的 RST 在
+    // 事件循环里异步触发 'error'，没有 listener 会直接变成 uncaughtException。
+    // EPIPE 是最常见场景（writeStdinLine 已 warn 过，这里静默避免重复噪音）；其他 error
+    // warn 但不抛。W2 会用 ChildRpcChannel 构造时统一挂载，W1 仅在 spawn 处加临时 listener。
+    child.stdin?.on("error", (err: Error) => {
+      const code = (err as NodeJS.ErrnoException).code;
+      if (code === "EPIPE") return; // 子进程已退出，预期
+      console.warn(`[subagents] child.stdin stream error:`, err);
+    });
+
     // 等待子进程退出
     const exitCode = await new Promise<number>((resolve) => {
       child.on("close", async (code: number | null) => {

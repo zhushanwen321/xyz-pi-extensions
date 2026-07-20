@@ -351,3 +351,55 @@ describe("writeStdinLine 背压 — write 返回 false 时 warn 不 throw", () =
     expect(warnSpy).not.toHaveBeenCalled();
   });
 });
+
+// ============================================================
+// writeStdinLine 写入抛错降级（[R3] 止血）
+// ============================================================
+//
+// 触发场景：subagent 子进程在父进程等待 UI 响应期间退出（OOM/被杀/正常退出），
+// stdin 写端关闭。handler resolve 后父进程回到 respond → writeStdinLine →
+// child.stdin.write() 同步抛 EPIPE。writeStdinLine 的 try/catch 必须接住并降级 warn，
+// 不能让错误冒泡为 uncaughtException 冲垮父进程。
+// 验证 [R3] EPIPE 与非 EPIPE 两个降级分支，与 backpressure 测试同一 mock 风格。
+describe("writeStdinLine write 抛错 — 同步 EPIPE/error 降级 warn 不 throw (W1止血 [R3])", () => {
+  it("child.stdin.write 同步 throw EPIPE → respond 不抛、warn 一次", () => {
+    const fakeStdin = {
+      write: vi.fn(() => {
+        const e = new Error("write EPIPE");
+        (e as NodeJS.ErrnoException).code = "EPIPE";
+        throw e;
+      }),
+      destroyed: false,
+    } as unknown as PassThrough;
+    const child = { stdin: fakeStdin } as unknown as ChildProcess;
+
+    expect(() => respond(child, "req-epipe", { value: "x" })).not.toThrow();
+
+    // write 被调一次（准备写入 response 行）
+    expect(fakeStdin.write).toHaveBeenCalledTimes(1);
+    // warn 被调一次（降级告警，含 warnTag 与 code）
+    expect(warnSpy).toHaveBeenCalledTimes(1);
+    const warnMsg = warnSpy.mock.calls[0]?.[0] as string;
+    expect(warnMsg).toContain("stdin write failed");
+    expect(warnMsg).toContain("EPIPE");
+  });
+
+  it("child.stdin.write 同步 throw 非 EPIPE error → respond 同样不抛、warn 含 unknown code", () => {
+    // 非预期错误（如 fs 内部故障）也应降级——RPC 通道断了不管什么原因，父进程都不该崩
+    const fakeStdin = {
+      write: vi.fn(() => {
+        throw new Error("something else went wrong");
+      }),
+      destroyed: false,
+    } as unknown as PassThrough;
+    const child = { stdin: fakeStdin } as unknown as ChildProcess;
+
+    expect(() => respond(child, "req-other", { value: "x" })).not.toThrow();
+
+    expect(fakeStdin.write).toHaveBeenCalledTimes(1);
+    expect(warnSpy).toHaveBeenCalledTimes(1);
+    const warnMsg = warnSpy.mock.calls[0]?.[0] as string;
+    expect(warnMsg).toContain("stdin write failed");
+    expect(warnMsg).toContain("unknown"); // code 缺失时 warn 为 (unknown)
+  });
+});
