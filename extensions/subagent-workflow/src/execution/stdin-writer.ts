@@ -17,16 +17,38 @@ import type { UiResponse } from "./dialog-queue.ts";
 import type { ChildRpcChannel } from "./rpc-channel.ts";
 
 /**
+ * 序列化 UiResponse 为 Pi 原生 extension_ui_response JSON 行。
+ *
+ * SR-5：ack（fire-and-forget）返回 undefined——Pi 对 fire-and-forget method 不期待响应，
+ * 写入会触发协议错配。其他三种 shape（value/confirmed/cancelled）按对应字段序列化。
+ *
+ * [R2] JSON.stringify 可能抛错（out.value 含循环引用 / BigInt 等不可序列化结构），
+ *     try/catch 降级为 cancelled——宁可取消单次 dialog 也不让父进程崩溃（UI 请求通道
+ *     不应被脏数据拖垮）。
+ *
+ * @returns JSON 行字符串；ack 分支返回 undefined（调用方跳过写入，SR-5）
+ */
+export function serializeUiResponse(id: string, out: UiResponse): string | undefined {
+  let line: string | undefined;
+  try {
+    if ("value" in out) line = JSON.stringify({ type: "extension_ui_response", id, value: out.value });
+    else if ("confirmed" in out) line = JSON.stringify({ type: "extension_ui_response", id, confirmed: out.confirmed });
+    else if ("cancelled" in out) line = JSON.stringify({ type: "extension_ui_response", id, cancelled: true });
+  } catch (err) {
+    // [R2] out.value 含循环引用/BigInt 等不可序列化结构——降级 cancelled，避免父进程崩溃。
+    console.warn(`[subagents] JSON.stringify failed for ui response ${id}, degrading to cancelled:`, err);
+    line = JSON.stringify({ type: "extension_ui_response", id, cancelled: true });
+  }
+  // ack: out 是 {ack:true} 时上面三分支都不匹配，line 保持 undefined
+  return line;
+}
+
+/**
  * 按 UiResponse 形状构造 Pi 原生 extension_ui_response 并写 stdin。
  *
- * SR-5：ack（fire-and-forget）不写 stdin——Pi 对 fire-and-forget method 不期待响应，
- * 写入会触发协议错配。其他三种 shape（value/confirmed/cancelled）按对应字段写。
- *
- * [R2] 序列化在本函数内逐分支完成。JSON.stringify 可能抛错（out.value 含循环引用 /
- *     BigInt 等不可序列化结构），try/catch 降级为 cancelled——宁可取消单次 dialog 也不让
- *     父进程崩溃（UI 请求通道不应被脏数据拖垮）。
- *
- * 写入失败（通道已断/EPIPE）由 channel.write 返回 false 静默处理，不再抛错。
+ * respond 是 serializeUiResponse + channel.write 的薄包装：序列化逻辑（[R2] 降级、
+ * SR-5 ack 跳过）见 serializeUiResponse；写入失败（通道已断/EPIPE）由 channel.write
+ * 返回 false 静默处理（W2 channel.write 是 total function，永不抛）。
  *
  * @param channel RPC 写入通道（封装 child.stdin 写入 + 存活判断）
  * @param id 请求 id（关联 response）
@@ -40,18 +62,8 @@ export function respond(
   signal?: AbortSignal,
 ): void {
   if (signal?.aborted) return;
-  let line: string | undefined;
-  try {
-    if ("value" in out) line = JSON.stringify({ type: "extension_ui_response", id, value: out.value });
-    else if ("confirmed" in out) line = JSON.stringify({ type: "extension_ui_response", id, confirmed: out.confirmed });
-    else if ("cancelled" in out) line = JSON.stringify({ type: "extension_ui_response", id, cancelled: true });
-  } catch (err) {
-    // [R2] out.value 含循环引用/BigInt 等不可序列化结构——降级 cancelled，避免父进程崩溃。
-    console.warn(`[subagents] JSON.stringify failed for ui response ${id}, degrading to cancelled:`, err);
-    line = JSON.stringify({ type: "extension_ui_response", id, cancelled: true });
-  }
-  // ack: fire-and-forget，不写 stdin（SR-5）
-  if (line === undefined) return;
+  const line = serializeUiResponse(id, out);
+  if (line === undefined) return; // ack: fire-and-forget，不写 stdin（SR-5）
   channel.write(line);
 }
 

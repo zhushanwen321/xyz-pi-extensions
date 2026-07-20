@@ -13,7 +13,7 @@
 
 import type { ChildProcess } from "node:child_process";
 
-import type { UiRequest } from "./dialog-queue.ts";
+import type { UiRequest, UiResponse } from "./dialog-queue.ts";
 // 类型再导出：dialog-queue.ts 是 UiRequest/UiResponse/UiRequestHandler 的规范来源，
 // 本模块再导出供测试 import（避免测试直接依赖 dialog-queue 内部实现）。
 export type { UiRequest, UiRequestHandler, UiResponse } from "./dialog-queue.ts";
@@ -96,6 +96,11 @@ export function createUiRequestQueue(
  * handler 未设置时不再静默忽略——console.warn 兜底（FR-9 可观测性），
  * W3 接入 SubagentService.notifyMissingHandler 的 appendEntry。
  *
+ * [W3] 错误边界分离（D3）：try 只包不可信的 handler 代码（用户/UI 业务逻辑可能抛错），
+ *   handler 错误降级为 cancelled response；write 移出 try（respond 经 serializeUiResponse
+ *   + channel.write，channel.write 是 total function 永不抛），write 错误由 channel 静默
+ *   吸收（返回 false）。彻底消除旧结构中「catch 内二次 write」可能导致的 uncaughtException。
+ *
  * @param channel RPC 写入通道（响应写入 child.stdin）
  * @param id 请求 id（子进程用它关联 response）
  * @param request ExtensionUiRequest（method 平铺，从 enqueueUiRequest 传入）
@@ -140,17 +145,21 @@ async function handleUiRequest(
     ...extractMethodFields(request),
   };
 
+  // [W3] 错误边界分离（D3）：try 只包不可信的 handler 代码（用户/UI 业务逻辑可能抛），
+  //   catch 不再 write，只把结果降级为 cancelled；write 统一移出 try/catch 后执行一次。
+  //   channel.write（respond 内部）是 total function 永不抛，无需外层 catch；
+  //   旧结构「catch 内调 respond 二次 write」是 uncaughtException 的结构性缺陷，至此根除。
+  let result: UiResponse;
   try {
-    const result = await handler(uiReq);
-    // [R3] 子进程已退出，跳过写入
-    if (signal?.aborted) return;
-    respond(channel, id, result, signal);
+    result = await handler(uiReq);
   } catch (err) {
-    // [R3] 子进程已退出，跳过写入
-    if (signal?.aborted) return;
     console.error("[subagents] uiRequestHandler threw:", err);
-    respond(channel, id, { cancelled: true }, signal);
+    result = { cancelled: true };
   }
+
+  // write 移出 try：respond 经 serializeUiResponse + channel.write，永不抛
+  if (signal?.aborted) return;
+  respond(channel, id, result, signal);
 }
 
 /** 从 ExtensionUiRequest 提取 method-specific 字段到 UiRequest（与 Pi rpc-types.ts 1:1）。

@@ -178,6 +178,43 @@ describe("handleUiRequest — handler 抛错兜底回 cancelled", () => {
     expect(raw).toContain('"id":"ui-req-err"');
     expect(raw).toContain('"cancelled":true');
   });
+
+  // [W3] 错误边界分离：catch 不再二次 write。旧结构 catch 内调 respond 会导致 stdin 被写两次
+  // （handler reject 时），是 uncaughtException 的结构性缺陷。W3 后 catch 只设 result=cancelled，
+  // 统一在 try/catch 后调一次 respond。
+  it("handler reject 后 stdin.write 恰好调用 1 次（catch 不再二次 write，W3）", async () => {
+    const stdin = new PassThrough();
+    // 直接 spy stdin.write 计数（不缓冲 data 事件，只验证调用次数）
+    const writeSpy = vi.spyOn(stdin, "write");
+
+    const child = { stdin, on: vi.fn(), removeListener: vi.fn() } as unknown as Parameters<
+      typeof createUiRequestQueue
+    >[0];
+    const channel = new ChildRpcChannel(child);
+
+    const handler: UiRequestHandler = vi.fn(
+      async () => Promise.reject(new Error("boom")),
+    );
+    const ctx = { uiRequestHandler: handler } as unknown as Parameters<
+      typeof createUiRequestQueue
+    >[2];
+
+    const enqueue = createUiRequestQueue(child, channel, ctx);
+    enqueue("ui-req-once", {
+      method: "select",
+      title: ASK_USER_MARKER,
+      options: [JSON.stringify(askUserPayload)],
+    });
+
+    // 等微任务 + stdin flush
+    await new Promise((r) => setImmediate(r));
+
+    // handler 抛错后只应有一次 write（写 cancelled），不再有 catch 内的二次 write
+    expect(writeSpy).toHaveBeenCalledTimes(1);
+    const writtenArg = writeSpy.mock.calls[0]?.[0] as string;
+    expect(writtenArg).toContain('"cancelled":true');
+    expect(writtenArg).toContain('"id":"ui-req-once"');
+  });
 });
 
 // ── W4 提示词（保留，不受格式修复影响） ──────────────────────────

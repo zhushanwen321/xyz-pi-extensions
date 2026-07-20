@@ -27,7 +27,7 @@ import { PassThrough } from "node:stream";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { ChildRpcChannel } from "../rpc-channel.ts";
-import { respond, sendGetStateCommand, sendPromptCommand } from "../stdin-writer.ts";
+import { respond, sendGetStateCommand, sendPromptCommand, serializeUiResponse } from "../stdin-writer.ts";
 
 // ── helpers ──
 
@@ -328,6 +328,61 @@ describe("sendGetStateCommand", () => {
     const id1 = sendGetStateCommand(channel);
     const id2 = sendGetStateCommand(channel);
     expect(id1).not.toBe(id2);
+  });
+});
+
+// ============================================================
+// serializeUiResponse：纯函数直接测试（W3 提取）
+// ============================================================
+//
+// W3 将 respond 内的序列化逻辑提取为 serializeUiResponse 纯函数。上面的 respond 测试经
+// stdin 间接验证序列化结果；本块直接断言纯函数返回值，锁定 [R2] 降级 + SR-5 ack=undefined
+// 契约，未来 respond 重构（如换通道抽象）时不会失效。
+
+describe("serializeUiResponse — 纯函数返回值（W3 提取）", () => {
+  it("value 分支返回含 value 字段的 JSON 行", () => {
+    const line = serializeUiResponse("id-v", { value: "hello" });
+    expect(line).toBeDefined();
+    expect(JSON.parse(line!)).toEqual({ type: "extension_ui_response", id: "id-v", value: "hello" });
+  });
+
+  it("confirmed 分支返回含 confirmed 字段的 JSON 行（true/false 都透传）", () => {
+    expect(JSON.parse(serializeUiResponse("id-ct", { confirmed: true })!)).toEqual({
+      type: "extension_ui_response",
+      id: "id-ct",
+      confirmed: true,
+    });
+    expect(JSON.parse(serializeUiResponse("id-cf", { confirmed: false })!)).toEqual({
+      type: "extension_ui_response",
+      id: "id-cf",
+      confirmed: false,
+    });
+  });
+
+  it("cancelled 分支返回含 cancelled:true 的 JSON 行", () => {
+    const line = serializeUiResponse("id-x", { cancelled: true });
+    expect(JSON.parse(line!)).toEqual({ type: "extension_ui_response", id: "id-x", cancelled: true });
+  });
+
+  it("ack 分支返回 undefined（SR-5：fire-and-forget 不写 stdin）", () => {
+    expect(serializeUiResponse("id-a", { ack: true })).toBeUndefined();
+  });
+
+  it("out.value 含循环引用 → 降级 cancelled + warn", () => {
+    const circular: Record<string, unknown> = { a: 1 };
+    circular.self = circular;
+
+    const line = serializeUiResponse("id-loop", { value: circular } as never);
+    expect(JSON.parse(line!)).toEqual({ type: "extension_ui_response", id: "id-loop", cancelled: true });
+    expect(warnSpy).toHaveBeenCalledTimes(1);
+    expect(warnSpy.mock.calls[0]?.[0]).toContain("id-loop");
+    expect(warnSpy.mock.calls[0]?.[0]).toContain("JSON.stringify failed");
+  });
+
+  it("out.value 含 BigInt → 降级 cancelled + warn", () => {
+    const line = serializeUiResponse("id-big", { value: BigInt(1) } as never);
+    expect(JSON.parse(line!)).toEqual({ type: "extension_ui_response", id: "id-big", cancelled: true });
+    expect(warnSpy).toHaveBeenCalledTimes(1);
   });
 });
 
