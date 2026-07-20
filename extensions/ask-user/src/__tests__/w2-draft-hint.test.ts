@@ -13,7 +13,6 @@ import {
 	multiQ,
 	RIGHT,
 	singleQ,
-	singleQWithComment,
 	stubTheme,
 	UP,
 } from "./fixtures";
@@ -78,15 +77,6 @@ describe("W2 — draftText migration", () => {
 		expect(editorLine1).toContain("aaa");
 		expect(editorLine1).not.toContain("ccc");
 	});
-
-	it("C-BC4C: comment flow submits comment with answer", () => {
-		const { c, result } = make([singleQWithComment]);
-		c.handleInput(ENTER); // select A → comment mode
-		c.handleInput("my note");
-		c.handleInput(ENTER); // submit
-		expect(result.val).toBeDefined();
-		expect(result.val!.answers["Which DB? (with comment)"]).toBe("Postgres — my note");
-	});
 });
 
 // ── hint line: append-only UX hint ──
@@ -95,16 +85,6 @@ describe("W2 — hint line", () => {
 		const { c } = make([singleQ]);
 		c.handleInput(DOWN);
 		c.handleInput(DOWN);
-		c.handleInput(ENTER);
-		const lines = c.render(80);
-		const hintLine = lines.find((l: string) => l.includes("move") && l.includes("Backspace deletes"));
-		expect(hintLine).toBeDefined();
-		expect(hintLine).toContain("Enter submit");
-		expect(hintLine).toContain("Esc back");
-	});
-
-	it("C-HINT-2: comment editor hint contains all expected hints", () => {
-		const { c } = make([singleQWithComment]);
 		c.handleInput(ENTER);
 		const lines = c.render(80);
 		const hintLine = lines.find((l: string) => l.includes("move") && l.includes("Backspace deletes"));

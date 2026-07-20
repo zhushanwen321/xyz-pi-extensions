@@ -30,7 +30,6 @@ import {
 	INSERT,
 	LEFT,
 	make,
-	multiQWithComment,
 	OSC_BEL,
 	OSC_ST,
 	PAGE_DOWN,
@@ -50,14 +49,6 @@ import {
 	UNKNOWN_SS3,
 	UP,
 } from "./fixtures";
-
-/** Helper: 打开 comment 编辑器并返回 component（多问题避免单问题 auto-submit） */
-function openComment(): AskUserComponent {
-	const { c } = make(multiQWithComment);
-	// Q1 (allowComment): select A → enters comment mode
-	c.handleInput(ENTER);
-	return c;
-}
 
 /** Helper: 打开 freeform 编辑器并返回 component（不渲染，避免缓存） */
 function openFreeform(q: Question[]): AskUserComponent {
@@ -264,25 +255,6 @@ describe("AskUserComponent — key leak fix (C-ARROW / C-KEYMAP)", () => {
 		expect(editorLine).not.toContain("abc");
 	});
 
-	// ── C-KEYMAP-COMMENT-UP: arrow key no-op in comment editor too ──
-	it("C-KEYMAP-COMMENT-UP: arrow keys are no-op in comment editor", () => {
-		const c = openComment();
-		c.handleInput("a");
-		c.handleInput(UP);
-		c.handleInput(RIGHT);
-		c.handleInput("b");
-		// comment editor renders text and cursor on separate lines;
-		// check the text line (before cursor) contains "ab"
-		const lines = c.render(60);
-		const textLine = lines.find((l) => l.includes("ab"));
-		expect(textLine).toBeDefined();
-		expect(textLine).toContain("ab");
-		// Ensure no leaked bracket characters from arrow escape sequences
-		const allText = lines.join("\n");
-		expect(allText).not.toMatch(/\[A/); // no leaked UP sequence
-		expect(allText).not.toMatch(/\[C/); // no leaked RIGHT sequence
-	});
-
 	// ── C-KEYMAP-MOD: modifier key combinations matrix (18 cases) ──
 	const modifierCases: Array<{ name: string; seq: string }> = [
 		{ name: "ctrl+up", seq: CTRL_UP },
@@ -427,18 +399,6 @@ describe("AskUserComponent — unknown control sequence leak fix (C-CSI)", () =>
 		expect(editorLine).toBeDefined();
 		expect(editorLine).toContain("ok");
 		expect(editorLine).not.toContain("\x1b[A"); expect(editorLine).not.toContain("\x1b[B"); expect(editorLine).not.toContain("\x1b[C"); expect(editorLine).not.toContain("\x1b[D");
-	});
-
-	it("C-CSI-10: unknown CSI does not leak in comment editor", () => {
-		const c = openComment();
-		c.handleInput(UNKNOWN_CSI);
-		c.handleInput("ab");
-		const lines = c.render(60);
-		const textLine = lines.find((l) => l.includes("ab"));
-		expect(textLine).toBeDefined();
-		expect(textLine).toContain("ab");
-		const allText = lines.join("\n");
-		expect(allText).not.toMatch(/\[9/);
 	});
 
 	it("C-CSI-R1: plain text still appended correctly", () => {

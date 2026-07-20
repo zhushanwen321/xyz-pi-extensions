@@ -10,11 +10,10 @@ export const SPLIT_PANE_MIN_WIDTH = 84;
 export const SPLIT_PANE_SEPARATOR = " │ ";
 export const SPLIT_PANE_LEFT_MIN = 32;
 export const SPLIT_PANE_RIGHT_MIN = 28;
-export const ANSWER_COMMENT_SEPARATOR = " — ";
 
 // ── Input schema（LLM 调用参数） ─────────────────────
 // description 用英文：这些字符串会进 LLM 的 tool schema，英文更利于模型理解。
-export const OptionSchema = Type.Object({
+const OptionSchema = Type.Object({
 	label: Type.String({
 		description:
 			"Short, mutually exclusive option label (also the answer value returned to the LLM — keep it concise, ≤ ~40 chars). To recommend an option, prefix its label with '(Recommended)' and list it first.",
@@ -47,9 +46,6 @@ export const QuestionSchema = Type.Object({
 	multiSelect: Type.Optional(
 		Type.Boolean({ description: "Default false. Set true only when more than one option can validly apply simultaneously; otherwise leave false for a single best answer." }),
 	),
-	allowComment: Type.Optional(
-		Type.Boolean({ description: "Default false. Set true to let the user append a short free-text comment after selecting (e.g. to note a constraint)." }),
-	),
 });
 
 export const InputSchema = Type.Object({
@@ -64,14 +60,12 @@ export const InputSchema = Type.Object({
 export type Option = Static<typeof OptionSchema>;
 export type Question = Static<typeof QuestionSchema>;
 
-// ── Result schema（details，renderResult 数据源） ─────
-export const ResultSchema = Type.Object({
-	questions: Type.Array(QuestionSchema),
-	answers: Type.Record(Type.String(), Type.String()),
-	cancelled: Type.Boolean(),
-});
-
-export type Result = Static<typeof ResultSchema>;
+// ── Result（details，renderResult 数据源）─────
+export interface Result {
+	questions: Question[];
+	answers: Record<string, string>;
+	cancelled: boolean;
+}
 
 /** execute 意外异常时返回的错误 details（区别于 Result.cancelled 的业务取消） */
 export interface ErrorDetails {
@@ -93,7 +87,7 @@ export interface ThemeLike {
 }
 
 /** 单问题的交互模式 */
-export type QuestionMode = "options" | "freeform" | "comment";
+export type QuestionMode = "options" | "freeform";
 
 /** 单问题的交互状态（每问题一个实例） */
 export interface QuestionState {
@@ -110,8 +104,6 @@ export interface QuestionState {
 	/** freeform Esc 保存的未提交草稿；null=无草稿。
 	 *  与 freeTextValue（已提交答案）分离，避免放弃的草稿污染答案、触发 auto-confirm。 */
 	freeDraft: string | null;
-	/** 可选评论；null=未输入 */
-	commentValue: string | null;
 	/** 当前交互模式 */
 	mode: QuestionMode;
 	/** 编辑器草稿文本（每问题独立持有，进编辑器时预填、退出时清空） */
@@ -129,7 +121,6 @@ export function createQuestionState(): QuestionState {
 		confirmed: false,
 		freeTextValue: null,
 		freeDraft: null,
-		commentValue: null,
 		mode: "options",
 		draftText: "",
 		savedOptionsCursorIndex: 0,
@@ -138,9 +129,9 @@ export function createQuestionState(): QuestionState {
 
 // ── UTF-16 surrogate pair 工具（编辑器光标移动/删除/渲染共用） ──
 /** 高代理位掩码：charCode & 0xFC00 === 0xD800 判定 surrogate pair 前半 */
-export const SURROGATE_HIGH_MASK = 0xFC00;
+const SURROGATE_HIGH_MASK = 0xFC00;
 /** 高代理起始码点（surrogate pair 前半的判定值） */
-export const SURROGATE_HIGH_START = 0xD800;
+const SURROGATE_HIGH_START = 0xD800;
 /** 一个 surrogate pair 占用的 UTF-16 code unit 数 */
 export const SURROGATE_PAIR_LEN = 2;
 

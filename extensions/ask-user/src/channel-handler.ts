@@ -9,8 +9,8 @@
 //     不循环）。返回 {value: JSON.stringify(answers)} 让子进程 JSON.parse(value) decode。
 //   - TUI：走 ctx.ui.custom + AskUserComponent。三步：(1) protoQuestions → 内部 Question[]，
 //     (2) ctx.ui.custom 渲染拿内部 Result，(3) 内部 Result.answers（key=question 全文，
-//     value="label1, label2 — comment"）→ 重新编码为 proto AskUserAnswers（key=header/question，
-//     单选=value，多选=JSON 数组，Other→__other，comment→__comment），让子进程 decode 一致。
+//     value="label1, label2"）→ 重新编码为 proto AskUserAnswers（key=header/question，
+//     单选=value，多选=JSON 数组，Other→__other），让子进程 decode 一致。
 //
 // handler 收到的 req.channelPayload = {questions: AskUserQuestion[], allowCancel}（proto 格式，
 // 由子进程 askUserInteract 编码、subagent-workflow parseChannel 解析 options[0] JSON 得到）。
@@ -23,7 +23,7 @@ import {
 } from "@xyz-agent/extension-protocol";
 
 import { AskUserComponent } from "./component";
-import { ANSWER_COMMENT_SEPARATOR, type Option, type Question, type Result, type ThemeLike } from "./types";
+import { type Option, type Question, type Result, type ThemeLike } from "./types";
 
 /**
  * channel handler 签名——与 subagent-workflow 的 UiChannelRegistry.ChannelHandler 一致
@@ -59,7 +59,6 @@ function protoToInternalQuestions(protoQuestions: AskUserQuestion[]): Question[]
 			...(pq.context !== undefined ? { context: pq.context } : {}),
 			options: opts,
 			...(pq.multiSelect !== undefined ? { multiSelect: pq.multiSelect } : {}),
-			...(pq.allowComment !== undefined ? { allowComment: pq.allowComment } : {}),
 		};
 	});
 }
@@ -67,18 +66,17 @@ function protoToInternalQuestions(protoQuestions: AskUserQuestion[]): Question[]
 /**
  * 把 TUI 路径产出的内部 Result.answers 重新编码为 proto AskUserAnswers。
  *
- * 内部 Result.answers：key = question 全文，value = "label1, label2 — comment"
- * （Other 自由文本与 selected 标签逗号拼接，comment 用 ANSWER_COMMENT_SEPARATOR 分隔）。
+ * 内部 Result.answers：key = question 全文，value = "label1, label2"
+ * （Other 自由文本与 selected 标签逗号拼接）。
  *
  * proto AskUserAnswers 契约（@xyz-agent/extension-protocol）：
  *   - key = question.header ?? question 全文
  *   - 单选：value = 选中项 value string
  *   - 多选：value = JSON.stringify(选中项 value 数组)
  *   - Other 自由文本：单独 key `${header}__other`
- *   - comment：单独 key `${header}__comment`
  *
  * 解码（无信息丢失）：用 protoQuestion.options 的 label 集合精确匹配 selected；
- * 不匹配的 token = Other 自由文本；comment 由 ANSWER_COMMENT_SEPARATOR 切出。
+ * 不匹配的 token = Other 自由文本。
  */
 function encodeTuiResultToProto(
 	protoQuestions: AskUserQuestion[],
@@ -97,15 +95,8 @@ function encodeTuiResultToProto(
 			if (o.value !== undefined) knownLabels.add(o.value);
 		}
 
-		// 切 body / comment（comment 在 ANSWER_COMMENT_SEPARATOR 之后）
-		const sepIdx = internalText.indexOf(ANSWER_COMMENT_SEPARATOR);
-		const body = sepIdx >= 0 ? internalText.slice(0, sepIdx) : internalText;
-		const comment = sepIdx >= 0
-			? internalText.slice(sepIdx + ANSWER_COMMENT_SEPARATOR.length).trim() || undefined
-			: undefined;
-
-		// body tokens：匹配 knownLabels 的为 selected，其余为 Other 自由文本
-		const tokens = body.split(/[,，]/).map((t: string) => t.trim()).filter((t: string) => t !== "");
+		// tokens：匹配 knownLabels 的为 selected，其余为 Other 自由文本
+		const tokens = internalText.split(/[,，]/).map((t: string) => t.trim()).filter((t: string) => t !== "");
 		const selected: string[] = [];
 		const otherTokens: string[] = [];
 		for (const t of tokens) {
@@ -130,7 +121,6 @@ function encodeTuiResultToProto(
 		}
 
 		if (otherText) answers[`${key}__other`] = otherText;
-		if (comment) answers[`${key}__comment`] = comment;
 	}
 	return answers;
 }

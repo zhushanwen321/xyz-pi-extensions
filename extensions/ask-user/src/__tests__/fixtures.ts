@@ -26,8 +26,6 @@ export const BACKSPACE = "\x7f";
 export const HOME = "\x1b[H";
 export const END = "\x1b[F";
 export const INSERT = "\x1b[2~";
-export const PGUP = "\x1b[5~";
-export const PGDN = "\x1b[6~";
 export const F1 = "\x1bOP";
 export const DELETE = "\x1b[3~";
 
@@ -40,19 +38,9 @@ export const singleQ: Question = {
 	],
 };
 
-export const singleQWithComment: Question = {
-	question: "Which DB? (with comment)",
-	allowComment: true,
-	options: [
-		{ label: "Postgres", description: "Battle-tested" },
-		{ label: "SQLite", description: "Embedded" },
-	],
-};
-
 export const singleQMulti: Question = {
 	question: "Which features?",
 	multiSelect: true,
-	allowComment: true,
 	options: [
 		{ label: "Auth", description: "OAuth + session" },
 		{ label: "Search", description: "Full-text" },
@@ -70,12 +58,13 @@ export const multiQ: Question[] = [
 	{ question: "Q3", header: "Third", options: [{ label: "M" }, { label: "N" }] },
 ];
 
-export const multiQWithComment: Question[] = [
-	{ question: "Q1", header: "First", allowComment: true, options: [{ label: "A" }, { label: "B" }] },
+// 两个单选问题的 fixture（用于多问题 Submit tab、auto-confirm 等场景）
+export const twoSingleQ: Question[] = [
+	{ question: "Q1", header: "First", options: [{ label: "A" }, { label: "B" }] },
 	{ question: "Q2", header: "Second", options: [{ label: "X" }, { label: "Y" }] },
 ];
 
-// ── Aliases (PAGE_UP/PAGE_DOWN for W1 tests, PGUP/PGDN for W3 tests) ──
+// ── Aliases (PAGE_UP/PAGE_DOWN) ──
 export const PAGE_UP = "\x1b[5~";
 export const PAGE_DOWN = "\x1b[6~";
 

@@ -1,5 +1,5 @@
 // src/__tests__/w3-regression.test.ts
-// W3: Forward regression — freeform/comment/bksp edge cases.
+// W3: Forward regression — freeform/bksp edge cases.
 // No-op keymap coverage moved to component-keymap.test.ts (deduplicated).
 import { describe, expect, it } from "vitest";
 
@@ -9,13 +9,9 @@ import {
 	BACKSPACE,
 	DOWN,
 	ENTER,
-	ESC,
 	HOME,
-	LEFT,
 	mockTui,
 	multiQ,
-	multiQWithComment,
-	RIGHT,
 	singleQ,
 	stubTheme,
 } from "./fixtures";
@@ -73,31 +69,7 @@ describe("W3 — freeform Enter clears selectedIndex (C-BC4B)", () => {
 });
 
 // ── C-BC4C: comment edge cases ──
-// C-BC4C-REEDIT (initial comment submit) removed — duplicate of w2-draft-hint C-BC4C.
-describe("W3 — comment re-edit (C-BC4C-CLEAR)", () => {
-	it("C-BC4C-CLEAR: Esc in comment mode skips comment, keeps existing commentValue", () => {
-		const { c, result } = make(multiQWithComment);
-		// Q1: select A → comment mode
-		c.handleInput(ENTER);
-		c.handleInput("my note");
-		c.handleInput(ENTER); // submit comment → advance to Q2
-		// Q2: select X
-		c.handleInput(ENTER);
-		c.handleInput(ENTER); // confirm Q2 → advance to submit tab
-		// Go back to Q1
-		c.handleInput(LEFT);
-		// Q1 is already confirmed, re-select A to trigger comment again
-		c.handleInput(ENTER); // re-select A → afterConfirm → comment mode
-		c.handleInput(ESC); // skip comment
-		// Submit
-		c.handleInput(RIGHT);
-		c.handleInput(RIGHT); // navigate to submit tab
-		c.handleInput(ENTER);
-		expect(result.val).toBeDefined();
-		// Comment should still be "my note" (Esc preserved commentValue)
-		expect(result.val!.answers["Q1"]).toBe("A — my note");
-	});
-});
+// (comment mode removed; C-BC4C-CLEAR covered freeform behavior now under C-BC4B above.)
 
 // ── C-BKSP-EDGE: backspace at cursorIndex=0 ──
 

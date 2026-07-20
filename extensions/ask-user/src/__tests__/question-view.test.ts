@@ -252,7 +252,7 @@ describe("renderQuestionView — Other editor mode", () => {
 	});
 
 	it("Q-28-WIDE: freeform 模式在宽终端下用全宽渲染（不被分屏左列压窄）", () => {
-		// 回归：freeform/comment 模式忽略分屏，编辑器用全 width。
+		// 回归：freeform 模式忽略分屏，编辑器用全 width。
 		// 修复前：宽终端走 split.left(≈40)，Other 输入被压在左半屏换行频繁。
 		const width = 100;
 		// getSplitPaneWidths(100) 非 null（宽终端会进分屏分支），但 freeform 应绕过它
@@ -332,35 +332,6 @@ describe("renderQuestionView — Other editor mode", () => {
 		const wLines = lines.filter((l) => l.includes("w"));
 		expect(wLines.length).toBe(5);
 		expect(wLines[wLines.length - 1]).toContain("…");
-	});
-});
-
-// ── Q-18 ~ Q-19: 评论模式 ───────────────────────────────
-describe("renderQuestionView — comment mode", () => {
-	it("Q-18: comment mode renders editor with note text", () => {
-		const lines = rv(
-			singleQ,
-			makeState({ mode: "comment", selectedIndex: 0 }),
-			stubTheme,
-			60,
-			true,
-			"my note",
-		);
-		const t = text(lines);
-		expect(t.toLowerCase()).toContain("comment");
-		expect(t).toContain("my note");
-	});
-
-	it("Q-19: comment prompt includes (optional)", () => {
-		const lines = rv(
-			singleQ,
-			makeState({ mode: "comment", selectedIndex: 0 }),
-			stubTheme,
-			60,
-			true,
-			"",
-		);
-		expect(text(lines)).toContain("(optional)");
 	});
 });
 

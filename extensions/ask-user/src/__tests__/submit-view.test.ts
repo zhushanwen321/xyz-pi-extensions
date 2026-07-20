@@ -124,11 +124,6 @@ describe("getAnswerText", () => {
 		expect(getAnswerText(q1, s)).toBe("custom");
 	});
 
-	it("S-9: comment appended with separator", () => {
-		const s = makeState({ confirmed: true, selectedIndex: 0, commentValue: "fast" });
-		expect(getAnswerText(q1, s)).toBe("Postgres — fast");
-	});
-
 	it("S-10: unconfirmed returns null", () => {
 		const s = makeState({ confirmed: false });
 		expect(getAnswerText(q1, s)).toBeNull();
@@ -147,21 +142,6 @@ describe("getAnswerText", () => {
 		};
 		const sEmptyMulti = makeState({ confirmed: true, selectedIndices: new Set<number>() });
 		expect(getAnswerText(multiQ, sEmptyMulti)).toBeNull();
-	});
-
-	it("S-9b: multi-select + comment combined", () => {
-		const multiQ: Question = {
-			question: "Features",
-			multiSelect: true,
-			allowComment: true,
-			options: [{ label: "A" }, { label: "B" }],
-		};
-		const s = makeState({
-			confirmed: true,
-			selectedIndices: new Set([0, 1]),
-			commentValue: "nice",
-		});
-		expect(getAnswerText(multiQ, s)).toBe("A, B — nice");
 	});
 });
 

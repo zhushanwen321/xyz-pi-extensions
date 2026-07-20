@@ -627,31 +627,6 @@ describe("execute — RPC mode (askUserInteract via select channel)", () => {
 		expect(result.details.answers["Which DB?"]).toBe("Postgres, Custom DB");
 	});
 
-	it("R-4: comment → inlined with ' — ' separator", async () => {
-		const tool = getTool();
-		const withComment = {
-			questions: [
-				{
-					question: "Which DB?",
-					options: [{ label: "Postgres" }, { label: "SQLite" }],
-					allowComment: true,
-				},
-			],
-		};
-		const protoAnswers = JSON.stringify({
-			"Which DB?": "Postgres",
-			"Which DB?__comment": "prod constraint",
-		});
-		const result = await tool.execute(
-			"id",
-			withComment,
-			undefined,
-			undefined,
-			makeCtx({ mode: "rpc", selectResult: protoAnswers }),
-		);
-		expect(result.details.answers["Which DB?"]).toBe("Postgres — prod constraint");
-	});
-
 	it("R-5: user cancel (select returns undefined) → cancelled details", async () => {
 		const tool = getTool();
 		const result = await tool.execute(
@@ -703,7 +678,7 @@ describe("execute — RPC mode (askUserInteract via select channel)", () => {
 		expect(result.details.answers["Which database?"]).toBe("Postgres");
 	});
 
-	it("R-8: multi-question mixed (single-select + multi-select + Other + comment)", async () => {
+	it("R-8: multi-question mixed (single-select + multi-select + Other)", async () => {
 		const tool = getTool();
 		const mixed = {
 			questions: [
@@ -722,7 +697,6 @@ describe("execute — RPC mode (askUserInteract via select channel)", () => {
 					question: "Which region?",
 					header: "Region",
 					options: [{ label: "US" }, { label: "EU" }],
-					allowComment: true,
 				},
 			],
 		};
@@ -750,41 +724,5 @@ describe("execute — RPC mode (askUserInteract via select channel)", () => {
 		expect(result.details.answers["Which tools?"]).toBe("A, C, Custom");
 		// Q3: 无选中 → 跳过（不在 answers map 中）
 		expect(result.details.answers["Which region?"]).toBeUndefined();
-	});
-
-	it("R-9: multi-question with comment on one question", async () => {
-		const tool = getTool();
-		const multiQ = {
-			questions: [
-				{
-					question: "Which DB?",
-					header: "DB",
-					options: [{ label: "Postgres" }],
-				},
-				{
-					question: "Why?",
-					header: "Reason",
-					options: [{ label: "Performance" }],
-					allowComment: true,
-				},
-			],
-		};
-		const protoAnswers = JSON.stringify({
-			DB: "Postgres",
-			Reason: "Performance",
-			"Reason__comment": "benchmarked",
-		});
-		const result = await tool.execute(
-			"id",
-			multiQ,
-			undefined,
-			undefined,
-			makeCtx({ mode: "rpc", selectResult: protoAnswers }),
-		);
-
-		// Q1: 无 comment
-		expect(result.details.answers["Which DB?"]).toBe("Postgres");
-		// Q2: 有 comment → 内联
-		expect(result.details.answers["Why?"]).toBe("Performance — benchmarked");
 	});
 });

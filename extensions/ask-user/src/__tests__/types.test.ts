@@ -40,7 +40,6 @@ describe("types", () => {
 		expect(s.selectedIndices).toBeInstanceOf(Set);
 		expect(s.confirmed).toBe(false);
 		expect(s.freeTextValue).toBeNull();
-		expect(s.commentValue).toBeNull();
 		expect(s.mode).toBe("options");
 	});
 

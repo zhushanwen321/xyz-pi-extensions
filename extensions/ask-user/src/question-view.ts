@@ -120,8 +120,7 @@ export function getSplitPaneWidths(width: number): { left: number; right: number
 const EDITOR_HINT = " ←/→ Home/End move · Backspace deletes · Enter submit · Esc back";
 
 /** 构建选项列表行（不含分屏预览）。hideDescriptions 用于分屏模式左列。
- *  freeform 模式下，Other 行**原地**变 [ ] <input> 反色光标（多选）/ <input> 反色光标（单选），
- *  不再依赖 buildEditorBlock 的下方独立编辑块。 */
+ *  freeform 模式下，Other 行**原地**变 [ ] <input> 反色光标（多选）/ <input> 反色光标（单选）。 */
 function buildOptionLines(
 	ctx: RenderContext,
 	hideDescriptions: boolean,
@@ -136,7 +135,7 @@ function buildOptionLines(
 	for (let i = 0; i < opts.length; i++) {
 		const opt = opts[i]!;
 		// 编辑器模式下用 savedOptionsCursorIndex 判断选项高亮，cursorIndex 此时是文本光标
-		const activeOptionCursor = (state.mode === "freeform" || state.mode === "comment") ? state.savedOptionsCursorIndex : state.cursorIndex;
+		const activeOptionCursor = state.mode === "freeform" ? state.savedOptionsCursorIndex : state.cursorIndex;
 		const isSelected = i === activeOptionCursor;
 		const isOther = opt.isOther === true;
 		const prefix = isSelected ? t.fg("accent", ">") : " ";
@@ -224,33 +223,6 @@ function buildPreviewLines(
 	return lines;
 }
 
-/**
- * freeform 模式：editor 已在 buildOptionLines 中原地渲染（[ ] <input> 反色光标 行），
- * buildEditorBlock 在此模式下不重复输出，**仅留出与正常 help 行同位置的视觉空隙**。
- * comment 模式：保留独立编辑块（与 normal help 行解耦：comment 行有更长的 prompt）。
- */
-function buildEditorBlock(
-	ctx: RenderContext,
-): string[] {
-	const { state, theme: t, width } = ctx;
-	if (state.mode === "freeform") {
-		return [""];
-	}
-	const lines: string[] = [];
-	const add = (s: string): void => {
-		lines.push(truncateToWidth(s, width));
-	};
-	add("");
-	const prompt = t.fg("muted", " Your comment (optional):");
-	add(prompt);
-	// 渲染当前编辑器文本，光标用反色高亮当前字符（surrogate pair 安全）
-	const cursorText = renderCursorText(state.draftText, state.cursorIndex);
-	add(` ${t.fg("text", cursorText)}`);
-	add("");
-	add(t.fg("dim", EDITOR_HINT));
-	return lines;
-}
-
 /** 渲染分屏模式下的左右双列（选项列表 + 详情预览）。 */
 function buildSplitPane(
 	ctx: RenderContext,
@@ -302,21 +274,19 @@ export function renderQuestionView(ctx: RenderContext): string[] {
 
 	// 选项模式下：question/context 与 options 之间加分割线（三段式）
 	// 编辑器模式不加（编辑器块自带视觉边界）
-	if (state.mode !== "freeform" && state.mode !== "comment") {
+	if (state.mode !== "freeform") {
 		divider();
 	}
 
-	// 编辑器/评论模式：选项列表 + 编辑器块（freeform 模式下编辑器块为空，由 buildOptionLines 原地渲染）。
-	// 编辑器模式一律用全 width 单列渲染——分屏左列仅约 42% 宽，Other 自由输入会被压窄换行，
+	// freeform 模式：选项列表 + 视觉空行 + help 行（editor 已在 buildOptionLines 原地渲染）。
+	// 一律用全 width 单列渲染——分屏左列仅约 42% 宽，Other 自由输入会被压窄换行，
 	// 且右侧详情预览在输入自定义内容时无意义。隐藏 descriptions 以避免行数爆炸。
-	if (state.mode === "freeform" || state.mode === "comment") {
+	if (state.mode === "freeform") {
 		add("");
 		for (const line of buildOptionLines(ctx, false)) add(line);
-		lines.push(...buildEditorBlock(ctx));
-		if (state.mode === "freeform") {
-			// freeform 模式 help 行：光标锁在 Other 上，正在输入
-			add(t.fg("dim", EDITOR_HINT));
-		}
+		add("");
+		// freeform 模式 help 行：光标锁在 Other 上，正在输入
+		add(t.fg("dim", EDITOR_HINT));
 		return lines;
 	}
 

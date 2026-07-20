@@ -57,12 +57,12 @@ export function validateInput(questions: Question[]): string | null {
 		}
 
 		// S3: 多问题时 header 唯一——重复 header 会导致 askUserKey 碰撞，
-		// 后一个 question 的 __other/__comment 覆盖前一个（协议 helper 用 header 作 answers 读取 key）。
+		// 后一个 question 的 __other 覆盖前一个（协议 helper 用 header 作 answers 读取 key）。
 		const seenHeaders = new Set<string>();
 		for (const q of questions) {
 			const h = q.header!.trim();
 			if (seenHeaders.has(h)) {
-				return `Duplicate header "${h}" in questions. Headers must be unique in multi-question mode — shared headers cause answer key collisions (one question's Other/comment overwrites another's). Rephrase one header to differ.`;
+				return `Duplicate header "${h}" in questions. Headers must be unique in multi-question mode — shared headers cause answer key collisions (one question's Other overwrites another's). Rephrase one header to differ.`;
 			}
 			seenHeaders.add(h);
 		}

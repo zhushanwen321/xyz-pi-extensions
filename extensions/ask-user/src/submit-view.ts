@@ -44,7 +44,7 @@ export function getAnswerText(q: Question, s: QuestionState): string | null {
 		if (label) parts.push(label);
 	}
 	if (s.freeTextValue !== null) parts.push(s.freeTextValue);
-	return formatAnswer(parts, s.commentValue);
+	return formatAnswer(parts);
 }
 
 /**

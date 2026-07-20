@@ -201,8 +201,8 @@ export class AskUserComponent implements Component {
 		const state = this.states[this.activeTab]!;
 		const q = this.questions[this.activeTab]!;
 
-		// freeform / comment mode → editor text input
-		if (state.mode === "freeform" || state.mode === "comment") {
+		// freeform mode → editor text input
+		if (state.mode === "freeform") {
 			this.handleEditorInput(data, state, q);
 			return;
 		}
@@ -264,14 +264,14 @@ export class AskUserComponent implements Component {
 			}
 			if (matchesKey(data, "enter")) {
 				state.selectedIndices.add(state.cursorIndex);
-				this.afterConfirm(state, q);
+				this.afterConfirm(state);
 				return;
 			}
 		} else if (!q.multiSelect && !onOther) {
 			if (matchesKey(data, "enter")) {
 				state.selectedIndex = state.cursorIndex;
 				state.freeTextValue = null;
-				this.afterConfirm(state, q);
+				this.afterConfirm(state);
 				return;
 			}
 		}
@@ -364,16 +364,8 @@ export class AskUserComponent implements Component {
 		// 其他 special key（功能键/modifier 组合）→ no-op（不泄漏）
 	}
 
-	/** Esc：comment 跳过评论并 advance；freeform 存 freeDraft 草稿后回 options。 */
+	/** Esc：freeform 存 freeDraft 草稿后回 options。 */
 	private handleEditorEsc(state: QuestionState): void {
-		if (state.mode === "comment") {
-			// comment Esc: skip comment, advance (keep existing commentValue)
-			state.mode = "options";
-			state.draftText = "";
-			state.cursorIndex = state.savedOptionsCursorIndex;
-			this.advance();
-			return;
-		}
 		// freeform Esc: save draft to freeDraft (separate from submitted freeTextValue)
 		// so discarded drafts don't pollute the answer or trigger auto-confirm.
 		state.freeDraft = state.draftText || null;
@@ -383,34 +375,26 @@ export class AskUserComponent implements Component {
 		this.rerender();
 	}
 
-	/** Enter：freeform 有文本→提交，空文本→回退；comment→保存评论并 advance。 */
+	/** Enter：freeform 有文本→提交，空文本→回退。 */
 	private handleEditorEnter(state: QuestionState, q: Question): void {
 		const text = state.draftText.trim();
-		if (state.mode === "freeform") {
-			state.cursorIndex = state.savedOptionsCursorIndex;
-			if (text) {
-				state.freeTextValue = text;
-				state.selectedIndex = null;
-				state.mode = "options";
-				state.draftText = "";
-				this.afterConfirm(state, q);
-			} else {
-				state.freeTextValue = null;
-				state.mode = "options";
-				state.draftText = "";
-				// freeTextValue 刚清空；confirmed 仅在无其他选择时置 false（允许重新作答）
-				if (q.multiSelect ? state.selectedIndices.size === 0 : state.selectedIndex === null) {
-					state.confirmed = false;
-				}
-				this.rerender();
-			}
-			return;
-		}
-		state.commentValue = text || null;
-		state.mode = "options";
-		state.draftText = "";
 		state.cursorIndex = state.savedOptionsCursorIndex;
-		this.advance();
+		if (text) {
+			state.freeTextValue = text;
+			state.selectedIndex = null;
+			state.mode = "options";
+			state.draftText = "";
+			this.afterConfirm(state);
+		} else {
+			state.freeTextValue = null;
+			state.mode = "options";
+			state.draftText = "";
+			// freeTextValue 刚清空；confirmed 仅在无其他选择时置 false（允许重新作答）
+			if (q.multiSelect ? state.selectedIndices.size === 0 : state.selectedIndex === null) {
+				state.confirmed = false;
+			}
+			this.rerender();
+		}
 	}
 
 	private toggleIndex(state: QuestionState, index: number): void {
@@ -450,17 +434,9 @@ export class AskUserComponent implements Component {
 		this.rerender();
 	}
 
-	/** 选中确认后的处理：若 allowComment，进入评论模式（可重入编辑/清除已有评论）；否则前进。 */
-	private afterConfirm(state: QuestionState, q: Question): void {
+	/** 选中确认后：标记 confirmed 并前进。 */
+	private afterConfirm(state: QuestionState): void {
 		state.confirmed = true;
-		if (q.allowComment && state.mode !== "comment") {
-			state.savedOptionsCursorIndex = state.cursorIndex;
-			state.mode = "comment";
-			state.draftText = state.commentValue ?? "";
-			state.cursorIndex = state.draftText.length;
-			this.rerender();
-			return;
-		}
 		this.advance();
 	}
 

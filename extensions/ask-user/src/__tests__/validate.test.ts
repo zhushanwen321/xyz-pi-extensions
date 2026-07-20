@@ -81,7 +81,7 @@ describe("validateInput", () => {
 	});
 
 	// V-10/S3: 多 question 时 header 必须唯一——重复 header 会导致 askUserKey 碰撞
-	// （协议 helper 用 header 作 answers 读取 key，后一个覆盖前一个的 Other/comment）
+	// （协议 helper 用 header 作 answers 读取 key，后一个覆盖前一个的 Other）
 	it("rejects duplicate headers across different questions", () => {
 		const result = validateInput([
 			q({ question: "Q1", header: "Same" }),
