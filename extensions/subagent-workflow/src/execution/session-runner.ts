@@ -722,6 +722,16 @@ export async function runSpawn(
       settleHandshake = undefined;
     };
 
+    // [W4/D5] 吸收 child.stdout stream 'error' 事件，防止异步 stream error 升级为
+    // uncaughtException 冲垮父进程。子进程退出/异常时 stdout 管道可能 emit error，
+    // EPIPE/EOF 是预期（子进程已死），静默；其他 error warn 但不抛。
+    // 与 rpc-channel.ts 的 stdin error listener 风格一致（D5：所有 child stream error 必须有吸收点）。
+    child.stdout.on("error", (err: Error) => {
+      const code = (err as NodeJS.ErrnoException).code;
+      if (code === "EPIPE" || code === "EOF") return; // 子进程已退出，预期，静默
+      console.warn("[subagents] child.stdout stream error:", err);
+    });
+
     child.stdout.on("data", (data: string) => {
       stdoutBuffer += data;
       const lines = stdoutBuffer.split("\n");
@@ -805,6 +815,13 @@ export async function runSpawn(
       // header 加速路径下 settleHandshake 已 undefined，跳过（避免覆盖 header 结果）。
       // 超时兜底（r 为空对象）也经此分支 settle，但 record.sessionFile 不回填。
       if (settleHandshake) finishHandshake(r);
+    });
+
+    // [W4/D5] 吸收 child.stderr stream 'error' 事件，语义同上方 stdout error listener。
+    child.stderr.on("error", (err: Error) => {
+      const code = (err as NodeJS.ErrnoException).code;
+      if (code === "EPIPE" || code === "EOF") return;
+      console.warn("[subagents] child.stderr stream error:", err);
     });
 
     child.stderr.on("data", (data: string) => {
