@@ -247,32 +247,54 @@ A subagent MAY call the \`subagent\` tool itself (each level spawns its own chil
 // 回调实现（模块级 const）
 // ============================================================
 
-// ponytail: renderCall 每次 TUI invalidate 都触发，同一解析错误会重复刷屏。
-// 按错误消息去重（Set），session 内只报第一次。错误消息含 modelStr，足够区分。
-const reportedRenderErrors = new Set<string>();
+// ── renderCall model 解析缓存 ──
+// 同一 tool call 的 renderCall 在 streaming 期间被多次调用（updateArgs → updateDisplay → renderCall）。
+// resolveModel 不变（同一 agent + override），缓存避免重复解析。
+// 策略：只缓存成功结果（key = agent|override），失败时不缓存——下次 renderCall 自动重试。
+// ctxModel 变化（model_select）不影响：新 tool call 的首次 renderCall 会重新解析。
+const resolvedModelCache = new Map<string, { model: string; thinkingLevel?: string }>();
+
+/** 构造 model 缓存 key（agent + override 二元组）。 */
+function modelCacheKey(agent: string, override?: { model?: string; thinkingLevel?: string }): string {
+  return `${agent}|${override?.model ?? ""}|${override?.thinkingLevel ?? ""}`;
+}
 
 const subagentRenderCall: SubagentRenderCallCb = (args, theme, ctx) => {
   // 预解析 model（同步）：让标题行能显示 model/thinking，不必等 execute。
   // resolveModel 三层：override → agentConfig.model → 主 agent model（session 缓存）。
   // 主 agent model 由 ModelConfigService 缓存（session_start 注入，model_select 刷新），
   // 补偿 renderCall 的 ToolRenderContext 不含 model 的 SDK 限制。
-  // service 未就绪 / 缓存为空 / 解析失败 → 降级不显示 model。
+  //
+  // 错误处理策略：
+  //   Layer 1/2 失败（用户/agent 指定了不存在的 model）→ 直接 throw，fail-fast
+  //   Layer 3 失败（未指定 model 且主 agent 无 model）→ degrade，不显示 model
+  //   service 未就绪 → degrade
   const startParam = hasStartParam(args) ? args.startParam : undefined;
   const agent = extractAgentName(startParam);
   const override = extractModelOverride(startParam);
-  let resolved: { model: string; thinkingLevel?: string } | undefined;
-  try {
+  const key = modelCacheKey(agent, override);
+  let resolved = resolvedModelCache.get(key);
+  if (!resolved) {
     const service = getSubagentService();
-    const r = service?.resolveModel(agent, override);
-    if (r) resolved = { model: `${r.model.provider}/${r.model.id}`, thinkingLevel: r.thinkingLevel };
-  } catch (err) {
-    // service 未注册 / modelRegistry 未注入 / 无可用 model → 降级不显示 model（renderCall 不应崩）。
-    // 去重：同一 err.message 只 console.debug 一次，避免 TUI invalidate 反复刷屏。
-    const msg = err instanceof Error ? err.message : String(err);
-    if (!reportedRenderErrors.has(msg)) {
-      reportedRenderErrors.add(msg);
-      void err; // 显式确认忽略：renderCall 降级是设计意图，不阻断渲染
-      console.debug("[subagents] renderCall model resolution failed, degrading:", err);
+    if (!service) {
+      // service 未就绪（session_start 未完成）→ degrade
+      return renderSubagentCall(args, theme, ctx, undefined);
+    }
+    try {
+      const r = service.resolveModel(agent, override);
+      resolved = { model: `${r.model.provider}/${r.model.id}`, thinkingLevel: r.thinkingLevel };
+      resolvedModelCache.set(key, resolved);
+    } catch (err) {
+      // 区分 fail-fast（Layer 1/2）vs degrade（Layer 3）：
+      // Layer 3 抛 "No available model"（未指定 model + 主 agent 无 model）→ degrade
+      // 其他错误（指定的 model 找不到 / auth 失败 / agent 配置错误）→ throw fail-fast
+      const msg = err instanceof Error ? err.message : String(err);
+      if (msg.includes("No available model")) {
+        // Layer 3：未指定 model，主 agent 也没有 → degrade，不显示 model
+        return renderSubagentCall(args, theme, ctx, undefined);
+      }
+      // Layer 1/2：指定了 model 但找不到 / auth 失败 → fail-fast
+      throw err;
     }
   }
   return renderSubagentCall(args, theme, ctx, resolved);

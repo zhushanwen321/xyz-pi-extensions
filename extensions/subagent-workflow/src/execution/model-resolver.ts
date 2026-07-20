@@ -149,7 +149,34 @@ function lookupAndResolve(
   registry: ModelRegistryLike,
   source: "paramOverride" | "agentConfig",
 ): ResolvedModel {
-  const model = lookupModel(modelStr, registry);
+  // 1. 精确 lookup（provider/modelId 完全匹配）
+  let model = lookupModel(modelStr, registry);
+
+  // 2. 精确失败 → 按 id 末段匹配，处理 provider 前缀写错的高频场景
+  //    （如 LLM 传 "openai/ds-pro"，registry 实际 "deepseek-router/ds-pro"）。
+  //    单匹配：auto-fallback 并 warn（provider 前缀写错的概率远高于真拼写错误）。
+  //    多匹配：throw 引导显式指定 provider（多个 provider 都有该 id，不能猜）。
+  //    无匹配：model 仍 undefined，走下方 not-found throw（真拼写错误）。
+  if (!model) {
+    const candidates = findCandidatesById(modelStr, registry);
+    if (candidates.length === 1) {
+      const c = candidates[0];
+      console.warn(
+        `[subagents] Model "${modelStr}" (${source}) not found; ` +
+          `auto-fallback to "${c.provider}/${c.id}" (only model with this id). ` +
+          `Pass the full "provider/modelId" to suppress this warning.`,
+      );
+      model = c;
+    } else if (candidates.length > 1) {
+      const idSegment = stripThinkingSuffix(modelStr).split("/").pop() ?? "";
+      const list = candidates.map((m) => `${m.provider}/${m.id}`).join("\n  ");
+      throw new Error(
+        `Model "${modelStr}" (${source}) not found. ` +
+          `Multiple models share the id "${idSegment}"; specify the provider explicitly. Did you mean:\n  ${list}`,
+      );
+    }
+  }
+
   if (!model) {
     throw new Error(
       `Model "${modelStr}" (${source}) not found in registry. ` +
@@ -184,6 +211,25 @@ function lookupModel(modelStr: string, registry: ModelRegistryLike): ModelInfo |
   const idx = cleanStr.indexOf("/");
   if (idx <= 0) return undefined;
   return registry.find(cleanStr.slice(0, idx), cleanStr.slice(idx + 1));
+}
+
+/**
+ * 按 modelId 末段精确匹配（忽略大小写），用于 provider 前缀写错时的 auto-fallback。
+ *
+ * 触发场景：LLM 传 "openai/ds-pro"，registry 实际是 "deepseek-router/ds-pro"。
+ * 末段 id 完全相同（ds-pro === ds-pro），几乎可断定是 provider 前缀写错，而非
+ * 真拼写错误（ds-por 才算拼写错误，末段不等，不会命中此匹配）。
+ *
+ * 返回所有 id 末段匹配的 model（可能跨多个 provider）：
+ *   - 长度 0：无匹配（真拼写错误或 registry 无此 id）
+ *   - 长度 1：唯一匹配 → 调用方 auto-fallback 并 warn
+ *   - 长度 >1：多 provider 都注册了该 id → 调用方 throw 引导显式指定 provider
+ */
+function findCandidatesById(modelStr: string, registry: ModelRegistryLike): ModelInfo[] {
+  const cleanStr = stripThinkingSuffix(modelStr);
+  const idSegment = cleanStr.split("/").pop()?.toLowerCase() ?? "";
+  if (!idSegment) return [];
+  return registry.getAvailable().filter((m) => m.id.toLowerCase() === idSegment);
 }
 
 /**

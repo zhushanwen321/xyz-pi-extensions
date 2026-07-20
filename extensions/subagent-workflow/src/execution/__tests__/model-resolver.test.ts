@@ -1,5 +1,5 @@
 // src/__tests__/model-resolver.test.ts
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import {
   availableThinkingLevels,
@@ -277,6 +277,95 @@ describe("resolveModel — not-found error suggests similar models (B)", () => {
     expect(msg).toMatch(/auth is not configured/);
     expect(msg).toMatch(/models\.json/);
     expect(msg).not.toMatch(/Similar available models/); // auth 错误不列 model
+  });
+});
+
+// ============================================================
+// provider 前缀写错的 auto-fallback（A）+ did-you-mean（B 合并）
+// ============================================================
+//
+// [背景] LLM 派 subagent 时常把 provider 前缀写错（如 "openai/ds-pro"，
+// registry 实际 "deepseek-router/ds-pro"）。原 Layer 1/2 一律 throw，
+// 并发场景下同 turn 多个 subagent 全挂（实测 session 3 个并发全 fail）。
+//
+// [策略] 精确 lookup 失败后，按 id 末段「精确」匹配（忽略大小写）：
+//   单匹配 → auto-fallback + console.warn（provider 写错概率 >> 真拼写错误）
+//   多匹配 → throw did-you-mean（多 provider 都有该 id，不能猜）
+//   无匹配 → throw not-found + suggestSimilarModels（真拼写错误，现状不变）
+//
+// 「精确」是关键：ds-pro===ds-pro 才命中，ds-por≠ds-pro 不命中，
+// 因此不会误把真拼写错误静默 fallback。
+
+describe("resolveModel — provider-mismatch auto-fallback (A) + did-you-mean (B)", () => {
+  it("单 id 匹配：provider 写错 → auto-fallback + warn，不抛错", () => {
+    const m = makeModel({ id: "ds-pro", provider: "deepseek-router" });
+    const reg = makeRegistry([m]);
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+
+    const r = resolveModel(undefined, reg, { model: "openai/ds-pro" }, ctxModel);
+
+    expect(r.model.id).toBe("ds-pro");
+    expect(r.model.provider).toBe("deepseek-router");
+    // warn 含原始串 + 目标串，便于排查
+    const warnMsg = warnSpy.mock.calls.map((c) => String(c[0])).join(" ");
+    expect(warnMsg).toMatch(/auto-fallback/);
+    expect(warnMsg).toMatch(/openai\/ds-pro/);
+    expect(warnMsg).toMatch(/deepseek-router\/ds-pro/);
+    warnSpy.mockRestore();
+  });
+
+  it("单 id 匹配：裸 id（无 provider）→ auto-fallback", () => {
+    const m = makeModel({ id: "ds-pro", provider: "deepseek-router" });
+    const reg = makeRegistry([m]);
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+
+    const r = resolveModel(undefined, reg, { model: "ds-pro" }, ctxModel);
+
+    expect(r.model.id).toBe("ds-pro");
+    expect(warnSpy).toHaveBeenCalled();
+    warnSpy.mockRestore();
+  });
+
+  it("多 id 匹配：多 provider 都有该 id → throw did-you-mean 列出全部", () => {
+    const m1 = makeModel({ id: "ds-pro", provider: "deepseek-router" });
+    const m2 = makeModel({ id: "ds-pro", provider: "ocg-deepseek" });
+    const reg = makeRegistry([m1, m2]);
+    let msg = "";
+    try {
+      resolveModel(undefined, reg, { model: "openai/ds-pro" }, ctxModel);
+    } catch (e) {
+      msg = (e as Error).message;
+    }
+    expect(msg).toMatch(/not found/);
+    expect(msg).toMatch(/Did you mean/);
+    expect(msg).toMatch(/deepseek-router\/ds-pro/);
+    expect(msg).toMatch(/ocg-deepseek\/ds-pro/);
+  });
+
+  it("auto-fallback 后 auth 未配置 → 仍 throw auth 错误（不静默用未授权 model）", () => {
+    const m = makeModel({ id: "ds-pro", provider: "deepseek-router" });
+    const reg = makeRegistry([m], []); // 无 auth
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+
+    expect(() =>
+      resolveModel(undefined, reg, { model: "openai/ds-pro" }, ctxModel),
+    ).toThrow(/auth is not configured/);
+    // fallback 的 warn 在 auth 校验前已打出
+    expect(warnSpy).toHaveBeenCalled();
+    warnSpy.mockRestore();
+  });
+
+  it("真拼写错误（id 末段不等）→ 不触发 fallback，走 not-found + suggestSimilarModels", () => {
+    // ds-por ≠ ds-pro，findCandidatesById 精确匹配返回空 → 不 fallback
+    const m = makeModel({ id: "ds-pro", provider: "deepseek-router" });
+    const reg = makeRegistry([m]);
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+
+    expect(() =>
+      resolveModel(undefined, reg, { model: "openai/ds-por" }, ctxModel),
+    ).toThrow(/not found in registry/);
+    expect(warnSpy).not.toHaveBeenCalled();
+    warnSpy.mockRestore();
   });
 });
 
