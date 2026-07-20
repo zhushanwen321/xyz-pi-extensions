@@ -1,6 +1,6 @@
 # 006 — Subagent RPC 通道错误边界重构
 
-- **Status**: draft（待实施）
+- **Status**: implemented（W1-W5 已落地，见文末「实施记录」）
 - **Date**: 2026-07-20
 - **Scope**: `extensions/subagent-workflow/src/execution/`
 - **Supersedes**: 无（补丁式修复的长期替代）
@@ -167,3 +167,16 @@ write 移出 try，catch 内不再 write，彻底消除"catch 内再抛"的结�
 - ui-request-queue 的 L2 dialog 队列逻辑
 - 子进程 watchdog / 超时机制
 - 其他 extension 的 child 进程处理（仅 subagent-workflow）
+
+## 实施记录
+
+W1-W5 已全部落地并验证（typecheck 0 error / 98 files / 1271 tests 全绿），commit 链：
+
+| Commit | Wave | 说明 |
+|--------|------|------|
+| `9b0d842e8` | 文档 | 本设计文档 |
+| `a797d7a10` | W1 | 止血：writeStdinLine try/catch + stdin error listener（W2 已取代） |
+| `bea34f19a` | W2 | ChildRpcChannel 抽象 + 5 文件签名迁移 + 删除 W1 ad-hoc listener |
+| `3fee37b49` | W3 | handleUiRequest 错误边界分离 + serializeUiResponse 提取 |
+| `b4fdb1737` | W4 | stdout/stderr stream error listener（D5 全覆盖） |
+| `4ef0fb101` | W5 | rpc-channel.test.ts 契约测试（15 用例）+ 竞态场景测试（3 用例） |
