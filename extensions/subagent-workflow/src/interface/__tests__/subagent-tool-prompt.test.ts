@@ -9,10 +9,11 @@
 // 删掉或弱化。读源码而非 import，避免 mock 链（subagent-tool.ts 依赖 pi-ai/
 // typebox/pi-tui/ExtensionAPI 等值导入）。
 
-import { describe, expect, it } from "vitest";
 import { readFileSync } from "node:fs";
-import { join, dirname } from "node:path";
+import { dirname,join } from "node:path";
 import { fileURLToPath } from "node:url";
+
+import { describe, expect, it } from "vitest";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const SUBAGENT_TOOL_SRC = readFileSync(
@@ -30,10 +31,12 @@ function extractDescription(src: string): string {
 const DESCRIPTION = extractDescription(SUBAGENT_TOOL_SRC);
 
 describe("subagent tool description — 行为约束器（非功能说明书）", () => {
-  it("词数 ≤ 400（高风险 description 密度上限）", () => {
+  it("词数 ≤ 550（高风险 description 密度上限）", () => {
     // 高风险 tool 的 description 应聚焦约束而非功能铺陈；过长会稀释信号。
+    // 上限从 400 放宽到 550：补了 JSON 调用正例段（start/list/cancel 三 action 完整 JSON），
+    // 正例对弱模型首次调用用对参数的价值 > 节省这点 description 预算。
     const words = DESCRIPTION.trim().split(/\s+/).filter(Boolean).length;
-    expect(words).toBeLessThanOrEqual(400);
+    expect(words).toBeLessThanOrEqual(550);
   });
 
   it("含 'When to delegate' 调用条件段（何时委派 vs 自己做）", () => {
@@ -80,5 +83,25 @@ describe("subagent tool description — 行为约束器（非功能说明书）"
     expect(DESCRIPTION).toMatch(/CRITICAL/i);
     expect(DESCRIPTION).toMatch(/sequential/);
     expect(DESCRIPTION).toMatch(/SAME message/i);
+  });
+
+  it("Examples 段含完整 JSON 正例（含 startParam 嵌套结构）", () => {
+    // 弱模型信任 schema 结构信号 > 文本信号，容易把 task/slug 平铺到顶层。
+    // description 必须有完整 JSON 正例，让模型能直接照抄 startParam 嵌套结构。
+    expect(DESCRIPTION).toContain('{"action":"start","startParam"');
+  });
+
+  it("Anti-patterns 段含参数结构反例（top level 平铺 task/slug）", () => {
+    // 显式说明 task/slug 不能平铺到顶层，必须嵌在 startParam 里。
+    expect(DESCRIPTION).toContain("top level");
+  });
+});
+
+describe("subagent tool runtime handler — 错误文案含纠正正例", () => {
+  // 读源码文本断言 executeSubagent 的平铺检测 throw 含 Correct 正例，
+  // 让弱模型撞错后第二次能直接照抄正确形态。
+  it("subagent-tool.ts 含 runtime 平铺检测 throw + Correct 纠正正例", () => {
+    expect(SUBAGENT_TOOL_SRC).toContain("Correct:");
+    expect(SUBAGENT_TOOL_SRC).toContain("params.action === \"start\" && !params.startParam");
   });
 });

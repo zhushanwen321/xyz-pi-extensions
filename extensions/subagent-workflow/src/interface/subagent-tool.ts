@@ -14,6 +14,7 @@ import { StringEnum } from "@mariozechner/pi-ai";
 import type { AgentToolResult, ExtensionAPI, ExtensionContext, Theme } from "@mariozechner/pi-coding-agent";
 import { Type } from "@sinclair/typebox";
 
+import { SLUG_MAX_LENGTH } from "../execution/execute-options-mapper.ts";
 import { getSubagentService } from "../execution/subagent-service.ts";
 import type { SubagentToolResult } from "../execution/types.ts";
 import { extractAgentName } from "./format.ts";
@@ -32,7 +33,7 @@ import { type RenderContext,renderSubagentCall, renderSubagentResult } from "./t
  */
 interface StartParam {
   task: string;
-  /** 短标签（≤20 字符），必填。展示在 TUI 标题行/列表。 */
+  /** 短标签（≤35 字符，kebab-case），必填。展示在 TUI 标题行/列表。 */
   slug: string;
   agent?: string;
   model?: string;
@@ -107,9 +108,9 @@ const SubagentParams = Type.Object({
     }),
     slug: Type.String({
       description:
-        "REQUIRED for action:'start'. Short label (≤20 chars) for this subagent, e.g. 'fix-login', 'extract-urls'. " +
+        "REQUIRED for action:'start'. Short label (≤35 chars) for this subagent, e.g. 'fix-login', 'extract-urls'. " +
         "Shown in TUI to distinguish concurrent subagents.",
-      maxLength: 20,
+      maxLength: SLUG_MAX_LENGTH,
     }),
     agent: Type.Optional(Type.String({
       description: 'Agent name (system prompt + tools). If omitted, defaults to "general-purpose" — a generic agent that inherits the main agent\'s model and project context. Available: general-purpose (default fallback), worker, researcher, explorer, planner, reviewer, oracle, context-builder. Custom agents configurable.',
@@ -175,6 +176,16 @@ function hasStartParam(a: unknown): a is { startParam?: unknown } {
   return typeof a === "object" && a !== null && "startParam" in a;
 }
 
+/** action:'start' 入参是否把 task/slug 平铺到顶层（弱模型常见误用：缺 startParam 嵌套）。 */
+/**
+ * action:'start' 入参是否把 task/slug 平铺到顶层（弱模型常见误用：缺 startParam 嵌套）。
+ * export 供 behavioral 测试（trigger/no-trigger），不改变运行时行为。
+ */
+export function hasFlattenedStartFields(a: unknown): boolean {
+  if (typeof a !== "object" || a === null) return false;
+  return "task" in a || "slug" in a;
+}
+
 /** 从 unknown args 安全提取 model/thinkingLevel override（传给 resolveModel）。 */
 function extractModelOverride(args: unknown): { model?: string; thinkingLevel?: string } | undefined {
   if (!isModelOverrideObj(args)) return undefined;
@@ -207,6 +218,15 @@ Delegate when the task needs a distinct role (researcher/worker), context isolat
 - action:"list" — list subagents. Pass listParam: { includeFinished?, limit? } (all optional). Read an item's sessionFile for full detail.
 - action:"cancel" — cancel a background subagent. REQUIRED cancelParam: { subagentId }.
 
+## Examples
+
+\`\`\`
+{"action":"start","startParam":{"task":"<your task>","slug":"<kebab-case>"}}
+{"action":"start","startParam":{"task":"...","slug":"fix-login","agent":"worker","model":"anthropic/claude-3.5-sonnet","fork":true}}
+{"action":"list","listParam":{"includeFinished":false,"limit":20}}
+{"action":"cancel","cancelParam":{"subagentId":"sa_abc123"}}
+\`\`\`
+
 ## After launching — do NOT wait
 
 Completion auto-notifies you (steer wakes next turn, even mid-poll). So:
@@ -217,6 +237,7 @@ Completion auto-notifies you (steer wakes next turn, even mid-poll). So:
 
 ## Anti-patterns
 
+- Putting task/slug at the top level instead of inside startParam — the tool reads startParam.task, not a top-level task.
 - Launching background, then sleeping/polling instead of working or stopping.
 - Treating subagent results as authoritative without verification.
 - Delegating trivial tasks you could do faster yourself.
@@ -310,6 +331,17 @@ const executeSubagent: SubagentExecuteCb = async (
   //（完成由 notify 驱动新 turn）。onUpdate 参数保留以兼容 SDK 回调签名，但不消费。
   const service = getSubagentService();
   if (!service) throw new Error("subagents runtime not initialized");
+
+  // 弱模型常见误用：action:'start' 时把 task/slug 平铺到顶层（缺 startParam 嵌套层）。
+  // schema 用 Type.Optional 表达条件必填（flat JSON Schema 无法表达），弱模型信任
+  // 结构信号 > 文本信号，倾向省略嵌套层。这里在进 startHandler 之前拦截平铺形态，
+  // throw 带 Correct 正例，让弱模型撞错后第二次能直接照抄。
+  if (params.action === "start" && !params.startParam && hasFlattenedStartFields(params)) {
+    throw new Error(
+      "startParam is required for action:'start' — wrap task/slug inside startParam. " +
+      "Correct: {\"action\":\"start\",\"startParam\":{\"task\":\"<your task>\",\"slug\":\"<kebab-case>\"}}",
+    );
+  }
 
   switch (params.action) {
     case "start":

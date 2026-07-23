@@ -11,9 +11,11 @@ import type { ExecuteOptions } from "./types.ts";
 
 /**
  * slug 最大长度（字符）。subagent/workflow 创建时 slug 超过此值会被截断。
- * 与 subagent tool schema 的 maxLength: 20 保持一致。
+ * subagent/workflow tool schema 的 maxLength 引用此常量（单一真相，勿再硬编码）。
+ * 历史值 20 偏紧——描述性 slug 如 "audit-structured-output"（23）/"fix-subagent-wf-tools"（21）
+ * 会撞上限，放宽到 35 兼顾「短到能塞进 TUI 标题行」与「容纳合理描述性 kebab-case 名」。
  */
-export const SLUG_MAX_LENGTH = 20;
+export const SLUG_MAX_LENGTH = 35;
 
 /**
  * D-A2: AgentCallOpts → ExecuteOptions 映射。
@@ -23,7 +25,7 @@ export const SLUG_MAX_LENGTH = 20;
  *
  * 映射规则：
  *   prompt          → task
- *   description     → slug（≤20 字符，超长截断。缺失时回落 agent 名）
+ *   description     → slug（≤35 字符，超长截断。缺失时回落 agent 名）
  *   agent           → agent
  *   schema          → schema
  *   schemaEnv       → schemaEnv（D-A6 bridge）
