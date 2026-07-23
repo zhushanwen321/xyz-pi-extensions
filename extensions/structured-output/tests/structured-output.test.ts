@@ -6,10 +6,12 @@
 // 2. Tool execute 校验（通过/失败）
 // 3. 环境变量检测逻辑
 
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-
 // 直接使用真实的 Ajv，因为这是核心依赖
 import Ajv from "ajv";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+
+// 被测主入口（src/index.ts 导出 executeStructuredOutput 供直接调用）
+import { executeStructuredOutput } from "../src/index.js";
 
 // ── 纯逻辑测试：Schema 解析 + Ajv 校验 ──────────────────────
 
@@ -96,36 +98,26 @@ describe("Schema parsing and Ajv validation", () => {
 
 // ── 环境变量解析逻辑 ──────────────────────────────────────
 
-describe("STRUCTURED_OUTPUT_SCHEMA env var parsing", () => {
-  const originalEnv = process.env.STRUCTURED_OUTPUT_SCHEMA;
-
-  afterEach(() => {
-    if (originalEnv === undefined) {
-      delete process.env.STRUCTURED_OUTPUT_SCHEMA;
-    } else {
-      process.env.STRUCTURED_OUTPUT_SCHEMA = originalEnv;
-    }
-  });
-
-  it("parses valid JSON schema from env var", () => {
-    process.env.STRUCTURED_OUTPUT_SCHEMA = JSON.stringify({
+describe("PI_WORKFLOW_SCHEMA schema JSON parsing", () => {
+  // 注：旧版测的是 STRUCTURED_OUTPUT_SCHEMA env 名（错误）+ 已删除的 block 语义。
+  // 实际 env 名是 PI_WORKFLOW_SCHEMA（见 src/index.ts ENV_SCHEMA），工具现已
+  // 无条件全局注册，env 只控制是否注册 workflow hook。env 驱动的行为由下面的
+  // 'Workflow hook' 测试组用 mock pi 覆盖；这里仅保留 schema JSON 解析的纯逻辑。
+  it("parses valid JSON schema", () => {
+    const raw = JSON.stringify({
       type: "object",
       properties: { answer: { type: "string" } },
     });
-
-    const raw = process.env.STRUCTURED_OUTPUT_SCHEMA;
-    expect(raw).toBeDefined();
-    const parsed = JSON.parse(raw!);
+    const parsed = JSON.parse(raw);
     expect(parsed.type).toBe("object");
     expect(parsed.properties.answer.type).toBe("string");
   });
 
   it("JSON.parse throws on invalid JSON", () => {
-    process.env.STRUCTURED_OUTPUT_SCHEMA = "{invalid json";
-    expect(() => JSON.parse(process.env.STRUCTURED_OUTPUT_SCHEMA!)).toThrow();
+    expect(() => JSON.parse("{invalid json")).toThrow();
   });
 
-  it("Ajv validateSchema returns false for invalid schema structure", () => {
+  it("Ajv rejects invalid schema type value", () => {
     const ajv = new Ajv({ strict: false });
     // Schema with invalid type value — compile throws in non-strict mode too
     const badSchema = { type: "not-a-real-type" };
@@ -306,7 +298,7 @@ describe("Workflow hook: structured-output failure retry", () => {
     // vitest 默认缓存模块，这里用 vi.resetModules + 动态 import 重置。
     vi.resetModules();
     const mod = await import("../src/index.js");
-    mod.default(mockPi as unknown as never);
+    mod.default(mockPi);
   }
 
   afterEach(() => {
@@ -391,44 +383,128 @@ describe("Workflow hook: structured-output failure retry", () => {
   });
 });
 
-// ── tool_call block 逻辑 ─────────────────────────────────
+// ── Tool execute 真实调用测试（executeStructuredOutput）──────────────────
+//
+// 直接调 src/index.ts 导出的 executeStructuredOutput，覆盖三类路径：
+//   - 合法 schema + data → 成功
+//   - 坏 schema（ajv 编译失败）/互换/keyword-less → 抛带纠错文案的错误
+//   - data 不匹配 → 抛 Schema validation failed
+// 这是防静默腐败的核心保障：互换检测 + keyword-less schema 拒绝。
 
-describe("tool_call block logic", () => {
-  it("blocks structured-output call when no env var", () => {
-    delete process.env.STRUCTURED_OUTPUT_SCHEMA;
-
-    const event = { toolName: "structured-output" };
-    const result = event.toolName === "structured-output" && !process.env.STRUCTURED_OUTPUT_SCHEMA
-      ? { block: true, reason: "This tool is only available in workflow structured-output mode" }
-      : undefined;
-
-    expect(result).toEqual({
-      block: true,
-      reason: "This tool is only available in workflow structured-output mode",
+describe("Tool execute (real call via executeStructuredOutput)", () => {
+  it("succeeds on valid object schema + matching data", async () => {
+    const result = await executeStructuredOutput({
+      schema: { type: "object", properties: { name: { type: "string" } }, required: ["name"] },
+      data: { name: "Alice" },
     });
+    expect(result.content[0]!.text).toContain("recorded successfully");
+    expect(result.details).toEqual({ name: "Alice" });
   });
 
-  it("does not block structured-output call when env var is set", () => {
-    process.env.STRUCTURED_OUTPUT_SCHEMA = '{"type":"object"}';
-
-    const event = { toolName: "structured-output" };
-    const result = event.toolName === "structured-output" && !process.env.STRUCTURED_OUTPUT_SCHEMA
-      ? { block: true, reason: "This tool is only available in workflow structured-output mode" }
-      : undefined;
-
-    expect(result).toBeUndefined();
-
-    delete process.env.STRUCTURED_OUTPUT_SCHEMA;
+  it("succeeds on primitive number root schema", async () => {
+    const result = await executeStructuredOutput({
+      schema: { type: "number", minimum: 0, maximum: 100 },
+      data: 42,
+    });
+    expect(result.details).toEqual(42);
   });
 
-  it("does not interfere with other tool calls", () => {
-    delete process.env.STRUCTURED_OUTPUT_SCHEMA;
+  it("succeeds on primitive boolean root schema", async () => {
+    const result = await executeStructuredOutput({
+      schema: { type: "boolean" },
+      data: true,
+    });
+    expect(result.details).toEqual(true);
+  });
 
-    const event = { toolName: "read" };
-    const result = event.toolName === "structured-output" && !process.env.STRUCTURED_OUTPUT_SCHEMA
-      ? { block: true, reason: "..." }
-      : undefined;
+  it("succeeds on array root schema", async () => {
+    const result = await executeStructuredOutput({
+      schema: { type: "array", items: { type: "string" } },
+      data: ["a", "b", "c"],
+    });
+    expect(result.details).toEqual(["a", "b", "c"]);
+  });
 
-    expect(result).toBeUndefined();
+  it("accepts JSON-string schema/data (normalize path)", async () => {
+    const result = await executeStructuredOutput({
+      schema: JSON.stringify({ type: "object", properties: { ok: { type: "boolean" } } }),
+      data: JSON.stringify({ ok: true }),
+    });
+    expect(result.details).toEqual({ ok: true });
+  });
+
+  it("throws 'Invalid JSON Schema' when ajv cannot compile", async () => {
+    await expect(
+      executeStructuredOutput({
+        schema: { type: "not-a-real-type" },
+        data: {},
+      }),
+    ).rejects.toThrow(/Invalid JSON Schema/);
+  });
+
+  it("throws swap detection when data looks like a schema and schema looks like data", async () => {
+    // 弱模型把答案塞 schema、把形状塞 data 的典型互换形态
+    await expect(
+      executeStructuredOutput({
+        schema: { name: "Alice", age: 30 }, // 对象但无任何 schema keyword → 像数据
+        data: { type: "object", properties: { name: { type: "string" } } }, // 含 keyword → 像 schema
+      }),
+    ).rejects.toThrow(/swapped/i);
+  });
+
+  it("throws 'no recognized keyword' for keyword-less schema (silent-corruption guard)", async () => {
+    // {} / {a:1} 会被 ajv strict:false 编译成"接受一切"，必须显式拒绝
+    await expect(
+      executeStructuredOutput({
+        schema: { a: 1 },
+        data: { name: "Alice" },
+      }),
+    ).rejects.toThrow(/recognized keyword/i);
+  });
+
+  it("rejects empty schema object {} (keyword-less, silent-corruption guard)", async () => {
+    await expect(
+      executeStructuredOutput({
+        schema: {},
+        data: { anything: true },
+      }),
+    ).rejects.toThrow(/recognized keyword/i);
+  });
+
+  it("does NOT flag swap when both schema and data are valid (regression guard)", async () => {
+    // schema 有 keyword 且 data 是普通答案 → 不应误判为互换
+    await expect(
+      executeStructuredOutput({
+        schema: { type: "object", properties: { score: { type: "number" } }, required: ["score"] },
+        data: { score: 8 },
+      }),
+    ).resolves.toBeDefined();
+  });
+
+  it("throws 'Schema validation failed' when data does not match schema", async () => {
+    await expect(
+      executeStructuredOutput({
+        schema: { type: "object", properties: { count: { type: "number" } }, required: ["count"] },
+        data: { count: "not-a-number" },
+      }),
+    ).rejects.toThrow(/Schema validation failed/);
+  });
+
+  it("echoes received schema/data in validation-failure error", async () => {
+    await expect(
+      executeStructuredOutput({
+        schema: { type: "object", properties: { count: { type: "number" } }, required: ["count"] },
+        data: { count: "x" },
+      }),
+    ).rejects.toThrow(/Received schema=/);
+  });
+
+  it("echoes received schema/data in swap error", async () => {
+    await expect(
+      executeStructuredOutput({
+        schema: { answer: "hello" },
+        data: { type: "string" },
+      }),
+    ).rejects.toThrow(/Received schema=.*Received data=|data=/);
   });
 });

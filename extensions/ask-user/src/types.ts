@@ -52,17 +52,47 @@ export const QuestionSchema = Type.Object({
 	),
 });
 
+/**
+ * LLM-facing input schema (宽松版 options 元素)。
+ *
+ * options 元素故意放宽为 `OptionSchema | string`：弱模型最高频误用是把 options
+ * 当字符串数组传（`"options":["A","B"]`）。严格 schema 会让 Pi 运行时的 typebox
+ * TypeCompiler.Check 直接拦截（干报错 "must be object"），根本进不了 validateInput
+ * 的友好文案。这里放宽让 string 元素通过 schema 层、抵达 validateInput，由它返回带
+ * Correct 正例的纠正错误（runtime 友好纠错）。
+ *
+ * 字段描述复用 QuestionSchema.properties（只覆盖 options 数组元素类型），避免描述
+ * 双份维护。Static 派生的 InputQuestion.options 是 `(Option | string)[]`，让
+ * validateInput 里的 `typeof opt === "string"` 检查在 TS 层 sound（而非死分支）。
+ * 通过 validateInput 后，运行时已保证无 string，index.ts 以 `as Question[]` 收窄使用。
+ */
+const inputOptionElement = Type.Union([OptionSchema, Type.String()]);
+
 export const InputSchema = Type.Object({
-	questions: Type.Array(QuestionSchema, {
-		minItems: 1,
-		maxItems: 4,
-		description: "1-4 questions, each a single decision. Batch only related decisions that the user should resolve together; otherwise ask the most important one alone.",
-	}),
+	questions: Type.Array(
+		Type.Object({
+			...QuestionSchema.properties,
+			options: Type.Array(inputOptionElement, {
+				minItems: 2,
+				maxItems: 4,
+				description:
+					"2-4 mutually exclusive options. Each must be a {label, description} OBJECT, never a bare string; do NOT include an 'Other' option — it is added automatically.",
+			}),
+		}),
+		{
+			minItems: 1,
+			maxItems: 4,
+			description: "1-4 questions, each a single decision. Batch only related decisions that the user should resolve together; otherwise ask the most important one alone.",
+		},
+	),
 });
 
 // ── 派生类型 ─────────────────────────────────────────
 export type Option = Static<typeof OptionSchema>;
+/** 内部使用的严格 question 形状（options 为干净 Option[]）。validateInput 通过后使用。 */
 export type Question = Static<typeof QuestionSchema>;
+/** LLM 入参 question 形状：options 可能含 string 误用，validateInput 负责友好拦截。 */
+export type InputQuestion = Static<typeof InputSchema>["questions"][number];
 
 // ── Result schema（details，renderResult 数据源） ─────
 export const ResultSchema = Type.Object({

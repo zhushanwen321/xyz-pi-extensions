@@ -77,7 +77,15 @@ function handleList(state: TodoSessionState): string {
 /** add action — 失败抛错 */
 function handleAdd(state: TodoSessionState, params: TodoActionParams): string {
 	if (!params.texts || params.texts.length === 0) {
-		throw new Error("add requires texts parameter (non-empty array)");
+		// 双形陷阱：弱模型 add 时误用单数 text（那是 update 的字段）
+		if (params.text !== undefined) {
+			throw new Error(
+				'add needs texts (array). You passed singular "text" — that field is for update. Correct: {"action":"add","texts":["<your text>"]}',
+			);
+		}
+		throw new Error(
+			'add requires texts parameter (non-empty array). Correct: {"action":"add","texts":["..."]}',
+		);
 	}
 	const r = addTodos(state.todos, state.nextId, params.texts, params.isVerification);
 	if (r.error) throw new Error(r.resultText);
@@ -96,9 +104,14 @@ function handleBatchUpdate(state: TodoSessionState, params: TodoActionParams): s
 
 /** update action: single — 失败抛错 */
 export function handleSingleUpdate(state: TodoSessionState, params: TodoActionParams): string {
-	if (params.id === undefined) throw new Error("update requires id parameter");
+	if (params.id === undefined)
+		throw new Error(
+			'update requires id parameter. Correct: {"action":"update","id":<n>,"status":"in_progress"}',
+		);
 	if (params.status === undefined && params.text === undefined)
-		throw new Error("update requires at least status or text parameter");
+		throw new Error(
+			'update requires at least status or text parameter. Correct: {"action":"update","id":<n>,"status":"in_progress"}',
+		);
 	if (params.text !== undefined && params.text === "") throw new Error("text cannot be empty string");
 	if (
 		params.status !== undefined &&
@@ -142,7 +155,15 @@ function handleUpdate(state: TodoSessionState, params: TodoActionParams): string
 /** delete action — 失败抛错；部分 id 缺失则整体拒绝（原子性） */
 function handleDelete(state: TodoSessionState, params: TodoActionParams): string {
 	if (!params.ids || params.ids.length === 0) {
-		throw new Error("delete requires ids parameter (non-empty array)");
+		// 双形陷阱：弱模型 delete 时误用单数 id（那是 update 的字段）
+		if (params.id !== undefined) {
+			throw new Error(
+				'delete needs ids (array). You passed singular "id" — that field is for update. Correct: {"action":"delete","ids":[<your id>]}',
+			);
+		}
+		throw new Error(
+			'delete requires ids parameter (non-empty array). Correct: {"action":"delete","ids":[<n>]}',
+		);
 	}
 	const uniqueIds = [...new Set(params.ids)];
 	const missing = uniqueIds.filter((id) => !state.todos.some((t) => t.id === id));
@@ -240,7 +261,17 @@ export function registerTodoTool(
 			"\n- add: Batch add todos (requires texts array; optional isVerification marks verification tasks)" +
 			"\n- update: Update todo(s) — single (id + optional status/text) or batch (updates[], takes priority)" +
 			"\n- delete: Batch delete todos (requires ids array)" +
-			"\n- clear: Clear all todos and reset IDs",
+			"\n- clear: Clear all todos and reset IDs" +
+			"\n\nExamples:" +
+			'\n{"action":"add","texts":["write spec","implement"]}' +
+			'\n{"action":"add","texts":["run tests"],"isVerification":true}' +
+			'\n{"action":"update","id":1,"status":"in_progress"}' +
+			'\n{"action":"update","updates":[{"id":1,"status":"completed"},{"id":2,"status":"in_progress"}]}' +
+			'\n{"action":"delete","ids":[3]}' +
+			"\n\nDon't:" +
+			'\n{"action":"add","text":"x"} ← text is for update; add uses texts:[...]' +
+			'\n{"action":"delete","id":3} ← id is for update; delete uses ids:[...]' +
+			'\n{"action":"update","status":"x"} ← missing id',
 		promptSnippet: "Use todo when breaking multi-step work into trackable items. Add verification todos (isVerification=true) for checks like running tests.",
 		promptGuidelines: [
 			"[Usage] 多步骤工作（3+步）时使用。AI 自发创建，无需用户触发",

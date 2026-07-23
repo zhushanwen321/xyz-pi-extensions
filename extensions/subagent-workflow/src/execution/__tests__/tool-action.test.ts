@@ -89,11 +89,11 @@ describe("startHandler", () => {
     await expect(startHandler(svc, { task: "ok", slug: "   " }, undefined)).rejects.toThrow(/slug is required/);
   });
 
-  it("slug 超 20 字符 → throw", async () => {
+  it("slug 超 35 字符 → throw", async () => {
     const svc = makeService();
     await expect(
-      startHandler(svc, { task: "ok", slug: "a".repeat(21) }, undefined),
-    ).rejects.toThrow(/≤20 chars/);
+      startHandler(svc, { task: "ok", slug: "a".repeat(36) }, undefined),
+    ).rejects.toThrow(/≤35 chars/);
   });
 
   it("background 启动 → kind=bg + bgResponse.message 含 detached", async () => {

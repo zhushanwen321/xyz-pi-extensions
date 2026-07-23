@@ -307,7 +307,7 @@ export interface ExecutionRecord {
   readonly mode: ExecutionMode;
   readonly task: string;
   /**
-   * 人类可读的短标签（≤20 字符），简述本次 subagent「在做什么」。
+   * 人类可读的短标签（≤35 字符），简述本次 subagent「在做什么」。
    * 区别于 agent（类型名）/ task（完整 prompt）。旧持久化 record 反序列化时缺失兜底空串。
    */
   readonly slug: string;
@@ -367,7 +367,7 @@ export interface SubagentToolDetails {
   agent: string;
   model: string;
   thinkingLevel: string | undefined;
-  /** 短标签（≤20 字符），来自 record.slug。旧 record 反序列化时为空串。 */
+  /** 短标签（≤35 字符），来自 record.slug。旧 record 反序列化时为空串。 */
   slug: string;
   turns: number;
   totalTokens: number;
@@ -395,7 +395,7 @@ export interface SubagentToolDetails {
 export interface ExecuteOptions {
   task: string;
   /**
-   * 短标签（≤20 字符），简述本次执行用途，展示在 TUI。必填。
+   * 短标签（≤35 字符），简述本次执行用途，展示在 TUI。必填。
    * workflow 内 agent() 调用时从 AgentCallOpts.description 透传而来。
    */
   slug: string;
@@ -448,7 +448,7 @@ export type ExecutionHandle = {
 export interface SubagentListItem {
   subagentId: string;
   agent: string;
-  /** 短标签（≤20 字符），来自 record.slug。旧 record 反序列化时为空串。 */
+  /** 短标签（≤35 字符），来自 record.slug。旧 record 反序列化时为空串。 */
   slug: string;
   status: ExecutionStatus;
   mode: ExecutionMode;
@@ -503,7 +503,7 @@ export interface SubagentRecord {
   agent: string;
   /** 任务提示词（详情面板置顶展示）。磁盘/内存源均有。 */
   task: string;
-  /** 短标签（≤20 字符）。磁盘重建源旧文件可能缺失→兜底空串。 */
+  /** 短标签（≤35 字符）。磁盘重建源旧文件可能缺失→兜底空串。 */
   slug: string;
   status: ExecutionStatus;
   mode: ExecutionMode;
@@ -570,7 +570,7 @@ export interface RecordSnapshot {
   readonly thinkingLevel: string | undefined;
   readonly mode: ExecutionMode;
   readonly task: string;
-  /** 短标签（≤20 字符）。来自 record.slug。 */
+  /** 短标签（≤35 字符）。来自 record.slug。 */
   readonly slug: string;
   readonly status: ExecutionStatus;
   readonly turns: number;

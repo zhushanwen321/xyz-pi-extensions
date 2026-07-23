@@ -9,6 +9,12 @@
 // content（JSON 字符串）给 LLM，details（SubagentToolResult）给 renderResult，同源同处生成。
 
 import type { AgentToolResult } from "@mariozechner/pi-coding-agent";
+import {
+  guiComponent,
+  type GuiContext,
+  guiResult,
+  isGuiCapable,
+} from "@xyz-agent/extension-protocol";
 
 import { SLUG_MAX_LENGTH } from "../execution/execute-options-mapper.ts";
 import { computeElapsedSeconds } from "../execution/execution-record.ts";
@@ -22,12 +28,6 @@ import type {
   SubagentRecord,
   SubagentToolResult,
 } from "../execution/types.ts";
-import {
-  guiComponent,
-  type GuiContext,
-  guiResult,
-  isGuiCapable,
-} from "@xyz-agent/extension-protocol";
 import { mapRunIcon, mapRunStatus } from "./gui-mappers.ts";
 
 // ============================================================
@@ -41,6 +41,9 @@ const MAX_LIST_LIMIT = 100;
 
 /** background 启动提示文案（spec FR-3 bgResponse.message）。 */
 const BG_MESSAGE = "detached, will notify on completion (auto-injected message, do not poll)";
+
+/** subagentId（UUID）在 GUI header 的截断显示长度。 */
+const SUBAGENT_ID_PREVIEW = 8;
 
 // ============================================================
 // 入参 / 出参类型
@@ -141,7 +144,7 @@ export async function startHandler(
   // slug 必填 + 空白校验 + 长度校验（≤ SLUG_MAX_LENGTH 字符）
   const slug = input.slug?.trim();
   if (!slug) throw new Error("startParam.slug is required (and must not be whitespace-only)");
-  if (slug.length > SLUG_MAX_LENGTH) throw new Error(`startParam.slug must be ≤${SLUG_MAX_LENGTH} chars (got ${slug.length})`);
+  if (slug.length > SLUG_MAX_LENGTH) throw new Error(`startParam.slug must be ≤${SLUG_MAX_LENGTH} chars (got ${slug.length}). Shorten to a kebab-case label, e.g. "fix-login", "extract-urls".`);
 
   const handle = await service.execute({
     task,
@@ -291,7 +294,7 @@ export function buildGuiComponent(
     // 利用 input.domain 的身份信息，让并发 subagent 可区分。
     const d = input.domain as StartHandlerResult;
     return guiComponent("card", {
-      header: d.slug ? `${d.slug}` : d.subagentId.slice(0, 8),
+      header: d.slug ? `${d.slug}` : d.subagentId.slice(0, SUBAGENT_ID_PREVIEW),
       body: [guiComponent("stats-line", {
         items: [{ value: "running", severity: "ok" }],
       })],

@@ -233,7 +233,18 @@ export default function (pi: ExtensionAPI): void {
 
 Do NOT use this tool to outsource judgment you should make — if you can form a defensible recommendation from the codebase, proceed and state your choice. Do NOT use for trivia answerable by reading code/docs, or for simple confirmations ("I'll delete X") where plain text suffices. You cannot use this tool to collect free-form requirements, long-form feedback, or multi-paragraph input — it returns short selections only.
 
-If you recommend an option, prefix its label with "(Recommended)" and list it first. For structured multi-option decisions, prefer this tool over plain-text questions; for everything else, reply in plain text.`,
+If you recommend an option, prefix its label with "(Recommended)" and list it first. For structured multi-option decisions, prefer this tool over plain-text questions; for everything else, reply in plain text.
+
+Examples:
+{"questions":[{"question":"Which DB?","context":"Need ACID + JSON columns.","options":[{"label":"(Recommended) Postgres","description":"Mature, strong consistency."},{"label":"SQLite","description":"Zero-ops, embedded."}]}]}
+
+{"questions":[{"header":"DB","question":"Which database?","options":[{"label":"Postgres","description":"..."},{"label":"SQLite","description":"..."}]},{"header":"Region","question":"Which region?","options":[{"label":"us-east-1","description":"..."},{"label":"eu-west-1","description":"..."}]}]}
+
+Don't:
+- Passing options as a string array ("options":["A","B"]) — each option must be {"label","description"}.
+- Forgetting header in multi-question mode (questions.length > 1).
+- Flattening question/header/options to the top level — wrap them in questions:[...].
+- Including an "Other" option — it is added automatically.`,
 		promptSnippet:
 			"Ask the user structured clarifying questions with options — only when you cannot resolve the ambiguity yourself",
 		promptGuidelines: [
@@ -253,9 +264,11 @@ If you recommend an option, prefix its label with "(Recommended)" and list it fi
 			_onUpdate: AgentToolUpdateCallback<AskUserDetails> | undefined,
 			ctx: ExtensionContext,
 		): Promise<ExecuteResult> {
-			const questions = params.questions;
+			const questions = params.questions as Question[];
 
-			// 1. 参数校验（spec FR-2）
+			// 1. 参数校验（spec FR-2）。validateInput 接收宽松 InputQuestion[]：
+			// options 可能含 string 误用（schema 已故意放宽以抵达这里的友好文案），
+			// validateInput 会先拦截 string options 再跑其余校验。通过后 questions 已是干净 Question[]。
 			const validationError = validateInput(questions);
 			if (validationError) {
 				return cancelledResult(questions, `Error: ${validationError}`, true);
@@ -326,7 +339,8 @@ If you recommend an option, prefix its label with "(Recommended)" and list it fi
 		},
 
 		renderCall(args: Static<typeof InputSchema>, theme: ThemeLike) {
-			const questions: Question[] = args.questions ?? [];
+			// args 来自 LLM 原始入参（options 可能是 string），只读 header/question 不碰 options。
+			const questions = (args.questions ?? []) as Question[];
 			const topics = questions.map((q) => q.header ?? truncateToWidth(q.question, HEADER_MAX_CHARS)).join(", ");
 			return new TruncatedText(
 				theme.fg("toolTitle", theme.bold("ask_user ")) + theme.fg("muted", topics),

@@ -22,13 +22,6 @@
 import { StringEnum } from "@mariozechner/pi-ai";
 import type { ExtensionAPI, ExtensionContext, Theme } from "@mariozechner/pi-coding-agent";
 import { Text } from "@mariozechner/pi-tui";
-import { type Static, Type } from "typebox";
-
-import type { LauncherDeps } from "../orchestration/launcher.ts";
-import { abortRun, pauseRun, resumeRun, runWorkflow } from "../orchestration/lifecycle.ts";
-import type { RunStore } from "../orchestration/models/ports.ts";
-import type { WorkflowRun } from "../orchestration/models/workflow-run.ts";
-import { retryNode, skipNode } from "../orchestration/node-ops.ts";
 import {
   guiComponent,
   type GuiContext,
@@ -36,6 +29,14 @@ import {
   guiResult,
   isGuiCapable,
 } from "@xyz-agent/extension-protocol";
+import { type Static, Type } from "typebox";
+
+import { SLUG_MAX_LENGTH } from "../execution/execute-options-mapper.ts";
+import type { LauncherDeps } from "../orchestration/launcher.ts";
+import { abortRun, pauseRun, resumeRun, runWorkflow } from "../orchestration/lifecycle.ts";
+import type { RunStore } from "../orchestration/models/ports.ts";
+import type { WorkflowRun } from "../orchestration/models/workflow-run.ts";
+import { retryNode, skipNode } from "../orchestration/node-ops.ts";
 import { mapRunIcon, mapRunStatus, toGuiCtx } from "./gui-mappers.ts";
 import {
   acquireReentryGuard,
@@ -75,9 +76,9 @@ const WorkflowParams = Type.Object({
   slug: Type.Optional(
     Type.String({
       description:
-        "Short label (max 20 chars) for this run, shown in the TUI to distinguish concurrent runs. " +
+        "Short label (max 35 chars) for this run, shown in the TUI to distinguish concurrent runs. " +
         "If omitted, defaults to the script name.",
-      maxLength: 20,
+      maxLength: SLUG_MAX_LENGTH,
     }),
   ),
   runId: Type.Optional(
@@ -104,6 +105,11 @@ type WorkflowToolParams = Static<typeof WorkflowParams>;
 
 /** runId 截断长度（显示用）。 */
 const RUNID_SHORT = 8;
+
+/** 已知 workflow args 子字段——run action 的 args 顶层键。弱模型常把 task/items 等
+ *  平铺到 workflow params 顶层（缺 args 嵌套），actionRun 静默 args={} 启动缺参 run（P0）。
+ *  用此清单检测平铺形态，报错带 Correct 正例纠正。 */
+const KNOWN_ARG_KEYS = ["task", "target", "perspectives", "items", "itemsJson", "operation"];
 
 // ── Types ────────────────────────────────────────────────────
 
@@ -170,7 +176,7 @@ export function buildWorkflowGui(details: WorkflowToolDetails) {
     const statusStr = details.status;
     return guiComponent("list-tree", {
       items: [{
-        label: [details.name, details.slug, details.runId.slice(0, 8)].filter(Boolean).join(" "),
+        label: [details.name, details.slug, details.runId.slice(0, RUNID_SHORT)].filter(Boolean).join(" "),
         status: mapRunStatus(statusStr),
         icon: mapRunIcon(statusStr),
       }],
@@ -181,7 +187,7 @@ export function buildWorkflowGui(details: WorkflowToolDetails) {
       items: details.runs.map((r) => {
         const statusStr = r.reason ? `${r.status} (${r.reason})` : r.status;
         return {
-          label: [r.name, r.slug, r.runId.slice(0, 8)].filter(Boolean).join(" "),
+          label: [r.name, r.slug, r.runId.slice(0, RUNID_SHORT)].filter(Boolean).join(" "),
           status: mapRunStatus(statusStr),
           icon: mapRunIcon(statusStr),
         };
@@ -194,7 +200,7 @@ export function buildWorkflowGui(details: WorkflowToolDetails) {
   return guiComponent("stats-line", {
     items: [{
       label: details.action,
-      value: details.runId.slice(0, 8),
+      value: details.runId.slice(0, RUNID_SHORT),
       severity,
     }],
   });
@@ -245,6 +251,12 @@ export function registerWorkflowTool(
       "retry-node only re-runs the call and refreshes the trace — the workflow script has " +
       "already moved past the failed call, so the new result does NOT feed back into the " +
       "script flow. Use retry-node for diagnostics, not to resume the workflow.",
+      "Call shapes (JSON): " +
+      "- run: {\"action\":\"run\",\"name\":\"<script>\",\"args\":{...},\"tokens\":N,\"time\":N}. " +
+      "- status: {\"action\":\"status\"}. " +
+      "- pause/resume/abort: {\"action\":\"pause\",\"runId\":\"<id>\"} (abort optional: ,\"error\":\"<reason>\"}). " +
+      "- retry-node/skip-node: {\"action\":\"retry-node\",\"runId\":\"<id>\",\"callId\":N}.",
+      "Anti-patterns: Flattening args sub-fields (task/items/...) to the top level — they belong inside args. Calling {\"action\":\"run\"} without name.",
     ],
     parameters: WorkflowParams,
 
@@ -340,7 +352,18 @@ async function actionRun(
 ): Promise<ToolResult> {
   const name = params.name;
   if (!name) {
-    return textResult("run requires 'name' parameter", true);
+    return textResult("run requires 'name' parameter. Correct: {\"action\":\"run\",\"name\":\"<script>\",\"args\":{...}}", true);
+  }
+  // 弱模型常见误用（P0 静默失败）：把 task/items 等 args 子字段平铺到 workflow params
+  // 顶层（缺 args 嵌套）。下面 args ?? {} 会静默 args={}，启动缺参 run 不报错——比 subagent
+  // 平铺事故更严重。这里检测顶层平铺，报错带 Correct 正例纠正。
+  const flattened = KNOWN_ARG_KEYS.filter((k) => k in params && !(params.args && k in params.args));
+  if (flattened.length > 0) {
+    return textResult(
+      `Detected ${flattened.join(", ")} at top level — they belong inside 'args'. ` +
+      `Correct: {"action":"run","name":"${name}","args":{${flattened.map((k) => `"${k}": <value>`).join(", ")}}}`,
+      true,
+    );
   }
   const args = params.args ?? {};
   const tokens = params.tokens;
@@ -426,7 +449,7 @@ async function actionLifecycle(
 ): Promise<ToolResult> {
   const runId = params.runId;
   if (!runId) {
-    return textResult(`'runId' is required for ${action}`, true);
+    return textResult(`'runId' is required for ${action}. Correct: {"action":"${action}","runId":"<id>"} (use action:"status" to find runId)`, true);
   }
   const run = deps.runs.get(runId);
   if (!run) {
@@ -467,7 +490,7 @@ async function actionRetryNode(params: WorkflowToolParams, deps: LauncherDeps): 
   const runId = params.runId;
   const callId = params.callId;
   if (!runId || callId === undefined) {
-    return textResult("retry-node requires 'runId' and 'callId'", true);
+    return textResult("retry-node requires 'runId' and 'callId'. Correct: {\"action\":\"retry-node\",\"runId\":\"<id>\",\"callId\":<number>}", true);
   }
   const run = deps.runs.get(runId);
   if (!run) {
@@ -494,7 +517,7 @@ async function actionSkipNode(params: WorkflowToolParams, deps: LauncherDeps): P
   const runId = params.runId;
   const callId = params.callId;
   if (!runId || callId === undefined) {
-    return textResult("skip-node requires 'runId' and 'callId'", true);
+    return textResult("skip-node requires 'runId' and 'callId'. Correct: {\"action\":\"skip-node\",\"runId\":\"<id>\",\"callId\":<number>}", true);
   }
   const run = deps.runs.get(runId);
   if (!run) {

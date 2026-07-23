@@ -1,7 +1,8 @@
 // src/__tests__/validate.test.ts
+import { Value } from "@sinclair/typebox/value";
 import { describe, expect, it } from "vitest";
 
-import { HEADER_MAX_CHARS, type Question } from "../types";
+import { HEADER_MAX_CHARS, InputSchema, type Question } from "../types";
 import { validateInput } from "../validate";
 
 const q = (overrides: Partial<Question> = {}): Question => ({
@@ -135,5 +136,68 @@ describe("validateInput", () => {
 	// V-16: header 恰好 12 字符（边界值，合法）
 	it("accepts header at exactly HEADER_MAX_CHARS (12)", () => {
 		expect(validateInput([q({ header: "123456789012" })])).toBeNull();
+	});
+
+	// V-17: options 元素是 string（弱模型最高频误用 "options":["A","B"]）→ 友好错误带 Correct 正例。
+	// schema 层已放宽让 string options 能进到这里（见 types.ts InputSchema），故可直接传 string[]。
+	it("rejects string option elements with a Correct example (weak-model misuse)", () => {
+		const result = validateInput([
+			{ question: "Which DB?", options: ["Postgres", "SQLite"] },
+		]);
+		expect(result).not.toBeNull();
+		expect(result).toContain("objects, not strings");
+		expect(result).toContain('Correct: "options":[{"label"');
+	});
+
+	// V-18: 混合 [string, object] → 仍友好拦截第一个 string 元素
+	it("rejects mixed string/object options", () => {
+		const result = validateInput([
+			{ question: "Q", options: ["A", { label: "B" }] },
+		]);
+		expect(result).toContain("objects, not strings");
+	});
+
+	// V-19: header 缺失错误带 Correct 正例（A. runtime 友好纠错）
+	it("header-missing error includes a Correct example", () => {
+		const result = validateInput([
+			q({ question: "Q1", header: "H1" }),
+			q({ question: "Q2" }), // no header
+		]);
+		expect(result).toContain("Correct:");
+		expect(result).toContain('"header"');
+	});
+});
+
+// ── options 字符串「下沉」机制集成证明 ──────────────────
+// 目标（任务核心）：弱模型误用 "options":["A","B"] 不能被 schema 层干报错拦死，
+// 必须能进 validateInput 拿到带 Correct 正例的友好文案。Value.Check 是 Pi 运行时
+// TypeCompiler.Check 的等价校验（同一引擎），这里直接断言 schema 行为。
+describe("schema-vs-validate integration (options 字符串下沉)", () => {
+	it("string options PASS the schema layer (reach execute, not raw ajv error)", () => {
+		const malformed = {
+			questions: [{ question: "Which DB?", options: ["Postgres", "SQLite"] }],
+		};
+		expect(Value.Check(InputSchema, malformed)).toBe(true);
+	});
+
+	it("string options then caught by validateInput with a friendly Correct example", () => {
+		const result = validateInput([
+			{ question: "Which DB?", options: ["Postgres", "SQLite"] },
+		]);
+		expect(result).not.toBeNull();
+		expect(result).toContain("objects, not strings");
+		expect(result).toContain('Correct: "options":[{"label"');
+	});
+
+	it("well-formed object options still pass schema AND validateInput", () => {
+		const wellFormed = {
+			questions: [
+				{ question: "Which DB?", options: [{ label: "A" }, { label: "B" }] },
+			],
+		};
+		expect(Value.Check(InputSchema, wellFormed)).toBe(true);
+		expect(
+			validateInput([{ question: "Which DB?", options: [{ label: "A" }, { label: "B" }] }]),
+		).toBeNull();
 	});
 });

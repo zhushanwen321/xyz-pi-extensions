@@ -118,11 +118,15 @@ export function handleCreate(
 ): GoalControlDetails {
 	const objective = params.objective?.trim();
 	if (!objective) {
-		throw new Error("'objective' is required for create. Describe the concrete objective to pursue.");
+		throw new Error(
+			"'objective' is required for create. Describe the concrete objective to pursue. Correct: {\"action\":\"create\",\"slug\":\"<kebab-case>\",\"objective\":\"<concrete objective>\"}",
+		);
 	}
 	const slug = params.slug?.trim();
 	if (!slug) {
-		throw new Error("'slug' is required for create. Provide a short kebab-case identifier (e.g. 'refactor-auth').");
+		throw new Error(
+			"'slug' is required for create. Provide a short kebab-case identifier (e.g. 'refactor-auth'). Correct: {\"action\":\"create\",\"slug\":\"refactor-auth\",\"objective\":\"<concrete objective>\"}",
+		);
 	}
 
 	// D25 严格守卫：非终态旧 goal（active/paused/blocked）→ 拒绝创建（防静默覆盖未完成工作）
@@ -181,7 +185,9 @@ export function handleComplete(
 	}
 	const evidence = params.evidence?.trim();
 	if (!evidence) {
-		throw new Error("'evidence' is required for complete. Provide concrete completion evidence.");
+		throw new Error(
+			"'evidence' is required for complete. Provide concrete completion evidence. Correct: {\"action\":\"complete\",\"evidence\":\"Modified src/auth.ts; pnpm test auth passed (12/12); tsc --noEmit clean.\"}",
+		);
 	}
 
 	// FR-3.3: 唯一终态序列入口（内部：tickState → finalizeGoal(transition+history) → persist）
@@ -210,7 +216,9 @@ export function handleReportBlocked(
 	}
 	const reason = params.reason?.trim();
 	if (!reason) {
-		throw new Error("'reason' is required for report_blocked. Describe the blocking condition.");
+		throw new Error(
+			"'reason' is required for report_blocked. Describe the blocking condition. Correct: {\"action\":\"report_blocked\",\"reason\":\"<blocker + what was tried (at least 3 approaches)>\"}",
+		);
 	}
 
 	state.lastBlockerReason = reason;
@@ -237,6 +245,11 @@ export function handleReportBlocked(
  *
  * 对齐 projection/widget.ts 的 getBudgetColor 语义——终态预算耗尽渲染为 error。
  */
+/** renderResult 的 result 是否含 details 字段（类型守卫，替代全可选结构断言 as {details?}）。 */
+function hasGoalDetails(r: unknown): r is { details?: GoalControlDetails } {
+	return typeof r === "object" && r !== null && "details" in r;
+}
+
 function goalStatusSeverity(status: GoalStatus): "ok" | "warn" | "danger" {
 	switch (status) {
 		case "active":
@@ -341,7 +354,22 @@ export function registerGoalControlTool(pi: ExtensionAPI, session: GoalSession):
 		name: "goal_control",
 		label: "Goal Control",
 		description:
-			"Manage the goal for this thread.\n\nActions:\n- create: start a new goal. Requires `slug` (a short kebab-case identifier you generate) and `objective` (the full description). Only use when the user explicitly asks to start a goal; do not infer goals from ordinary tasks. Fails if a goal is already active/paused/blocked (use /goal resume or /goal clear first).\n- complete: mark the active goal complete. Requires `evidence` with concrete proof (files/tests/commands). Recommend finishing all todos (including verification todos) first, but you decide.\n- report_blocked: mark the active goal blocked by a real blocker. Requires `reason` describing the block and what was tried. Only after genuine exhaustion of alternatives.",
+			`Manage the goal for this thread.
+
+Actions:
+- create: start a new goal. Requires 'slug' (a short kebab-case identifier you generate) and 'objective' (the full description). Only use when the user explicitly asks to start a goal; do not infer goals from ordinary tasks. Fails if a goal is already active/paused/blocked (use /goal resume or /goal clear first).
+- complete: mark the active goal complete. Requires 'evidence' with concrete proof (files/tests/commands). Recommend finishing all todos (including verification todos) first, but you decide.
+- report_blocked: mark the active goal blocked by a real blocker. Requires 'reason' describing the block and what was tried. Only after genuine exhaustion of alternatives.
+
+Examples:
+{"action":"create","slug":"refactor-auth","objective":"Refactor the auth module to use JWT and add integration tests"}
+{"action":"complete","evidence":"Modified src/auth.ts; pnpm test auth passed (12/12); tsc --noEmit clean."}
+{"action":"report_blocked","reason":"Blocked: DB migration API changed mid-task (tried: regenerate client, pin old version, rewrite queries)."}
+
+Don't:
+- create without 'slug': {"action":"create","objective":"..."} — slug is required, generate a kebab-case id.
+- complete without 'evidence': {"action":"complete"} — must provide concrete completion proof (files/tests/commands).
+- complete when no goal is active — create or resume one first (fails with 'Goal mode not active').`,
 		promptSnippet:
 			"Use goal_control to manage the thread goal: create (with slug + objective, only when user asks) or complete (with evidence) or report_blocked (with reason, after trying alternatives).",
 		executionMode: "sequential",
@@ -396,7 +424,7 @@ export function registerGoalControlTool(pi: ExtensionAPI, session: GoalSession):
 		},
 
 		renderResult(result: unknown, _options: { expanded: boolean }, theme: Theme): Text {
-			const d = (result as { details?: GoalControlDetails }).details;
+			const d = hasGoalDetails(result) ? result.details : undefined;
 			if (!d) return new Text(theme.fg("dim", "goal_control"), 0, 0);
 			const statusColor =
 				d.status === "active"
