@@ -1,9 +1,9 @@
 ---
-"@zhushanwen/pi-subagent-workflow": minor
+"@zhushanwen/pi-subagent-workflow": patch
 "@zhushanwen/pi-goal": patch
-"@zhushanwen/pi-todo": minor
-"@zhushanwen/pi-ask-user": minor
-"@zhushanwen/pi-structured-output": minor
+"@zhushanwen/pi-todo": patch
+"@zhushanwen/pi-ask-user": patch
+"@zhushanwen/pi-structured-output": patch
 ---
 
 Harden 5 tool descriptions + runtime validation against weak-model first-call parameter misuse.
@@ -33,6 +33,4 @@ Review follow-up (addressed in the same PR after a 6-dimension multi-agent code 
 - **subagent-workflow + todo**: detectors (`hasFlattenedStartFields`, workflow `findFlattenedArgKeys`, todo `handleAdd`/`handleDelete`) now exported to enable behavioural trigger/no-trigger tests — the P0 workflow flatten detector previously had only a fragile source-text lock. Added slug boundary tests (35/36) and a workflow-side runtime slug guard matching subagent's.
 - goal_control `hasGoalDetails` guard tightened to validate the `details` value is an object (not just that the key exists).
 
-`pi-goal` is `patch` (description examples + Correct hints on existing throws only — no new guard or schema shape); the other four are `minor` (each adds a genuinely new runtime detection guard or schema relaxation).
-
-No breaking API changes; the ask-user schema loosening and structured-output keyword-less rejection only surface clearer errors for inputs that were already malformed (previously silently corrupted or raw-ajv-rejected).
+All five packages are bumped `patch`: no breaking API changes, no new public exports forming a supported API contract (the exported detectors are test helpers, not a stable surface), and the ask-user schema loosening + structured-output keyword-less rejection only surface clearer errors for inputs that were already malformed (previously silently corrupted or raw-ajv-rejected). This is defensive hardening + prompt-quality work, conservatively versioned as patch.
