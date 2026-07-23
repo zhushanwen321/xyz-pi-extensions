@@ -245,9 +245,13 @@ export function handleReportBlocked(
  *
  * 对齐 projection/widget.ts 的 getBudgetColor 语义——终态预算耗尽渲染为 error。
  */
-/** renderResult 的 result 是否含 details 字段（类型守卫，替代全可选结构断言 as {details?}）。 */
+/** renderResult 的 result 是否含 details 字段（类型守卫，替代全可选结构断言 as {details?}）。
+ * 收紧：除检查 "details" in r 外，还验证其值为 object 或 undefined（防 details 是 string/number
+ * 时下游读 d.status 得到 undefined 却被类型系统当作 GoalControlDetails）。 */
 function hasGoalDetails(r: unknown): r is { details?: GoalControlDetails } {
-	return typeof r === "object" && r !== null && "details" in r;
+	if (typeof r !== "object" || r === null || !("details" in r)) return false;
+	const d = (r as Record<string, unknown>).details;
+	return d === undefined || typeof d === "object";
 }
 
 function goalStatusSeverity(status: GoalStatus): "ok" | "warn" | "danger" {

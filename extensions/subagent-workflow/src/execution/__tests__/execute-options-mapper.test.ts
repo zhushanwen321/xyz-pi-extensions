@@ -22,6 +22,25 @@ describe("mapToExecuteOptions (D-A2)", () => {
     skillPath: "/path/to/skill.md",
   };
 
+  it("T3.10 slug 截断: description > SLUG_MAX_LENGTH(35) → 截断到 35", () => {
+    const opts: AgentCallOpts = { ...baseOpts, description: "a".repeat(36) };
+    const result = mapToExecuteOptions(opts);
+    expect(result.slug).toHaveLength(35);
+    expect(result.slug).toBe("a".repeat(35));
+  });
+
+  it("T3.10 slug 边界: description = 35 → 不截断", () => {
+    const opts: AgentCallOpts = { ...baseOpts, description: "a".repeat(35) };
+    const result = mapToExecuteOptions(opts);
+    expect(result.slug).toHaveLength(35);
+    expect(result.slug).toBe("a".repeat(35));
+  });
+
+  it("T3.10 slug 回落: 无 description → agentName", () => {
+    const result = mapToExecuteOptions(baseOpts);
+    expect(result.slug).toBe("worker");
+  });
+
   it("T3.4 基本映射: prompt→task, agent→agent, cwd→cwd", () => {
     const result = mapToExecuteOptions(baseOpts);
     expect(result.task).toBe("test task");
@@ -37,12 +56,12 @@ describe("mapToExecuteOptions (D-A2)", () => {
   it("T3.9 schemaEnv 透传 (D-A6 bridge)", () => {
     const opts: AgentCallOpts = { ...baseOpts, schemaEnv: '{"type":"object"}' };
     const result = mapToExecuteOptions(opts);
-    expect((result as unknown as { schemaEnv?: string }).schemaEnv).toBe('{"type":"object"}');
+    expect(result.schemaEnv).toBe('{"type":"object"}');
   });
 
   it("T3.9 schemaEnv 不传 → schemaEnv undefined", () => {
     const result = mapToExecuteOptions(baseOpts);
-    expect((result as unknown as { schemaEnv?: string }).schemaEnv).toBeUndefined();
+    expect(result.schemaEnv).toBeUndefined();
   });
 
   it("T3.5 model: opts.model 优先（显式 override 透传，不与 ctxModel 混合）", () => {

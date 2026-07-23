@@ -52,7 +52,7 @@ const SUBAGENT_ID_PREVIEW = 8;
 /** start 入参（从 tool params.startParam 来，task + slug 必填）。 */
 export interface StartHandlerInput {
   task?: string;
-  /** 短标签（≤20 字符），必填。 */
+  /** 短标签（≤35 字符，kebab-case），必填。 */
   slug?: string;
   agent?: string;
   model?: string;

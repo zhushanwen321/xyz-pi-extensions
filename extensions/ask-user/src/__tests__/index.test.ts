@@ -204,6 +204,24 @@ describe("execute — validation (FR-2 / AC-8 / AC-13)", () => {
 		);
 		expect(result.details.cancelled).toBe(true);
 	});
+
+	it("I-4b: string options (schema-relaxed) → execute → validateInput catches → isError + Correct hint", async () => {
+		// 端到端证明：schema 放宽（Union([OptionSchema, string])）后 string options
+		// 能穿过 TypeCompiler.Check、抵达 execute → validateInput 友好拦截。
+		// test-coverage reviewer 点名的“execute wiring 未测”缺口。
+		const tool = getTool();
+		const result = await tool.execute(
+			"id",
+			{ questions: [{ question: "Q", options: ["A", "B"] }] },
+			undefined,
+			undefined,
+			makeCtx(),
+		);
+		expect(result.isError).toBe(true);
+		expect(result.details.cancelled).toBe(true);
+		expect(result.content[0].text).toContain("not strings");
+		expect(result.content[0].text).toContain("Correct");
+	});
 });
 
 // ── I-5 ~ I-7: Headless（FR-8 / AC-7）──────────────────

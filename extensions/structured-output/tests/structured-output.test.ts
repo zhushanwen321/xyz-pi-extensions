@@ -505,6 +505,26 @@ describe("Tool execute (real call via executeStructuredOutput)", () => {
         schema: { answer: "hello" },
         data: { type: "string" },
       }),
-    ).rejects.toThrow(/Received schema=.*Received data=|data=/);
+    ).rejects.toThrow(/Received schema=.*data=/s);
+  });
+
+  it("rejects malformed-JSON-string schema (tryParseJson keeps raw → reject)", async () => {
+    await expect(
+      executeStructuredOutput({ schema: "{invalid", data: {} }),
+    ).rejects.toThrow(/Invalid JSON Schema/);
+  });
+
+  it("rejects null / undefined / array / number schema", async () => {
+    const badSchemas: unknown[] = [null, undefined, [], 42];
+    for (const bad of badSchemas) {
+      await expect(
+        executeStructuredOutput({ schema: bad, data: {} }),
+      ).rejects.toThrow(/Invalid JSON Schema/);
+    }
+  });
+
+  it("accepts boolean root schema (draft-07: true = accept all)", async () => {
+    const result = await executeStructuredOutput({ schema: true, data: { ok: 1 } });
+    expect(result.details).toEqual({ ok: 1 });
   });
 });

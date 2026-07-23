@@ -33,7 +33,7 @@ import { type RenderContext,renderSubagentCall, renderSubagentResult } from "./t
  */
 interface StartParam {
   task: string;
-  /** 短标签（≤20 字符），必填。展示在 TUI 标题行/列表。 */
+  /** 短标签（≤35 字符，kebab-case），必填。展示在 TUI 标题行/列表。 */
   slug: string;
   agent?: string;
   model?: string;
@@ -177,7 +177,11 @@ function hasStartParam(a: unknown): a is { startParam?: unknown } {
 }
 
 /** action:'start' 入参是否把 task/slug 平铺到顶层（弱模型常见误用：缺 startParam 嵌套）。 */
-function hasFlattenedStartFields(a: unknown): boolean {
+/**
+ * action:'start' 入参是否把 task/slug 平铺到顶层（弱模型常见误用：缺 startParam 嵌套）。
+ * export 供 behavioral 测试（trigger/no-trigger），不改变运行时行为。
+ */
+export function hasFlattenedStartFields(a: unknown): boolean {
   if (typeof a !== "object" || a === null) return false;
   return "task" in a || "slug" in a;
 }

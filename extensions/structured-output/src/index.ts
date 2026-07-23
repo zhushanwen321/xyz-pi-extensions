@@ -25,7 +25,12 @@ const MAX_HOOK_RETRIES = 2;
 // ── Ajv WeakMap cache ─────────────────────────────────────────
 const ajvCache = new WeakMap<object, ValidateFunction>();
 
-function getOrCompileValidator(schema: Record<string, unknown>): ValidateFunction {
+function getOrCompileValidator(schema: Record<string, unknown> | boolean): ValidateFunction {
+	// boolean 根 schema（true=接受一切，false=拒绝一切）是合法 draft-07，
+	// 但 boolean 不能做 WeakMap key，故不缓存（编译结果恒定，重复编译无副作用）。
+	if (typeof schema === "boolean") {
+		return new Ajv({ strict: false }).compile(schema);
+	}
 	const cached = ajvCache.get(schema);
 	if (cached) return cached;
 
@@ -56,8 +61,12 @@ const SCHEMA_KEYWORDS = [
 	"enum", "const",
 	// 组合
 	"allOf", "anyOf", "oneOf", "not",
-	// 引用
-	"$ref", "$id",
+	// 条件验证（draft-07）
+	"if", "then", "else",
+	// 依赖与约束
+	"dependencies", "propertyNames", "contains",
+	// 引用与定义
+	"$ref", "$id", "$defs", "definitions",
 	// 数值
 	"minimum", "maximum", "exclusiveMinimum", "exclusiveMaximum", "multipleOf",
 	// 字符串
@@ -78,7 +87,9 @@ const ECHO_MAX_CHARS = 200;
 function echo(value: unknown): string {
 	let str: string;
 	try {
-		str = typeof value === "string" ? value : JSON.stringify(value);
+		// JSON.stringify(undefined) 返回 undefined（不是 throw），需 ?? 兜底，
+		// 否则后续 str.length 会 "Cannot read properties of undefined"。
+		str = typeof value === "string" ? value : (JSON.stringify(value) ?? String(value));
 	} catch {
 		str = String(value);
 	}
@@ -104,6 +115,13 @@ function isTurnEndEvent(e: unknown): e is { message?: { stopReason?: string } } 
 	return typeof e === "object" && e !== null;
 }
 
+/** tool_execution_end event 结构守卫（替代直接 cast，配合 taste/no-unsafe-cast）。 */
+function isToolExecutionEndEvent(
+	e: unknown,
+): e is { toolName: unknown; isError: unknown; result?: unknown } {
+	return typeof e === "object" && e !== null && "toolName" in e && "isError" in e;
+}
+
 /** swap 检测 + keyword-less schema 拒绝的纠错文案前缀，所有相关错误共用。 */
 const CORRECT_USAGE_HINT =
 	"Correct: structured_output({schema:{type:'object',properties:{...}}, data:{...actual values}}). ";
@@ -123,7 +141,9 @@ export async function executeStructuredOutput(params: {
 	data: unknown;
 }): Promise<{
 	content: Array<{ type: "text"; text: string }>;
-	details: Record<string, unknown>;
+	// data 可能是 primitive/array/object（根 schema 决定），故 details 为 unknown。
+	// 测试断言 toEqual(42)/toEqual(true)/toEqual(["a","b","c"])，不可窄化为 Record。
+	details: unknown;
 }> {
 	// Normalize: some models pass schema/data as JSON strings instead of objects
 	const schema = tryParseJson(params.schema);
@@ -152,10 +172,16 @@ export async function executeStructuredOutput(params: {
 		);
 	}
 
-	// 3. ajv 编译
+	// 3. ajv 编译。schema 此时可能是 object（过 keyword 检查）、boolean（合法 draft-07 根）、
+	// 或 string/number/array/null（非法 → 显式抛错给清晰提示）。getOrCompileValidator 只接受
+	// object|boolean，消除原先的 `as Record<string,unknown>` 不安全 cast。
 	let validate: ValidateFunction;
 	try {
-		validate = getOrCompileValidator(schema as Record<string, unknown>);
+		if (isPlainObject(schema) || typeof schema === "boolean") {
+			validate = getOrCompileValidator(schema);
+		} else {
+			throw new Error(`schema must be a JSON Schema object or boolean, got ${typeof schema}`);
+		}
 	} catch (e) {
 		throw new Error(
 			`Invalid JSON Schema: ${(e as Error).message}. `
@@ -179,7 +205,7 @@ export async function executeStructuredOutput(params: {
 		content: [
 			{ type: "text" as const, text: "Structured output recorded successfully." },
 		],
-		details: data as Record<string, unknown>,
+		details: data,
 	};
 }
 
@@ -204,7 +230,8 @@ function createToolDefinition() {
 			+ "❌ Wrong: schema={type:'object'} with data='hello' (string ≠ object)\n"
 			+ "❌ Wrong: structured_output({name:'Alice'}) — missing the schema/data envelope. Wrap as {schema:{...}, data:{name:'Alice'}}.\n"
 			+ "❌ Wrong: swapping schema and data (passing the answer as schema). The tool detects this as 'likely swapped' and rejects it.\n"
-			+ "❌ Wrong: merging schema and data into one object.",
+			+ "❌ Wrong: merging schema and data into one object.\n"
+			+ "❌ Wrong: schema with no recognized JSON Schema keyword (e.g. {} or {answer:42}). The schema must describe shape via draft-07 keywords (type/properties/items/if-then-else/enum/...); a keyword-less object is rejected to prevent silent accept-all compilation.",
 		promptSnippet:
 			"Use structured-output to return validated JSON data. "
 			+ "Pass schema (JSON Schema draft-07) and data (your output). "
@@ -224,7 +251,7 @@ function createToolDefinition() {
 		}),
 		async execute(
 			_toolCallId: string,
-			params: { schema: Record<string, unknown>; data: unknown },
+			params: { schema: unknown; data: unknown },
 		) {
 			return executeStructuredOutput(params);
 		},
@@ -286,13 +313,13 @@ function setupWorkflowHook(pi: PiAPI, schemaJson: string): void {
 	// 成功 → soSucceededEver=true（终态，后续不再干预）
 	// 失败 → soCallCount++，记录 lastSchemaError，由 turn_end 决定是否 steer 重试
 	pi.on("tool_execution_end", async (event: unknown) => {
-		const e = event as { toolName: string; isError: boolean; result?: unknown };
-		if (e.toolName !== TOOL_NAME) return;
+		if (!isToolExecutionEndEvent(event)) return;
+		if (event.toolName !== TOOL_NAME) return;
 		soCallCount++;
-		if (!e.isError) {
+		if (event.isError !== true) {
 			soSucceededEver = true;
 		} else {
-			lastSchemaError = extractToolErrorText(e.result) ?? "structured-output call failed";
+			lastSchemaError = extractToolErrorText(event.result) ?? "structured-output call failed";
 		}
 	});
 

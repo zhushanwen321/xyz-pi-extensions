@@ -20,8 +20,13 @@ const TOOL_SRC = readFileSync(join(__dirname, "../tool.ts"), "utf-8");
  * tool.ts 的 description 用字符串拼接（非模板字面量），故整段截取后做子串断言。
  */
 function extractDescriptionRegion(src: string): string {
-	const start = src.indexOf("description:");
-	if (start === -1) throw new Error("description: not found in tool.ts");
+	// 锚定到 registerTodoTool 内的 tool description，而非 schema 字段的 description:
+	// （Type.String({ description: "..." }) 等 schema 字段会先被 indexOf 命中，导致
+	// 捕获区域含 schema 描述 + tool 描述——虽当前子串唯一能过但 fragile to restructuring）。
+	const regIdx = src.indexOf("registerTodoTool");
+	if (regIdx === -1) throw new Error("registerTodoTool not found in tool.ts");
+	const start = src.indexOf("description:", regIdx);
+	if (start === -1) throw new Error("tool description: not found in registerTodoTool");
 	const end = src.indexOf("promptSnippet:", start);
 	if (end === -1) throw new Error("promptSnippet: not found in tool.ts");
 	return src.slice(start, end);

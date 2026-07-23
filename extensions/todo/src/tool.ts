@@ -75,7 +75,8 @@ function handleList(state: TodoSessionState): string {
 }
 
 /** add action — 失败抛错 */
-function handleAdd(state: TodoSessionState, params: TodoActionParams): string {
+/** add action — 失败抛错。export 供 behavioral 测试（text/texts 双形陷阱检测）。 */
+export function handleAdd(state: TodoSessionState, params: TodoActionParams): string {
 	if (!params.texts || params.texts.length === 0) {
 		// 双形陷阱：弱模型 add 时误用单数 text（那是 update 的字段）
 		if (params.text !== undefined) {
@@ -153,7 +154,8 @@ function handleUpdate(state: TodoSessionState, params: TodoActionParams): string
 }
 
 /** delete action — 失败抛错；部分 id 缺失则整体拒绝（原子性） */
-function handleDelete(state: TodoSessionState, params: TodoActionParams): string {
+/** delete action — 失败抛错。export 供 behavioral 测试（id/ids 双形陷阱检测）。 */
+export function handleDelete(state: TodoSessionState, params: TodoActionParams): string {
 	if (!params.ids || params.ids.length === 0) {
 		// 双形陷阱：弱模型 delete 时误用单数 id（那是 update 的字段）
 		if (params.id !== undefined) {

@@ -111,6 +111,18 @@ const RUNID_SHORT = 8;
  *  用此清单检测平铺形态，报错带 Correct 正例纠正。 */
 const KNOWN_ARG_KEYS = ["task", "target", "perspectives", "items", "itemsJson", "operation"];
 
+/**
+ * 检测弱模型把 args 子字段平铺到 workflow params 顶层（P0 静默失败防护）。
+ * 返回被平铺的键名列表（空 = 未平铺）。export 供 behavioral 测试（trigger/no-trigger/edge）。
+ * 参数取 unknown 以便测试构造任意对象、并解耦 WorkflowToolParams 的 index-signature 限制。
+ */
+export function findFlattenedArgKeys(params: unknown): string[] {
+  if (typeof params !== "object" || params === null) return [];
+  const p = params as Record<string, unknown>;
+  const args = typeof p.args === "object" && p.args !== null ? p.args : undefined;
+  return KNOWN_ARG_KEYS.filter((k) => k in p && !(args !== undefined && k in args));
+}
+
 // ── Types ────────────────────────────────────────────────────
 
 interface RunSummary {
@@ -357,11 +369,18 @@ async function actionRun(
   // 弱模型常见误用（P0 静默失败）：把 task/items 等 args 子字段平铺到 workflow params
   // 顶层（缺 args 嵌套）。下面 args ?? {} 会静默 args={}，启动缺参 run 不报错——比 subagent
   // 平铺事故更严重。这里检测顶层平铺，报错带 Correct 正例纠正。
-  const flattened = KNOWN_ARG_KEYS.filter((k) => k in params && !(params.args && k in params.args));
+  const flattened = findFlattenedArgKeys(params);
   if (flattened.length > 0) {
     return textResult(
       `Detected ${flattened.join(", ")} at top level — they belong inside 'args'. ` +
-      `Correct: {"action":"run","name":"${name}","args":{${flattened.map((k) => `"${k}": <value>`).join(", ")}}}`,
+      `Correct: {"action":"run","name":"${name}","args":{${flattened.map((k) => `"${k}": "<value>"`).join(", ")}}}`,
+      true,
+    );
+  }
+  // slug 运行时护栏（与 subagent startHandler 对称的纵深防御；schema maxLength 是第一道关卡）
+  if (params.slug !== undefined && params.slug.length > SLUG_MAX_LENGTH) {
+    return textResult(
+      `slug exceeds ${SLUG_MAX_LENGTH} chars (got ${params.slug.length}). Shorten to a kebab-case label, e.g. "fix-login", "extract-urls".`,
       true,
     );
   }
