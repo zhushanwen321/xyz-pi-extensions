@@ -11,6 +11,7 @@ import * as fs from "node:fs";
 
 import type { ExtensionMode } from "@mariozechner/pi-coding-agent";
 
+import { type MirrorFlags, mirrorMainProcessFlags } from "./argv-mirror.ts";
 import { writeAliveMarker } from "./alive-store.ts";
 import { type DialogGlobalQueue, type UiRequestHandler } from "./dialog-queue.ts";
 import { updateFromEvent } from "./execution-record.ts";
@@ -422,6 +423,11 @@ export function buildSpawnArgs(
     sessionDir: string;
     forkSource: string | undefined;
     skillPaths: string[] | undefined;
+    /**
+     * 镜像自主进程 argv 的 flag（--no-extensions/--approve/--extension）。
+     * undefined 或全空/全 false 时行为不变（向后兼容）。
+     */
+    mirrorFlags?: MirrorFlags;
   },
 ): string[] {
   // task 不通过命令行传——pi 的 runRpcMode 只消费 stdin RpcCommand，
@@ -449,6 +455,16 @@ export function buildSpawnArgs(
   if (params.skillPaths && params.skillPaths.length > 0) {
     for (const sp of params.skillPaths) {
       args.push("--skill", sp);
+    }
+  }
+  // 镜像主进程的 extension/approve flag：让子进程 extension 加载行为与主进程一致。
+  // undefined/空值时不追加（向后兼容）。顺序紧跟 skill 之后，注入类 flag 集中。
+  const mf = params.mirrorFlags;
+  if (mf) {
+    if (mf.noExtensions) args.push("--no-extensions");
+    if (mf.approve) args.push("--approve");
+    for (const ep of mf.extensionPaths) {
+      args.push("--extension", ep);
     }
   }
   return args;
@@ -625,6 +641,8 @@ export async function runSpawn(
       sessionDir,
       forkSource,
       skillPaths: skillPaths.length > 0 ? skillPaths : undefined,
+      // 镜像主进程 argv 的 extension/approve flag，让子进程加载行为对齐主进程
+      mirrorFlags: mirrorMainProcessFlags(process.argv),
     },
   );
   const invocation = getPiInvocation(spawnArgs);
