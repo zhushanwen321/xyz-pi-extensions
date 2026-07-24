@@ -245,6 +245,9 @@ export default function subagentsWorkflowExtension(pi: ExtensionAPI): void {
       // SR-4：注入 L2 dialog 队列——session-runner child close 时调 rejectChildDialogs
       // 清理该 child 在 L2 的 pending dialog，防全局死锁（C1 修复：清理路径接通）。
       dialogQueue,
+      // [竞态修复] 注入 ctx.isIdle：notifier flush 在主 agent busy 时退避，idle 后再
+      // sendMessage(triggerTurn)，规避 agent_end→finishRun 窗口里走 steer 分支丢失通知。
+      isIdle: () => ctx.isIdle(),
     });
 
     if (!existingService) {

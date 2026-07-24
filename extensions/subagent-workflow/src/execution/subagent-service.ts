@@ -132,6 +132,10 @@ export interface SubagentServiceSessionInit {
   /** L2 跨子进程全局 dialog 串行队列（进程单例）。透传给 session-runner，
    *  child close 时调 rejectChildDialogs 清理 pending（SR-4 防全局死锁）。 */
   dialogQueue?: DialogGlobalQueue;
+  /** [竞态修复] 主 agent 是否空闲查询（ctx.isIdle），透传给 notifier 的 flush isIdle gate。
+   *  避免 background 完成通知在 agent_end→finishRun 窗口里走错 sendMessage 分支丢失。
+   *  可选：未注入时 notifier flush 不 gate（原行为）。 */
+  isIdle?: () => boolean;
 }
 
 /** background 优先级（保留 priority 排序机制，单一值）。 */
@@ -192,6 +196,9 @@ export class SubagentService {
   private sessionId: string | null = null;
   /** UI streaming sink（ctx.ui.setWidget）。workflow 域经 getStreamSink() 取用。 */
   private streamSink: StreamSink | null = null;
+  /** [竞态修复] 主 agent isIdle 查询（ctx.isIdle）。notifier flush gate 用。
+   *  initSession 注入，piAdapter 透传给 NotifierHost。 */
+  private isIdleFn: (() => boolean) | undefined;
   getStreamSink(): StreamSink | null { return this.streamSink; }
   private _disposed = false;
   private _seq = 0;
@@ -254,6 +261,7 @@ export class SubagentService {
     this.store.setPi(this.pi);
     this.sessionId = init.sessionId;
     this.streamSink = init.streamSink ?? null;
+    this.isIdleFn = init.isIdle;
     // 读取 mode（W4 守卫透传给 session-runner）+ session 级 handler 覆盖。
     this.uiObservability.setMode(init.mode);
     if (init.uiRequestHandler !== undefined) {
@@ -350,6 +358,7 @@ export class SubagentService {
       hasRunningBackground: () => {
         return this.store.listRunning().some((r) => r.mode === "background");
       },
+      isIdle: this.isIdleFn,
     };
   }
 
