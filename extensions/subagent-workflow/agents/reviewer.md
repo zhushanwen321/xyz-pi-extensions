@@ -1,6 +1,7 @@
 ---
 name: reviewer
 description: 代码审查 agent（diff 分析、问题发现）
+color: "#ef4444"
 tools: read
 ---
 

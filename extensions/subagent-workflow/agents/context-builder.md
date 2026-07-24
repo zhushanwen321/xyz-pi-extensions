@@ -1,6 +1,7 @@
 ---
 name: context-builder
 description: 需求分析与元提示生成
+color: "#f59e0b"
 tools: read
 ---
 

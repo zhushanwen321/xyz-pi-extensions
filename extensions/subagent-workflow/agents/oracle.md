@@ -1,6 +1,7 @@
 ---
 name: oracle
 description: 高上下文决策一致性守护
+color: "#8b5cf6"
 tools: read
 ---
 
