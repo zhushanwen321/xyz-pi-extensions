@@ -828,4 +828,84 @@ describe("runSpawn", () => {
 
   // 注：C1（orphan 进程兜底）与 M8（stdout 边界）describe 块已移至 run-spawn-edges.test.ts，
   // 拆分以保持本文件 < 1000 行（pre-commit hook 限制）。两文件各自独立声明文件级 mock。
+
+  // ============================================================
+  // E2E：runSpawn 从主进程 process.argv 镜像 extension/approve flag 到子进程
+  // 验证完整链路：runSpawn 真实执行 → 读 process.argv → buildSpawnArgs 拼参 →
+  // spawn 收到的 args 含镜像 flag。spawn 被 mock（FakeChild），但 runSpawn 体内逻辑
+  // 全真实跑，process.argv 用真实进程变量（测试中临时覆写 + 还原）。
+  // ============================================================
+  describe("E2E: 镜像主进程 argv flag 到子进程 spawn args", () => {
+    const originalArgv = process.argv;
+
+    afterEach(() => {
+      process.argv = originalArgv;
+    });
+
+    it("主进程 argv 含 --extension/--no-extensions/--approve → 子进程 spawn args 全部镜像", async () => {
+      // 模拟主 pi 进程启动参数（xyz-agent runtime 启动 pi 的真实形态）
+      process.argv = [
+        "bun", "/path/to/pi",
+        "--mode", "rpc",
+        "--no-extensions",
+        "--approve",
+        "--extension", "/exts/goal",
+        "--extension", "/exts/todo",
+        "--session-dir", "/sessions",
+      ];
+
+      const record = makeRecord();
+      const promise = runSpawn(record, "Task", makeOpts(), makeCtx());
+      await waitForSpawn();
+      const child = lastSpawnedChild();
+      mockSessionFileExists(
+        "/tmp/test/agents/subagents/--tmp-test--/sessions/2026-07-03T12-00-00-000Z_sess-mirror.jsonl",
+      );
+      emitStdoutLine(child, sessionHeader("sess-mirror"));
+      child.stdout.end();
+      child.stderr.end();
+      child.emit("close", 0);
+      await promise;
+
+      // 断言 spawn 收到的调用参数含全部镜像 flag
+      const spawnCall = mockSpawn.mock.calls[0];
+      // spawn(command, args, options) → args 是第二个参数
+      const spawnArgs = spawnCall[1] as string[];
+
+      expect(spawnArgs).toContain("--no-extensions");
+      expect(spawnArgs).toContain("--approve");
+      // 两个 extension 路径都镜像，顺序保留
+      const extIdxs = spawnArgs
+        .map((a, i) => (a === "--extension" ? i : -1))
+        .filter((i) => i >= 0);
+      expect(extIdxs).toHaveLength(2);
+      expect(spawnArgs[extIdxs[0] + 1]).toBe("/exts/goal");
+      expect(spawnArgs[extIdxs[1] + 1]).toBe("/exts/todo");
+    });
+
+    it("主进程 argv 无目标 flag → 子进程 spawn args 不含镜像 flag（向后兼容）", async () => {
+      // 模拟纯 pi CLI 直接跑（无 extension/approve 配置）
+      process.argv = ["bun", "/path/to/pi", "--mode", "rpc"];
+
+      const record = makeRecord();
+      const promise = runSpawn(record, "Task", makeOpts(), makeCtx());
+      await waitForSpawn();
+      const child = lastSpawnedChild();
+      mockSessionFileExists(
+        "/tmp/test/agents/subagents/--tmp-test--/sessions/2026-07-03T12-00-00-000Zsess-noflag.jsonl",
+      );
+      emitStdoutLine(child, sessionHeader("sess-noflag"));
+      child.stdout.end();
+      child.stderr.end();
+      child.emit("close", 0);
+      await promise;
+
+      const spawnCall = mockSpawn.mock.calls[0];
+      const spawnArgs = spawnCall[1] as string[];
+
+      expect(spawnArgs).not.toContain("--no-extensions");
+      expect(spawnArgs).not.toContain("--approve");
+      expect(spawnArgs).not.toContain("--extension");
+    });
+  });
 });

@@ -7,6 +7,7 @@ import * as path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { MAX_FORK_DEPTH } from "../session-context-resolver.ts";
+import { mirrorMainProcessFlags } from "../argv-mirror.ts";
 import { buildEnvBlock, buildSpawnArgs } from "../session-runner.ts";
 
 describe("buildSpawnArgs", () => {
@@ -130,6 +131,105 @@ describe("buildSpawnArgs", () => {
       { ...baseParams, agentTools: [] },
     );
     expect(args).not.toContain("--tools");
+  });
+
+  // ============================================================
+  // mirrorFlags 透传：子进程镜像主进程 extension/approve flag
+  // ============================================================
+
+  it("mirrorFlags 透传：noExtensions+approve+extensionPaths 全量 push（TC5）", () => {
+    const args = buildSpawnArgs({
+      ...baseParams,
+      mirrorFlags: { noExtensions: true, approve: true, extensionPaths: ["/e1", "/e2"] },
+    });
+    expect(args).toContain("--no-extensions");
+    expect(args).toContain("--approve");
+    // 每个 extension 独立 token，顺序保留
+    const extIdxs = args.map((a, i) => (a === "--extension" ? i : -1)).filter((i) => i >= 0);
+    expect(extIdxs).toHaveLength(2);
+    expect(args[extIdxs[0] + 1]).toBe("/e1");
+    expect(args[extIdxs[1] + 1]).toBe("/e2");
+  });
+
+  it("mirrorFlags 全 false/空 → 不追加任何目标 flag（TC6）", () => {
+    const args = buildSpawnArgs({
+      ...baseParams,
+      mirrorFlags: { noExtensions: false, approve: false, extensionPaths: [] },
+    });
+    expect(args).not.toContain("--no-extensions");
+    expect(args).not.toContain("--approve");
+    expect(args).not.toContain("--extension");
+    // 仅基础参数
+    expect(args).toEqual(["--mode", "rpc", "--session-dir", "/sessions/dir"]);
+  });
+
+  it("mirrorFlags undefined → 行为等同旧版（TC7）", () => {
+    const args = buildSpawnArgs(baseParams);
+    expect(args).toEqual(["--mode", "rpc", "--session-dir", "/sessions/dir"]);
+    expect(args).not.toContain("--extension");
+    expect(args).not.toContain("--no-extensions");
+    expect(args).not.toContain("--approve");
+  });
+});
+
+// ============================================================
+// mirrorMainProcessFlags：从主进程 argv 解析可镜像的 flag
+// ============================================================
+
+describe("mirrorMainProcessFlags", () => {
+  it("--extension 多次出现（空格分隔）+ 布尔 flag（TC1）", () => {
+    const r = mirrorMainProcessFlags([
+      "bun", "/pi", "--mode", "rpc", "--no-extensions", "--approve",
+      "--extension", "/a", "--extension", "/b",
+    ]);
+    expect(r).toEqual({ noExtensions: true, approve: true, extensionPaths: ["/a", "/b"] });
+  });
+
+  it("--extension=path 等号形式 + 短形式 -e/-ne/-a（TC2）", () => {
+    const r = mirrorMainProcessFlags([
+      "bun", "/pi", "--extension=/x", "-ne", "-a",
+    ]);
+    expect(r).toEqual({ noExtensions: true, approve: true, extensionPaths: ["/x"] });
+  });
+
+  it("混合形式（空格 + 等号），顺序保留（TC3）", () => {
+    const r = mirrorMainProcessFlags([
+      "bun", "/pi", "--extension", "/a", "--extension=/b", "--extension", "/c",
+    ]);
+    expect(r.extensionPaths).toEqual(["/a", "/b", "/c"]);
+    expect(r.noExtensions).toBe(false);
+    expect(r.approve).toBe(false);
+  });
+
+  it("无目标 flag → 全空/全 false（向后兼容，TC4）", () => {
+    const r = mirrorMainProcessFlags(["bun", "/pi", "--mode", "rpc"]);
+    expect(r).toEqual({ noExtensions: false, approve: false, extensionPaths: [] });
+  });
+
+  it("不误吃其他 flag 值与 positional 参数（TC8）", () => {
+    const r = mirrorMainProcessFlags([
+      "bun", "/pi", "--no-extensions", "--skill", "/sk", "some prompt text",
+    ]);
+    expect(r.noExtensions).toBe(true);
+    expect(r.extensionPaths).toEqual([]);
+    // --skill 的 /sk 不混入 extensionPaths；positional prompt 被忽略
+  });
+
+  it("空 argv / 仅前导两项 → 全空", () => {
+    expect(mirrorMainProcessFlags([])).toEqual({ noExtensions: false, approve: false, extensionPaths: [] });
+    expect(mirrorMainProcessFlags(["bun", "/pi"])).toEqual({
+      noExtensions: false, approve: false, extensionPaths: [],
+    });
+  });
+
+  it("--extension 末尾无值 → 跳过（不越界、不误吃下一个 token）", () => {
+    const r = mirrorMainProcessFlags(["bun", "/pi", "--extension"]);
+    expect(r.extensionPaths).toEqual([]);
+  });
+
+  it("-e 短形式多次 + 等号混用", () => {
+    const r = mirrorMainProcessFlags(["bun", "/pi", "-e", "/a", "-e=/b", "-e", "/c"]);
+    expect(r.extensionPaths).toEqual(["/a", "/b", "/c"]);
   });
 });
 
