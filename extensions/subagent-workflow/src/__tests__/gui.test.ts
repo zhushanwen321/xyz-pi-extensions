@@ -326,8 +326,8 @@ describe("buildGuiComponent", () => {
 // buildWorkflowGui —— workflow tool details 的 GUI 构造
 // ============================================================
 //
-// WorkflowToolDetails 是 run/status/lifecycle/node-ops 联合。run→list-tree(1 item)，
-// status→list-tree(N items)，pause/resume/abort/retry-node/skip-node→stats-line。
+// WorkflowToolDetails 是 run/status/lifecycle 联合。run→list-tree(1 item)，
+// status→list-tree(N items)，pause/resume/abort→stats-line。
 
 describe("buildWorkflowGui", () => {
   describe("action: run", () => {
@@ -422,7 +422,7 @@ describe("buildWorkflowGui", () => {
     });
   });
 
-  describe("lifecycle & node-ops actions → stats-line", () => {
+  describe("lifecycle actions → stats-line", () => {
     it("pause → stats-line，label=pause value=runId 前 8 字符，severity=warn（挂起非成功完成）", () => {
       const details: WorkflowToolDetails = {
         action: "pause",
@@ -459,30 +459,6 @@ describe("buildWorkflowGui", () => {
       expect(comp.type).toBe("stats-line");
       const props = comp.props as { items: Array<{ severity: string }> };
       expect(props.items[0].severity).toBe("warn");
-    });
-
-    it("retry-node → stats-line，label=retry-node", () => {
-      const details: WorkflowToolDetails = {
-        action: "retry-node",
-        runId: "retryId12",
-        callId: 7,
-      };
-      const comp = buildWorkflowGui(details);
-      expect(comp.type).toBe("stats-line");
-      const props = comp.props as { items: Array<{ label: string }> };
-      expect(props.items[0].label).toBe("retry-node");
-    });
-
-    it("skip-node → stats-line，label=skip-node", () => {
-      const details: WorkflowToolDetails = {
-        action: "skip-node",
-        runId: "skipId1234",
-        callId: 9,
-      };
-      const comp = buildWorkflowGui(details);
-      expect(comp.type).toBe("stats-line");
-      const props = comp.props as { items: Array<{ label: string }> };
-      expect(props.items[0].label).toBe("skip-node");
     });
   });
 });

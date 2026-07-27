@@ -116,7 +116,7 @@ export function buildWorkerScript(userScript: string): string {
     '        // 把单点失败放大成整批崩溃。改为始终 resolve（错误时回退到 content 文本），',
     '        // 让 parallel() 下的脚本容错循环（parseResult → null → skip）自然接管。',
     '        // 错误原因已由主线程 executeAgentCall → trace.update(result.error) 保留在 trace/TUI，',
-    '        // 不丢失。skipNode 的 SKIP_PLACEHOLDER（无 error，resolve 为 ""）已确立此先例。',
+    '        // 不丢失。失败 resolve 为空字符串是既定容错策略。',
     '        // parsedOutput: validated data object from structured-output execute().',
     '        // Fallback to content (raw text) when no schema was requested or on error.',
     '        pending.resolve(msg.result.parsedOutput ?? msg.result.content);',

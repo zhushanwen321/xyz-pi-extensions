@@ -1,5 +1,5 @@
 /**
- * Workflow Extension — workflow tool（7 actions，FR-5 tool 收口）。
+ * Workflow Extension — workflow tool（5 actions，FR-5 tool 收口）。
  *
  * 合并原 tool-workflow.ts + tool-workflow-run.ts 为单 tool。
  *
@@ -9,12 +9,10 @@
  * - pause: 调 pauseRun
  * - resume: 调 resumeRun
  * - abort: 调 abortRun
- * - retry-node: 调 retryNode
- * - skip-node: 调 skipNode
  *
  * **restart 不包含**（D-9 废弃）。
  *
- * 层归属：Interface。依赖 Pi SDK + Engine lifecycle/node-ops/launcher + helpers。
+ * 层归属：Interface。依赖 Pi SDK + Engine lifecycle/launcher + helpers。
  *
  * 参考：domain-models.md §FR-5（tool 收口 4→2）。
  */
@@ -36,7 +34,6 @@ import type { LauncherDeps } from "../orchestration/launcher.ts";
 import { abortRun, pauseRun, resumeRun, runWorkflow } from "../orchestration/lifecycle.ts";
 import type { RunStore } from "../orchestration/models/ports.ts";
 import type { WorkflowRun } from "../orchestration/models/workflow-run.ts";
-import { retryNode, skipNode } from "../orchestration/node-ops.ts";
 import { mapRunIcon, mapRunStatus, toGuiCtx } from "./gui-mappers.ts";
 import {
   acquireReentryGuard,
@@ -54,9 +51,7 @@ export type WorkflowAction =
   | "status"
   | "pause"
   | "resume"
-  | "abort"
-  | "retry-node"
-  | "skip-node";
+  | "abort";
 
 const WORKFLOW_ACTIONS: readonly WorkflowAction[] = [
   "run",
@@ -64,8 +59,6 @@ const WORKFLOW_ACTIONS: readonly WorkflowAction[] = [
   "pause",
   "resume",
   "abort",
-  "retry-node",
-  "skip-node",
 ];
 
 const WorkflowParams = Type.Object({
@@ -82,10 +75,7 @@ const WorkflowParams = Type.Object({
     }),
   ),
   runId: Type.Optional(
-    Type.String({ description: "Workflow run ID (pause/resume/abort/retry-node/skip-node)" }),
-  ),
-  callId: Type.Optional(
-    Type.Number({ description: "Agent call ID (retry-node/skip-node)" }),
+    Type.String({ description: "Workflow run ID (pause/resume/abort)" }),
   ),
   args: Type.Optional(
     Type.Record(Type.String(), Type.Unknown(), {
@@ -151,8 +141,7 @@ interface RunSummary {
 export type WorkflowToolDetails =
   | { action: "run"; runId: string; status: "running" | "not_found"; name: string; slug?: string; stateFile?: string; __gui__?: GuiRenderResult }
   | { action: "status"; runs: RunSummary[]; __gui__?: GuiRenderResult }
-  | { action: "pause" | "resume" | "abort"; runId: string; status: string; reason?: string; __gui__?: GuiRenderResult }
-  | { action: "retry-node" | "skip-node"; runId: string; callId: number; __gui__?: GuiRenderResult };
+  | { action: "pause" | "resume" | "abort"; runId: string; status: string; reason?: string; __gui__?: GuiRenderResult };
 
 /** Result returned by the `workflow` tool's execute. */
 export interface ToolResult {
@@ -206,8 +195,8 @@ export function buildWorkflowGui(details: WorkflowToolDetails) {
       }),
     });
   }
-  // pause/resume/abort/retry-node/skip-node
-  // abort 是破坏性终止、pause 是挂起（非成功完成），用 warn 区分；resume/retry/skip 保留 ok
+  // pause/resume/abort
+  // abort 是破坏性终止、pause 是挂起（非成功完成），用 warn 区分；resume 保留 ok
   const severity = details.action === "abort" || details.action === "pause" ? "warn" as const : "ok" as const;
   return guiComponent("stats-line", {
     items: [{
@@ -241,9 +230,7 @@ export function registerWorkflowTool(
     name: "workflow",
     label: "Workflow",
     description:
-      "Execute and control workflows: run (start), status, pause, resume, abort, " +
-      "retry-node (re-run a failed agent call to refresh its trace; does NOT resume the " +
-      "workflow script or change its output — see promptGuidelines), skip-node (mark a call as skipped).\n" +
+      "Execute and control workflows: run (start), status, pause, resume, abort.\n" +
       "Replaces workflow + workflow-run tools.",
     promptSnippet: "Run, pause, resume, abort, or check workflow status",
     promptGuidelines: [
@@ -259,15 +246,10 @@ export function registerWorkflowTool(
       "with source tags and descriptions. Then use this tool's run action to start one.",
       "run: discover by name/description, then start in background (no user confirmation needed).",
       "Do NOT poll status after starting — results appear automatically via notifyDone.",
-      "retry-node/skip-node: for specific failed agent calls (requires runId + callId). " +
-      "retry-node only re-runs the call and refreshes the trace — the workflow script has " +
-      "already moved past the failed call, so the new result does NOT feed back into the " +
-      "script flow. Use retry-node for diagnostics, not to resume the workflow.",
       "Call shapes (JSON): " +
       "- run: {\"action\":\"run\",\"name\":\"<script>\",\"args\":{...},\"tokens\":N,\"time\":N}. " +
       "- status: {\"action\":\"status\"}. " +
-      "- pause/resume/abort: {\"action\":\"pause\",\"runId\":\"<id>\"} (abort optional: ,\"error\":\"<reason>\"}). " +
-      "- retry-node/skip-node: {\"action\":\"retry-node\",\"runId\":\"<id>\",\"callId\":N}.",
+      "- pause/resume/abort: {\"action\":\"pause\",\"runId\":\"<id>\"} (abort optional: ,\"error\":\"<reason>\"}).",
       "Anti-patterns: Flattening args sub-fields (task/items/...) to the top level — they belong inside args. Calling {\"action\":\"run\"} without name.",
     ],
     parameters: WorkflowParams,
@@ -307,12 +289,6 @@ export function registerWorkflowTool(
             break;
           case "abort":
             result = await actionLifecycle("abort", params, deps);
-            break;
-          case "retry-node":
-            result = await actionRetryNode(params, deps);
-            break;
-          case "skip-node":
-            result = await actionSkipNode(params, deps);
             break;
           default: {
             // Exhaustiveness check — 新增 WorkflowAction 成员时未补 case，tsc 在此报错。
@@ -496,62 +472,6 @@ async function actionLifecycle(
         },
       ],
       details: { action, runId, status: newStatus, reason: run.state.reason },
-    };
-  } catch (err) {
-    const msg = err instanceof Error ? err.message : String(err);
-    return textResult(`Error: ${msg}`, true);
-  }
-}
-
-// ── retry-node / skip-node ───────────────────────────────────
-
-async function actionRetryNode(params: WorkflowToolParams, deps: LauncherDeps): Promise<ToolResult> {
-  const runId = params.runId;
-  const callId = params.callId;
-  if (!runId || callId === undefined) {
-    return textResult("retry-node requires 'runId' and 'callId'. Correct: {\"action\":\"retry-node\",\"runId\":\"<id>\",\"callId\":<number>}", true);
-  }
-  const run = deps.runs.get(runId);
-  if (!run) {
-    return textResult(
-      `Workflow '${runId}' not found. Use action:status to list active runs and their runIds.`,
-      true,
-    );
-  }
-  try {
-    await retryNode(run, callId, deps);
-    return {
-      content: [
-        { type: "text", text: `Retried call ${callId} in run ${runId.slice(0, RUNID_SHORT)}.` },
-      ],
-      details: { action: "retry-node", runId, callId },
-    };
-  } catch (err) {
-    const msg = err instanceof Error ? err.message : String(err);
-    return textResult(`Error: ${msg}`, true);
-  }
-}
-
-async function actionSkipNode(params: WorkflowToolParams, deps: LauncherDeps): Promise<ToolResult> {
-  const runId = params.runId;
-  const callId = params.callId;
-  if (!runId || callId === undefined) {
-    return textResult("skip-node requires 'runId' and 'callId'. Correct: {\"action\":\"skip-node\",\"runId\":\"<id>\",\"callId\":<number>}", true);
-  }
-  const run = deps.runs.get(runId);
-  if (!run) {
-    return textResult(
-      `Workflow '${runId}' not found. Use action:status to list active runs and their runIds.`,
-      true,
-    );
-  }
-  try {
-    await skipNode(run, callId, deps);
-    return {
-      content: [
-        { type: "text", text: `Skipped call ${callId} in run ${runId.slice(0, RUNID_SHORT)}.` },
-      ],
-      details: { action: "skip-node", runId, callId },
     };
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
