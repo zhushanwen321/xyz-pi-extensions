@@ -92,15 +92,13 @@ export function renderSubagentCall(
   resolved?: { model: string; thinkingLevel?: string },
 ): Component {
   const t = theme as ThemeLike;
-  // args 结构：{ action:"start", startParam:{ agent, task, ... } }（见 subagent-tool.ts schema）。
-  // 从 startParam 提取 agent + task，对齐 nicobailon 的 renderCall 多行布局。
-  const startParam = typeof args === "object" && args !== null && "startParam" in args
-    ? (args as { startParam?: unknown }).startParam
-    : undefined;
-  const agent = extractAgentName(startParam);
-  // slug：从 startParam 提取（必填字段），非空时在 agent 后用 · 分隔展示。
-  const slug = typeof startParam === "object" && startParam !== null && "slug" in startParam
-    ? (startParam as { slug?: unknown }).slug
+  // args 结构（拍平后）：{ action:"start", agent, task, slug, ... }（见 subagent-tool.ts schema）。
+  // 13 字段直接在顶层，extractAgentName / slug / task 都从 args 顶层提取，
+  // 对齐 nicobailon 的 renderCall 多行布局。
+  const agent = extractAgentName(args);
+  // slug：从顶层 args 提取（必填字段），非空时在 agent 后用 · 分隔展示。
+  const slug = typeof args === "object" && args !== null && "slug" in args
+    ? (args as { slug?: unknown }).slug
     : undefined;
   const slugStr = typeof slug === "string" ? slug.trim() : "";
   const parts = slugStr
@@ -122,8 +120,8 @@ export function renderSubagentCall(
   // task preview 行——对齐 nicobailon：renderCall 输出多行（标题 + \n + task 预览）。
   // 实验假设：call 多行让首帧（无 result）与后续帧（有 result）的高度跳变模式
   // 与 nicobailon 一致，可能影响 pi diff 引擎的行对齐路径。preview 截断到 60 字符。
-  const task = typeof startParam === "object" && startParam !== null && "task" in startParam
-    ? (startParam as { task?: unknown }).task
+  const task = typeof args === "object" && args !== null && "task" in args
+    ? (args as { task?: unknown }).task
     : undefined;
   if (typeof task === "string" && task.length > 0) {
     // task 取首行——prompt 常含换行（多行指令），直接 slice 会保留 \n，

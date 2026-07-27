@@ -44,7 +44,7 @@ describe("U1: workflow tool prompt mentions built-in workflows", () => {
     expect(TOOL_WORKFLOW_SRC).toMatch(/workflow run .+--args/i);
   });
 
-  it("promptGuidelines 含 JSON 调用正例（run/status/lifecycle/retry-node）", () => {
+  it("promptGuidelines 含 JSON 调用正例（run/status/lifecycle）", () => {
     // 弱模型信任 schema 结构信号 > 文本信号，容易把 args 子字段平铺到顶层。
     // promptGuidelines 必须有完整 JSON 调用正例，让模型能直接照抄 {"action":"run",...} 嵌套结构。
     expect(TOOL_WORKFLOW_SRC).toContain('{"action":"run"');

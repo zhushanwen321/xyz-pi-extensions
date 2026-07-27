@@ -31,23 +31,6 @@ import { type RenderContext,renderSubagentCall, renderSubagentResult } from "./t
  * 无法从 SubagentParams schema 反向推断参数类型）。
  * action 与对应 param 不匹配时 handler 内 throw。
  */
-interface StartParam {
-  task: string;
-  /** 短标签（≤35 字符，kebab-case），必填。展示在 TUI 标题行/列表。 */
-  slug: string;
-  agent?: string;
-  model?: string;
-  thinkingLevel?: string;
-  skillPath?: string;
-  appendSystemPrompt?: string[];
-  schema?: Record<string, unknown>;
-  maxTurns?: number;
-  graceTurns?: number;
-  fork?: boolean;
-  worktree?: boolean;
-  cwd?: string;
-}
-
 interface ListParam {
   includeFinished?: boolean;
   limit?: number;
@@ -59,7 +42,22 @@ interface CancelParam {
 
 interface SubagentExecuteParams {
   action: "start" | "list" | "cancel";
-  startParam?: StartParam;
+  // action:"start" 的 13 字段拍平到顶层（弱模型常省略 startParam 嵌套层导致调用失败）。
+  // 拍平后这些字段直接在顶层（全部 optional——schema flat 无法表达「action 条件必填」，
+  // 由 startHandler runtime 校验 task/slug 必填）。
+  task?: string;
+  slug?: string;
+  agent?: string;
+  model?: string;
+  thinkingLevel?: string;
+  skillPath?: string;
+  appendSystemPrompt?: string[];
+  schema?: Record<string, unknown>;
+  maxTurns?: number;
+  graceTurns?: number;
+  fork?: boolean;
+  worktree?: boolean;
+  cwd?: string;
   listParam?: ListParam;
   cancelParam?: CancelParam;
 }
@@ -89,54 +87,56 @@ type SubagentRenderResultCb = (
 
 // Params schema（模块内消费，未导出）。
 //
-// TODO(long-term, option-A): startParam/listParam/cancelParam 全标 Optional 是 flat
-// JSON Schema 表达「action 分发的条件必填」的妥协——required[] 只能表达静态必填，
-// 无法表达「action:"start" 时 startParam 必填、action:"list" 时不需要」。长期方案是
-// 拆成 3 个独立 tool（subagent_start / subagent_list / subagent_cancel），让每个 tool
-// 的 schema 真实反映必填性，消除全新上下文下的字段误判。当前靠 description 强标记 +
-// runtime guard（subagent-actions.ts startHandler/cancelHandler throw）兜底。
-// 勿在此基础上继续堆 action 条件逻辑——要加就拆 tool。
+// action:"start" 的 13 字段（task/slug/agent/model/...）拍平在顶层，不再用 startParam
+// 嵌套容器包。原因：弱模型（GLM/DeepSeek）信任 schema 结构信号 > 文本信号，经常省略
+// startParam 嵌套层把 task/slug 直接平铺到顶层导致调用失败。拍平后 schema 结构与模型
+// 的自然倾向一致，消除这层误用。task/slug 必填性由 startHandler runtime 校验（flat
+// JSON Schema 无法表达「action 条件必填」）。
+//
+// TODO(long-term, option-A): listParam/cancelParam 仍标 Optional 也是 flat JSON Schema
+// 表达「action 分发条件必填」的妥协——长期方案是拆成 3 个独立 tool
+// （subagent_start / subagent_list / subagent_cancel），让每个 tool 的 schema 真实
+// 反映必填性。勿在此基础上继续堆 action 条件逻辑——要加就拆 tool。
 const SubagentParams = Type.Object({
   action: StringEnum(["start", "list", "cancel"], {
     description: "Operation: 'start' runs a subagent, 'list' shows running subagents (optional includeFinished), 'cancel' stops a background subagent by id.",
   }),
-  // action:"start" → startParam REQUIRED. Missing/empty task or slug throws at runtime.
+  // ── action:"start" fields (flattened to top level). task/slug REQUIRED for start. ──
+  // Missing/empty task or slug throws at runtime (startHandler).
   // (flat JSON Schema can't express conditional requirement — see file-level TODO.)
-  startParam: Type.Optional(Type.Object({
-    task: Type.String({
-      description: "REQUIRED for action:'start'. The task for the subagent to execute. Throws if missing or whitespace-only.",
-    }),
-    slug: Type.String({
-      description:
-        "REQUIRED for action:'start'. Short label (≤35 chars) for this subagent, e.g. 'fix-login', 'extract-urls'. " +
-        "Shown in TUI to distinguish concurrent subagents.",
-      maxLength: SLUG_MAX_LENGTH,
-    }),
-    agent: Type.Optional(Type.String({
-      description: 'Agent name (system prompt + tools). If omitted, defaults to "general-purpose" — a generic agent that inherits the main agent\'s model and project context. Available: general-purpose (default fallback), worker, researcher, explorer, planner, reviewer, oracle, context-builder. Custom agents configurable.',
-    })),
-    model: Type.Optional(Type.String({
-      description: 'Model override in "provider/modelId" format. Resolution order (top wins): (1) this param, (2) agent .md frontmatter model, (3) the main agent\'s current model (zero-config default). An explicit model (param or frontmatter) that is missing or unauthorized THROWS — there is no silent fallback to the main model. Omit this param to inherit the main model.',
-    })),
-    thinkingLevel: Type.Optional(StringEnum(["off", "minimal", "low", "medium", "high", "xhigh"] as const)),
-    skillPath: Type.Optional(Type.String()),
-    appendSystemPrompt: Type.Optional(Type.Array(Type.String())),
-    schema: Type.Optional(Type.Record(Type.String(), Type.Unknown())),
-    maxTurns: Type.Optional(Type.Number({
-      description: "Turn limit. The subagent is terminated via SIGTERM after maxTurns turn_end events + graceTurns of slack. There is no graceful wrap-up message — the process is killed. 0 or omitted = unlimited.",
-    })),
-    graceTurns: Type.Optional(Type.Number({
-      description: "Extra turns allowed after maxTurns is reached before SIGTERM (default 2). Only meaningful when maxTurns is set.",
-    })),
-    fork: Type.Optional(Type.Boolean({
-      description: "Fork mode: inherit the parent's conversation context. When true, the subagent receives the parent's session file via --fork and builds a branched conversation (it sees prior turns/messages). The subagent still runs in a separate spawned child process (process isolation) — fork is about context inheritance, not process sharing. Use worktree:true (requires fork:true) for file-system isolation.",
-    })),
-    worktree: Type.Optional(Type.Boolean({
-      description: "Worktree isolation (requires fork:true): run the subagent in a dedicated git worktree, providing file-system level isolation from the parent session. Prevents concurrent file-write conflicts between parent and subagent. Only takes effect when fork:true; passing worktree:true without fork:true throws an error.",
-    })),
-    cwd: Type.Optional(Type.String({
-      description: 'Override the working directory for the subagent execution. Must be an absolute path. Defaults to the parent session\'s cwd.',
-    })),
+  task: Type.Optional(Type.String({
+    description: "REQUIRED for action:'start'. The task for the subagent to execute. Throws if missing or whitespace-only.",
+  })),
+  slug: Type.Optional(Type.String({
+    description:
+      "REQUIRED for action:'start'. Short label (≤35 chars) for this subagent, e.g. 'fix-login', 'extract-urls'. " +
+      "Shown in TUI to distinguish concurrent subagents.",
+    maxLength: SLUG_MAX_LENGTH,
+  })),
+  agent: Type.Optional(Type.String({
+    description: 'Agent name (system prompt + tools). If omitted, defaults to "general-purpose" — a generic agent that inherits the main agent\'s model and project context. Available: general-purpose (default fallback), worker, researcher, explorer, planner, reviewer, oracle, context-builder, orchestrator. Custom agents configurable.',
+  })),
+  model: Type.Optional(Type.String({
+    description: 'Model override in "provider/modelId" format. Resolution order (top wins): (1) this param, (2) agent .md frontmatter model, (3) the main agent\'s current model (zero-config default). An explicit model (param or frontmatter) that is missing or unauthorized THROWS — there is no silent fallback to the main model. Omit this param to inherit the main model.',
+  })),
+  thinkingLevel: Type.Optional(StringEnum(["off", "minimal", "low", "medium", "high", "xhigh"] as const)),
+  skillPath: Type.Optional(Type.String()),
+  appendSystemPrompt: Type.Optional(Type.Array(Type.String())),
+  schema: Type.Optional(Type.Record(Type.String(), Type.Unknown())),
+  maxTurns: Type.Optional(Type.Number({
+    description: "Turn limit. The subagent is terminated via SIGTERM after maxTurns turn_end events + graceTurns of slack. There is no graceful wrap-up message — the process is killed. 0 or omitted = unlimited.",
+  })),
+  graceTurns: Type.Optional(Type.Number({
+    description: "Extra turns allowed after maxTurns is reached before SIGTERM (default 2). Only meaningful when maxTurns is set.",
+  })),
+  fork: Type.Optional(Type.Boolean({
+    description: "Fork mode: inherit the parent's conversation context. When true, the subagent receives the parent's session file via --fork and builds a branched conversation (it sees prior turns/messages). The subagent still runs in a separate spawned child process (process isolation) — fork is about context inheritance, not process sharing. Use worktree:true (requires fork:true) for file-system isolation.",
+  })),
+  worktree: Type.Optional(Type.Boolean({
+    description: "Worktree isolation (requires fork:true): run the subagent in a dedicated git worktree, providing file-system level isolation from the parent session. Prevents concurrent file-write conflicts between parent and subagent. Only takes effect when fork:true; passing worktree:true without fork:true throws an error.",
+  })),
+  cwd: Type.Optional(Type.String({
+    description: 'Override the working directory for the subagent execution. Must be an absolute path. Defaults to the parent session\'s cwd.',
   })),
   // action:"list" → listParam OPTIONAL (all fields optional, defaults apply). Ignored by other actions.
   listParam: Type.Optional(Type.Object({
@@ -171,22 +171,8 @@ function isModelOverrideObj(a: unknown): a is { model?: unknown; thinkingLevel?:
   return typeof a === "object" && a !== null;
 }
 
-/** unknown args 是否含 startParam（类型守卫，替代 `in` 后的 `as`）。 */
-function hasStartParam(a: unknown): a is { startParam?: unknown } {
-  return typeof a === "object" && a !== null && "startParam" in a;
-}
-
-/** action:'start' 入参是否把 task/slug 平铺到顶层（弱模型常见误用：缺 startParam 嵌套）。 */
-/**
- * action:'start' 入参是否把 task/slug 平铺到顶层（弱模型常见误用：缺 startParam 嵌套）。
- * export 供 behavioral 测试（trigger/no-trigger），不改变运行时行为。
- */
-export function hasFlattenedStartFields(a: unknown): boolean {
-  if (typeof a !== "object" || a === null) return false;
-  return "task" in a || "slug" in a;
-}
-
-/** 从 unknown args 安全提取 model/thinkingLevel override（传给 resolveModel）。 */
+/** 从 unknown args 安全提取 model/thinkingLevel override（传给 resolveModel）。
+ *  拍平后 args 已是顶层平铺结构（model/thinkingLevel 直接在 args 上）。 */
 function extractModelOverride(args: unknown): { model?: string; thinkingLevel?: string } | undefined {
   if (!isModelOverrideObj(args)) return undefined;
   const override: { model?: string; thinkingLevel?: string } = {};
@@ -214,17 +200,17 @@ Delegate when the task needs a distinct role (researcher/worker), context isolat
 
 ## Actions
 
-- action:"start" — run a subagent. REQUIRED startParam: { task, slug, ... } (task and slug REQUIRED). Background only: returns a subagentId immediately, notifies on completion.
+- action:"start" — run a subagent. Pass task and slug as top-level fields (REQUIRED). Optional: agent, model, thinkingLevel, skillPath, appendSystemPrompt, schema, maxTurns, graceTurns, fork, worktree, cwd. Background only: returns a subagentId immediately, notifies on completion.
 - action:"list" — list subagents. Pass listParam: { includeFinished?, limit? } (all optional). Read an item's sessionFile for full detail.
 - action:"cancel" — cancel a background subagent. REQUIRED cancelParam: { subagentId }.
 
 ## Examples
 
 \`\`\`
-{"action":"start","startParam":{"task":"<your task>","slug":"<kebab-case>"}}
-{"action":"start","startParam":{"task":"...","slug":"fix-login","agent":"worker","model":"anthropic/claude-3.5-sonnet","fork":true}}
+{"action":"start","task":"<your task>","slug":"<kebab-case>"}
+{"action":"start","task":"...","slug":"fix-login","agent":"worker","model":"anthropic/claude-3.5-sonnet","fork":true}
 {"action":"list","listParam":{"includeFinished":false,"limit":20}}
-{"action":"cancel","cancelParam":{"subagentId":"sa_abc123"}}
+{"action":"cancel","cancelParam":{"subagentId":"sa-550e8400"}}
 \`\`\`
 
 ## After launching — do NOT wait
@@ -237,7 +223,8 @@ Completion auto-notifies you (steer wakes next turn, even mid-poll). So:
 
 ## Anti-patterns
 
-- Putting task/slug at the top level instead of inside startParam — the tool reads startParam.task, not a top-level task.
+- Forgetting the REQUIRED top-level task/slug fields for action:"start" — both must be present at the top level (not nested).
+- Over-generalizing the flatten: ONLY start fields are top-level. list and cancel params stay nested under listParam / cancelParam (e.g. {"action":"list","listParam":{"includeFinished":true}}, NOT {"action":"list","includeFinished":true}).
 - Launching background, then sleeping/polling instead of working or stopping.
 - Treating subagent results as authoritative without verification.
 - Delegating trivial tasks you could do faster yourself.
@@ -278,9 +265,10 @@ const subagentRenderCall: SubagentRenderCallCb = (args, theme, ctx) => {
   // 主 agent model 由 ModelConfigService 缓存（session_start 注入，model_select 刷新），
   // 补偿 renderCall 的 ToolRenderContext 不含 model 的 SDK 限制。
   // service 未就绪 / 缓存为空 / 解析失败 → 降级不显示 model。
-  const startParam = hasStartParam(args) ? args.startParam : undefined;
-  const agent = extractAgentName(startParam);
-  const override = extractModelOverride(startParam);
+  // 拍平后 args 已是顶层平铺结构（agent/model/thinkingLevel 直接在 args 上），
+  // extractAgentName / extractModelOverride 都是 unknown-safe 顶层读取，对平铺形态天然兼容。
+  const agent = extractAgentName(args);
+  const override = extractModelOverride(args);
   let resolved: { model: string; thinkingLevel?: string } | undefined;
   try {
     const service = getSubagentService();
@@ -309,13 +297,17 @@ const subagentRenderResult: SubagentRenderResultCb = (result, options, theme, ct
  *   ║  service = getSubagentService() —— 未初始化 throw                  ║
  *   ║                                                                    ║
  *   ║  switch(params.action):                                           ║
- *   ║    "start"  → startHandler(service, params.startParam, signal) → 领域对象  ║
+ *   ║    "start"  → startHandler(service, params, signal) → 领域对象       ║
  *   ║    "list"   → listHandler(service, params.listParam) → 领域对象    ║
  *   ║    "cancel" → cancelHandler(service, params.cancelParam) → 领域对象║
  *   ║                                                                    ║
  *   ║  result = adapter(action, 领域对象)                                ║
  *   ║  return { content: [{text: JSON.stringify(result)}], details: result }║
  *   ╚══════════════════════════════════════════════════════════════════╝
+ *
+ * 拍平后 startHandler 直接接收顶层 params（13 字段已在顶层）。startHandler 的入参
+ * 类型 StartHandlerInput 是 SubagentExecuteParams 的子集（13 字段全 optional），
+ * 结构兼容——SubagentExecuteParams 多出的 action/listParam/cancelParam 被忽略。
  *
  * handler 返回纯领域对象（不碰 {content, details}），adapter 唯一包装。
  * content（JSON 字符串）给 LLM，details（领域对象 + action）给 renderResult，同源。
@@ -332,20 +324,11 @@ const executeSubagent: SubagentExecuteCb = async (
   const service = getSubagentService();
   if (!service) throw new Error("subagents runtime not initialized");
 
-  // 弱模型常见误用：action:'start' 时把 task/slug 平铺到顶层（缺 startParam 嵌套层）。
-  // schema 用 Type.Optional 表达条件必填（flat JSON Schema 无法表达），弱模型信任
-  // 结构信号 > 文本信号，倾向省略嵌套层。这里在进 startHandler 之前拦截平铺形态，
-  // throw 带 Correct 正例，让弱模型撞错后第二次能直接照抄。
-  if (params.action === "start" && !params.startParam && hasFlattenedStartFields(params)) {
-    throw new Error(
-      "startParam is required for action:'start' — wrap task/slug inside startParam. " +
-      "Correct: {\"action\":\"start\",\"startParam\":{\"task\":\"<your task>\",\"slug\":\"<kebab-case>\"}}",
-    );
-  }
-
   switch (params.action) {
     case "start":
-      return adapter({ action: "start", domain: await startHandler(service, params.startParam, signal, _ctx?.model) }, toGuiCtx(_ctx));
+      // 拍平后直接传顶层 params（StartHandlerInput 是 SubagentExecuteParams 子集，
+      // action/listParam/cancelParam 被忽略；task/slug 必填性由 startHandler 校验）。
+      return adapter({ action: "start", domain: await startHandler(service, params, signal, _ctx?.model) }, toGuiCtx(_ctx));
     case "list":
       return adapter({ action: "list", domain: listHandler(service, params.listParam) }, toGuiCtx(_ctx));
     case "cancel":

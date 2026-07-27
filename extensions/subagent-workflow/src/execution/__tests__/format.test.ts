@@ -313,8 +313,22 @@ describe("shortId", () => {
   });
 
   it("strips timestamp from background id (bg-tag-seq-<ts> → bg-tag-seq)", () => {
-    // 真实格式：bg-${6位hex tag}-${seq}-${Date.now()}（subagent-service.ts:422）
+    // 算法回归：多段 id 取前 3 段（SHORT_ID_BG_SEGMENTS）。
+    // 注意：当前 subagent ID 已改为 sa-<uuid>（见下面 sa- 用例），workflow ID 为 wf-<ts>-<rand>，
+    // 实际不再产生 bg- 形态 id；此处保留作为 shortId 算法的多段降级回归（4 段 → 3 段）。
     expect(shortId("bg-f6f731-10-1719500000000")).toBe("bg-f6f731-10");
     expect(shortId("bg-abc123-99-1719500123456")).toBe("bg-abc123-99");
+  });
+
+  it("handles pure uuid and wf- runId (regression baseline)", () => {
+    // 纯 UUID 回归（5段 → 取前3段）
+    expect(shortId("550e8400-e29b-41d4-a716-446655440000")).toBe("550e8400-e29b-41d4");
+    // wf- 前缀 runId 回归（3段 → 取前3段=原样）
+    expect(shortId("wf-1719500000000-a1b2c3")).toBe("wf-1719500000000-a1b2c3");
+  });
+
+  it("keeps sa- prefix for subagent id (sa-<uuid> → sa-<uuid 前3段>)", () => {
+    // sa- 前缀 subagent ID（保留前缀 + UUID 前 3 段）
+    expect(shortId("sa-550e8400-e29b-41d4-a716-446655440000")).toBe("sa-550e8400-e29b-41d4");
   });
 });

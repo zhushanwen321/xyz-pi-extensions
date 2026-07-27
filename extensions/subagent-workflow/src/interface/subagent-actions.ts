@@ -49,7 +49,9 @@ const SUBAGENT_ID_PREVIEW = 8;
 // 入参 / 出参类型
 // ============================================================
 
-/** start 入参（从 tool params.startParam 来，task + slug 必填）。 */
+/** start 入参（拍平后从 tool params 顶层来，task + slug 必填）。
+ *  StartHandlerInput 是 SubagentExecuteParams 的子集（13 字段全 optional）；
+ *  调用方传整个 params（含 action/listParam/cancelParam），多余字段被忽略。 */
 export interface StartHandlerInput {
   task?: string;
   /** 短标签（≤35 字符，kebab-case），必填。 */
@@ -137,14 +139,23 @@ export async function startHandler(
   signal: AbortSignal | undefined,
   ctxModel?: ModelInfo,
 ): Promise<StartHandlerResult> {
-  if (!input) throw new Error("startParam is required for action:'start'");
+  if (!input) throw new Error(
+    "action:'start' requires task and slug (top-level fields). " +
+    'Correct: {"action":"start","task":"<your task>","slug":"<kebab-case>"}',
+  );
   // task 必填 + 空白校验（G-008）
   const task = input.task?.trim();
-  if (!task) throw new Error("startParam.task is required (and must not be whitespace-only)");
+  if (!task) throw new Error(
+    "task is required for action:'start' (top-level field, must not be whitespace-only). " +
+    'Correct: {"action":"start","task":"...","slug":"..."}',
+  );
   // slug 必填 + 空白校验 + 长度校验（≤ SLUG_MAX_LENGTH 字符）
   const slug = input.slug?.trim();
-  if (!slug) throw new Error("startParam.slug is required (and must not be whitespace-only)");
-  if (slug.length > SLUG_MAX_LENGTH) throw new Error(`startParam.slug must be ≤${SLUG_MAX_LENGTH} chars (got ${slug.length}). Shorten to a kebab-case label, e.g. "fix-login", "extract-urls".`);
+  if (!slug) throw new Error(
+    "slug is required for action:'start' (top-level field, must not be whitespace-only). " +
+    'Correct: {"action":"start","task":"...","slug":"<kebab-case>"}',
+  );
+  if (slug.length > SLUG_MAX_LENGTH) throw new Error(`slug must be ≤${SLUG_MAX_LENGTH} chars (got ${slug.length}). Shorten to a kebab-case label, e.g. "fix-login", "extract-urls".`);
 
   const handle = await service.execute({
     task,

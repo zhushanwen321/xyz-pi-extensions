@@ -1,7 +1,7 @@
 // src/core/model-resolver.ts
 //
 // 模型解析（三层）：
-//   1. 用户显式 override（tool 参数 startParam.model）→ registry lookup + auth
+//   1. 用户显式 override（tool 参数 model，平铺在 subagent params 顶层）→ registry lookup + auth
 //   2. agent .md frontmatter model（agent 作者指定）→ registry lookup + auth
 //   3. 主 agent 当前模型（ctx.model）→ 直接透传，无需 lookup
 //

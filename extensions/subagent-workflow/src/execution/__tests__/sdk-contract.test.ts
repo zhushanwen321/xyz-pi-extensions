@@ -181,7 +181,7 @@ describe("subagent tool contract [MANDATORY]", () => {
 
     await capturedExecute!(
       "call-1",
-      { action: "start", startParam: { task: "test task", slug: "test-slug" } },
+      { action: "start", task: "test task", slug: "test-slug" },
       undefined,
       undefined,
       ctx,
@@ -194,11 +194,11 @@ describe("subagent tool contract [MANDATORY]", () => {
   });
 
   // [MF#5] fork/worktree/cwd 参数传递链路契约（acceptance #8）：
-  // tool execute → startHandler(service, startParam) → service.execute({fork, worktree, cwd, ...})。
+  // tool execute → startHandler(service, params) → service.execute({fork, worktree, cwd, ...})。
   // 回归保护：subagent-actions.ts startHandler L152-166 把 input.fork/worktree/cwd 透传给
   // service.execute。若任一字段在 handler 内漏传（如重构改名/删行），子 agent 静默丢失隔离模式。
-  // 此测试锁住「startParam.fork/worktree/cwd → service.execute 同名参数」端到端透传。
-  it("execute plumbs startParam.fork/worktree/cwd to service.execute (chain contract)", async () => {
+  // 此测试锁住「顶层 fork/worktree/cwd → service.execute 同名参数」端到端透传（拍平后无 startParam envelope）。
+  it("execute plumbs top-level fork/worktree/cwd to service.execute (chain contract)", async () => {
     let capturedExecute: ((...args: never[]) => Promise<unknown>) | undefined;
     const pi = mockExtensionApi({
       registerTool: (tool: unknown) => {
@@ -220,13 +220,11 @@ describe("subagent tool contract [MANDATORY]", () => {
       "call-fork-wt",
       {
         action: "start",
-        startParam: {
-          task: "isolated work",
-          slug: "iso-work",
-          fork: true,
-          worktree: true,
-          cwd: "/x",
-        },
+        task: "isolated work",
+        slug: "iso-work",
+        fork: true,
+        worktree: true,
+        cwd: "/x",
       },
       undefined,
       undefined,
