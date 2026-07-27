@@ -1,5 +1,32 @@
 # @zhushanwen/pi-subagent-workflow
 
+## 0.4.0
+
+### Minor Changes
+
+- a090b61: > **版本口径**：本包处于 0.x 阶段。按 SemVer §6「0.x 可能在任何次版本引入破坏性变更」，minor bump 允许含 breaking。下方标注的 **Breaking** 是改动性质说明，不对应 major bump。
+
+  重构 subagent-workflow tool 面，提升弱模型调用正确率：
+
+  **Breaking** — `workflow` tool 删除 `retry-node` / `skip-node` 两个 action（7 → 5 action：run/status/pause/resume/abort）。这两个 action 语义尴尬（retry-node 重跑失败节点但不改脚本输出；skip-node 注入零 usage 占位结果），删除后 `node-ops.ts` 整文件移除。共享基础设施 `executeAgentCall` / `postBudgetUpdate` 仍由主路径使用，无死代码。`callId` schema 字段随之移除。
+
+  **Feat** — subagent ID 从纯 UUID 改为 `sa-<uuid>` 前缀格式，与 workflow runId 的 `wf-` 前缀风格统一。前缀是视觉辅助（所有消费方零格式校验，不进入程序逻辑判别），帮助 LLM/人眼通过 ID 区分 subagent 与 workflow。`shortId` 显示层加 `sa-` 感知分支保持信息量。向后兼容：旧纯 UUID ID 可正常反序列化。
+
+  **Refactor** — `subagent` tool 的 `startParam` 13 字段（task/slug/agent/model/thinkingLevel/skillPath/appendSystemPrompt/schema/maxTurns/graceTurns/fork/worktree/cwd）从嵌套 envelope 拍平到顶层 schema。解决 flat JSON Schema 无法表达条件必填导致弱模型（GLM/DeepSeek）把 task/slug 平铺到顶层的痛点。删除 `hasFlattenedStartFields` runtime guard（拍平后语义反转）+ `hasStartParam` helper。`listParam` / `cancelParam` 保留嵌套（字段少，保留隔离）。`description` TDD 重写（432 词），正例改平铺。service 层契约（`ExecuteOptions`）不变，改动收敛在 tool 层。
+
+  不新增统一管理 tool（保持 3 tool：subagent / workflow / workflow-script）。
+
+### Patch Changes
+
+- b5f53fd: 修正内置 agent 模板的 `tools:` 字段与 body 描述：
+
+  - `researcher`：tools 由 `read` 改为 `read, bash`（tavily-web-search 是 CLI 类型 skill，必须 bash 执行）。body 重写 skill 调用方式——Pi 没有 `Skill` 工具，skill 通过 `<available_skills>` 注入，LLM 用 `read` 读 SKILL.md 再用 `bash` 跑命令。同时 body 收窄了 read-only 范围（仅禁止改源文件，不禁止跑 tavily CLI）。
+  - `explorer`：tools 增 `find, ls`（结构化文件/目录查询工具，优于 shell `find`/`ls`）。body free-to-run 列表移除 `find`/`grep`/`ls` 字眼（避免与 Pi 工具语义混淆），新增工具优先级提示。
+  - `orchestrator`：tools 增 `ask_user`（扩展工具，由 `@zhushanwen/pi-ask-user` 提供）。body 提示该工具在未装 ask-user 扩展的 pi 环境中静默兼容（Pi 端 `_rebuildSystemPrompt` 静默过滤未注册工具，subagent-workflow 不做特殊处理，纯透传 `--tools` 参数）。新增「遇到需求歧义时反问用户」指引。
+  - 测试断言补齐：原 `arrayContaining(["worker", ...7 个])` 改为全部 9 个 agent 精确断言 + 每个 agent 的 `tools` 字段精确匹配 frontmatter（`worker`/`general-purpose` 为 `undefined`、其余为具体数组）。未来改 frontmatter 会立即报错。
+
+  未变更：`worker` / `general-purpose` 模板保持工具全开 + prompt 软约束（按用户要求不增加 Tool scope 风险标注）。
+
 ## 0.3.3
 
 ### Patch Changes
