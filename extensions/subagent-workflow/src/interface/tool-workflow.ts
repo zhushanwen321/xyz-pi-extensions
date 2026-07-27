@@ -210,7 +210,7 @@ export function buildWorkflowGui(details: WorkflowToolDetails) {
 // ── Tool registration ────────────────────────────────────────
 
 /**
- * 注册 workflow tool（7 actions）。
+ * 注册 workflow tool（5 actions: run / status / pause / resume / abort）。
  *
  * @param pi ExtensionAPI
  * @param deps LauncherDeps（LifecycleDeps + registry）

@@ -69,24 +69,29 @@ function makeService(over: Partial<SubagentService> = {}): SubagentService {
 // startHandler
 // ============================================================
 describe("startHandler", () => {
-  it("缺 input → throw", async () => {
+  it("缺 input → throw + Correct 正例", async () => {
     const svc = makeService();
     await expect(startHandler(svc, undefined, undefined)).rejects.toThrow(/task and slug/);
+    // Correct 正例存在（让弱模型撞错后能直接照抄平铺形态）
+    await expect(startHandler(svc, undefined, undefined)).rejects.toThrow(/Correct: \{"action":"start"/);
   });
 
-  it("task 空白 → throw", async () => {
+  it("task 空白 → throw + Correct 正例", async () => {
     const svc = makeService();
     await expect(startHandler(svc, { task: "   ", slug: "x" }, undefined)).rejects.toThrow(/task is required/);
+    await expect(startHandler(svc, { task: "   ", slug: "x" }, undefined)).rejects.toThrow(/Correct: \{"action":"start"/);
   });
 
-  it("slug 缺失 → throw", async () => {
+  it("slug 缺失 → throw + Correct 正例", async () => {
     const svc = makeService();
     await expect(startHandler(svc, { task: "ok" }, undefined)).rejects.toThrow(/slug is required/);
+    await expect(startHandler(svc, { task: "ok" }, undefined)).rejects.toThrow(/Correct: \{"action":"start"/);
   });
 
-  it("slug 空白 → throw", async () => {
+  it("slug 空白 → throw + Correct 正例", async () => {
     const svc = makeService();
     await expect(startHandler(svc, { task: "ok", slug: "   " }, undefined)).rejects.toThrow(/slug is required/);
+    await expect(startHandler(svc, { task: "ok", slug: "   " }, undefined)).rejects.toThrow(/Correct: \{"action":"start"/);
   });
 
   it("slug 超 35 字符 → throw", async () => {

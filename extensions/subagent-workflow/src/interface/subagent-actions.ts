@@ -139,13 +139,22 @@ export async function startHandler(
   signal: AbortSignal | undefined,
   ctxModel?: ModelInfo,
 ): Promise<StartHandlerResult> {
-  if (!input) throw new Error("action:'start' requires task and slug (top-level fields)");
+  if (!input) throw new Error(
+    "action:'start' requires task and slug (top-level fields). " +
+    'Correct: {"action":"start","task":"<your task>","slug":"<kebab-case>"}',
+  );
   // task 必填 + 空白校验（G-008）
   const task = input.task?.trim();
-  if (!task) throw new Error("task is required for action:'start' (top-level field, must not be whitespace-only)");
+  if (!task) throw new Error(
+    "task is required for action:'start' (top-level field, must not be whitespace-only). " +
+    'Correct: {"action":"start","task":"...","slug":"..."}',
+  );
   // slug 必填 + 空白校验 + 长度校验（≤ SLUG_MAX_LENGTH 字符）
   const slug = input.slug?.trim();
-  if (!slug) throw new Error("slug is required for action:'start' (top-level field, must not be whitespace-only)");
+  if (!slug) throw new Error(
+    "slug is required for action:'start' (top-level field, must not be whitespace-only). " +
+    'Correct: {"action":"start","task":"...","slug":"<kebab-case>"}',
+  );
   if (slug.length > SLUG_MAX_LENGTH) throw new Error(`slug must be ≤${SLUG_MAX_LENGTH} chars (got ${slug.length}). Shorten to a kebab-case label, e.g. "fix-login", "extract-urls".`);
 
   const handle = await service.execute({

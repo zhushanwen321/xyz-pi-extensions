@@ -313,7 +313,9 @@ describe("shortId", () => {
   });
 
   it("strips timestamp from background id (bg-tag-seq-<ts> → bg-tag-seq)", () => {
-    // 真实格式：bg-${6位hex tag}-${seq}-${Date.now()}（subagent-service.ts:422）
+    // 算法回归：多段 id 取前 3 段（SHORT_ID_BG_SEGMENTS）。
+    // 注意：当前 subagent ID 已改为 sa-<uuid>（见下面 sa- 用例），workflow ID 为 wf-<ts>-<rand>，
+    // 实际不再产生 bg- 形态 id；此处保留作为 shortId 算法的多段降级回归（4 段 → 3 段）。
     expect(shortId("bg-f6f731-10-1719500000000")).toBe("bg-f6f731-10");
     expect(shortId("bg-abc123-99-1719500123456")).toBe("bg-abc123-99");
   });

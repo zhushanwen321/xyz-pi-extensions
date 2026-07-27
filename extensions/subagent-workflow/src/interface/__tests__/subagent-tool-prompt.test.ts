@@ -92,6 +92,39 @@ describe("subagent tool description — 行为约束器（非功能说明书）"
     expect(DESCRIPTION).toContain('"action":"start","task"');
     expect(DESCRIPTION).not.toContain('"startParam"');
   });
+
+  it("cancel 示例 subagentId 用 sa- 连字符前缀（与 subagent-service.ts 实际生成格式一致）", () => {
+    // subagent-service.ts:600 生成 `sa-${crypto.randomUUID()}`（连字符）。
+    // description 示例必须与实际生成格式一致——弱模型会照抄示例，前缀错（如 sa_ 下划线）
+    // 会导致 subagentId 永远匹配不到真实 record。
+    expect(DESCRIPTION).toContain('"subagentId":"sa-');
+    expect(DESCRIPTION).not.toContain('"sa_');
+  });
+
+  it("agent 枚举（schema 字段 description）包含全部 9 个内置 agent（含 orchestrator，防漏）", () => {
+    // 包内有 9 个 agent .md（含 orchestrator）。schema 的 agent 字段 description 必须全部列出，
+    // 否则 LLM 无法选中未列出的 agent（功能回归）。cr-fix 防回归锁定。
+    // 注意：agent 列表在 schema field description 里，不在主 description: 模板字符串里——
+    // 断言源码全文（含 schema field description）而非 DESCRIPTION。
+    const expected = [
+      "general-purpose", "worker", "researcher", "explorer",
+      "planner", "reviewer", "oracle", "context-builder", "orchestrator",
+    ];
+    for (const name of expected) {
+      expect(SUBAGENT_TOOL_SRC).toContain(name);
+    }
+  });
+
+  it("Anti-patterns 段明确 list/cancel 仍 nested（防过度泛化 flatten）", () => {
+    // PR 只拍平 start，listParam/cancelParam 仍 nested。description 必须明确这一不对称性，
+    // 否则弱模型学了「subagent tool 现在平铺」会过度泛化发 {"action":"list","includeFinished":true}。
+    const apIdx = DESCRIPTION.indexOf("## Anti-patterns");
+    expect(apIdx).toBeGreaterThan(-1);
+    const afterAp = DESCRIPTION.slice(apIdx);
+    const nextSection = afterAp.indexOf("##", "## Anti-patterns".length);
+    const apSection = nextSection > -1 ? afterAp.slice(0, nextSection) : afterAp;
+    expect(apSection).toMatch(/list.*nested.*listParam|listParam.*nested/i);
+  });
 });
 
 describe("subagent tool runtime handler — 错误文案含纠正正例", () => {
@@ -99,7 +132,18 @@ describe("subagent tool runtime handler — 错误文案含纠正正例", () => 
   // 让弱模型撞错后第二次能直接照抄正确形态。
   // 拍平后：startParam envelope 删除，平铺 task/slug 是合法形态；
   // 平铺检测 guard（hasFlattenedStartFields）已删除，源码不应再含此表达式。
-  it("subagent-actions.ts startHandler 含 Correct 纠正正例 + 平铺检测 guard 已从 subagent-tool.ts 删除", () => {
+  it("subagent-actions.ts startHandler throw 含 Correct 纠正正例（平铺形态）", () => {
+    const actionsSrc = readFileSync(
+      join(__dirname, "../subagent-actions.ts"),
+      "utf-8",
+    );
+    // 三处 throw（input 缺失 / task 空白 / slug 空白）都应含 Correct 正例。
+    // 用 occurrences 计数——至少 3 处。
+    const occurrences = (actionsSrc.match(/Correct: \{"action":"start"/g) ?? []).length;
+    expect(occurrences).toBeGreaterThanOrEqual(3);
+  });
+
+  it("平铺检测 guard（hasFlattenedStartFields）已从 subagent-tool.ts 删除", () => {
     expect(SUBAGENT_TOOL_SRC).not.toContain('params.action === "start" && !params.startParam');
     expect(SUBAGENT_TOOL_SRC).not.toContain("hasFlattenedStartFields");
   });

@@ -114,7 +114,7 @@ const SubagentParams = Type.Object({
     maxLength: SLUG_MAX_LENGTH,
   })),
   agent: Type.Optional(Type.String({
-    description: 'Agent name (system prompt + tools). If omitted, defaults to "general-purpose" — a generic agent that inherits the main agent\'s model and project context. Available: general-purpose (default fallback), worker, researcher, explorer, planner, reviewer, oracle, context-builder. Custom agents configurable.',
+    description: 'Agent name (system prompt + tools). If omitted, defaults to "general-purpose" — a generic agent that inherits the main agent\'s model and project context. Available: general-purpose (default fallback), worker, researcher, explorer, planner, reviewer, oracle, context-builder, orchestrator. Custom agents configurable.',
   })),
   model: Type.Optional(Type.String({
     description: 'Model override in "provider/modelId" format. Resolution order (top wins): (1) this param, (2) agent .md frontmatter model, (3) the main agent\'s current model (zero-config default). An explicit model (param or frontmatter) that is missing or unauthorized THROWS — there is no silent fallback to the main model. Omit this param to inherit the main model.',
@@ -210,7 +210,7 @@ Delegate when the task needs a distinct role (researcher/worker), context isolat
 {"action":"start","task":"<your task>","slug":"<kebab-case>"}
 {"action":"start","task":"...","slug":"fix-login","agent":"worker","model":"anthropic/claude-3.5-sonnet","fork":true}
 {"action":"list","listParam":{"includeFinished":false,"limit":20}}
-{"action":"cancel","cancelParam":{"subagentId":"sa_abc123"}}
+{"action":"cancel","cancelParam":{"subagentId":"sa-550e8400"}}
 \`\`\`
 
 ## After launching — do NOT wait
@@ -224,6 +224,7 @@ Completion auto-notifies you (steer wakes next turn, even mid-poll). So:
 ## Anti-patterns
 
 - Forgetting the REQUIRED top-level task/slug fields for action:"start" — both must be present at the top level (not nested).
+- Over-generalizing the flatten: ONLY start fields are top-level. list and cancel params stay nested under listParam / cancelParam (e.g. {"action":"list","listParam":{"includeFinished":true}}, NOT {"action":"list","includeFinished":true}).
 - Launching background, then sleeping/polling instead of working or stopping.
 - Treating subagent results as authoritative without verification.
 - Delegating trivial tasks you could do faster yourself.
