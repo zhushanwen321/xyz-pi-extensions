@@ -317,4 +317,16 @@ describe("shortId", () => {
     expect(shortId("bg-f6f731-10-1719500000000")).toBe("bg-f6f731-10");
     expect(shortId("bg-abc123-99-1719500123456")).toBe("bg-abc123-99");
   });
+
+  it("handles pure uuid and wf- runId (regression baseline)", () => {
+    // 纯 UUID 回归（5段 → 取前3段）
+    expect(shortId("550e8400-e29b-41d4-a716-446655440000")).toBe("550e8400-e29b-41d4");
+    // wf- 前缀 runId 回归（3段 → 取前3段=原样）
+    expect(shortId("wf-1719500000000-a1b2c3")).toBe("wf-1719500000000-a1b2c3");
+  });
+
+  it("keeps sa- prefix for subagent id (sa-<uuid> → sa-<uuid 前3段>)", () => {
+    // sa- 前缀 subagent ID（保留前缀 + UUID 前 3 段）
+    expect(shortId("sa-550e8400-e29b-41d4-a716-446655440000")).toBe("sa-550e8400-e29b-41d4");
+  });
 });
