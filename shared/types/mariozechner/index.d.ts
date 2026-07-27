@@ -331,6 +331,21 @@ declare module "@mariozechner/pi-ai" {
 	export function StringEnum<T extends readonly string[]>(values: T, options?: Record<string, unknown>): T[number];
 	export type Message = any;
 	export type AssistantMessage = any;
+	// Types consumed by permission/classifier (loose stubs; real types verified by
+	// package-level tsc which resolves to the real Pi SDK via tsconfig paths).
+	export type Api = string;
+	export type AssistantMessageEventStream = { result(): Promise<any> };
+	export interface Context {
+		systemPrompt?: string;
+		messages: any[];
+		[key: string]: any;
+	}
+	export type Model<TApi extends Api = Api> = any;
+	export interface SimpleStreamOptions {
+		timeoutMs?: number;
+		signal?: AbortSignal;
+		[key: string]: any;
+	}
 }
 
 declare module "@earendil-works/pi-coding-agent" {
