@@ -27,7 +27,10 @@
     "test": "vitest run",
     "test:watch": "vitest"
   },
-  "dependencies": {},
+  "dependencies": {
+    "tree-sitter-bash": "^0.25.1",
+    "web-tree-sitter": "^0.26.11"
+  },
   "peerDependencies": {
     "@earendil-works/pi-ai": "*",
     "@mariozechner/pi-coding-agent": "*"
