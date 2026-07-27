@@ -6,8 +6,8 @@ import * as path from "node:path";
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import { MAX_FORK_DEPTH } from "../session-context-resolver.ts";
 import { mirrorMainProcessFlags } from "../argv-mirror.ts";
+import { MAX_FORK_DEPTH } from "../session-context-resolver.ts";
 import { buildEnvBlock, buildSpawnArgs } from "../session-runner.ts";
 
 describe("buildSpawnArgs", () => {
@@ -131,6 +131,23 @@ describe("buildSpawnArgs", () => {
       { ...baseParams, agentTools: [] },
     );
     expect(args).not.toContain("--tools");
+  });
+
+  it("含未注册扩展工具名（如 ask_user）正常透传 — 子进程 Pi 静默忽略未注册的 allowlist 项", () => {
+    // 场景：orchestrator 模板声明了 ask_user，但用户环境未装 pi-ask-user 扩展。
+    // 期望：subagent-workflow 不做特殊处理，仅原样透传给 pi CLI；
+    // 静默兼容的责任在 Pi（args.ts 不校验、agent-session 的 _rebuildSystemPrompt
+    // 对未注册工具名静默过滤）。本测试钉死这个透传行为，避免有人擅自加
+    // 「未注册工具检测」导致原本兼容的场景崩溃。
+    const args = buildSpawnArgs({
+      ...baseParams,
+      agentTools: ["todo", "goal_control", "workflow", "subagent", "ask_user"],
+    });
+    const idx = args.indexOf("--tools");
+    expect(idx).toBeGreaterThanOrEqual(0);
+    expect(args[idx + 1]).toBe(
+      "todo,goal_control,workflow,subagent,ask_user",
+    );
   });
 
   // ============================================================
