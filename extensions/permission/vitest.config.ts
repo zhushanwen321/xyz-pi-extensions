@@ -5,10 +5,6 @@ export default defineConfig({
 		include: ["src/__tests__/**/*.test.ts"],
 	},
 	resolve: {
-		alias: {
-			// 本地 src 直接解析
-			find: /^\.\/(.+)\.js$/,
-			replace: "./$1.ts",
-		},
+		// Vite 自身能解析 .js → .ts，不需要 alias（相对 import ../types.js 直接解析到 ../types.ts）
 	},
 });

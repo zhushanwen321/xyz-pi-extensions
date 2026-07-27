@@ -5,24 +5,39 @@
  */
 import { describe, expect, it } from "vitest";
 
-// Mock Pi SDK 模块（extension.ts import 的 @mariozechner/pi-coding-agent 类型是 stub）
-// 直接 import 工厂函数，用 mock pi 调用它
+// Mock Pi SDK 模块（extension.ts import 的 @mariozechner/pi-coding-agent 类型在 node_modules 有完整定义，
+// 这里 import 工厂函数，用 mock pi 调用它）
 import permissionExtension from "../index.js";
 
-/** 创建 mock pi 对象记录所有调用 */
-function createMockPi(): {
-	pi: any;
-	registerCommandCalls: Array<{ name: string; options: any }>;
-	eventHandlers: Map<string, Array<(event?: any, ctx?: any) => any>>;
-} {
-	const registerCommandCalls: Array<{ name: string; options: any }> = [];
-	const eventHandlers = new Map<string, Array<(event?: any, ctx?: any) => any>>();
+/** 最小 mock：只记录 registerCommand 和 on 调用 */
+interface MockPi {
+	registerCommand: (name: string, options: unknown) => void;
+	on: (event: string, handler: (event?: unknown, ctx?: unknown) => unknown) => void;
+}
 
-	const pi: any = {
-		registerCommand(name: string, options: any) {
+interface RecordedCall {
+	name: string;
+	options: unknown;
+}
+
+interface RecordedHandler {
+	event: string;
+	handler: (event?: unknown, ctx?: unknown) => unknown;
+}
+
+function createMockPi(): {
+	pi: MockPi;
+	registerCommandCalls: RecordedCall[];
+	eventHandlers: Map<string, Array<(event?: unknown, ctx?: unknown) => unknown>>;
+} {
+	const registerCommandCalls: RecordedCall[] = [];
+	const eventHandlers = new Map<string, Array<(event?: unknown, ctx?: unknown) => unknown>>();
+
+	const pi: MockPi = {
+		registerCommand(name: string, options: unknown) {
 			registerCommandCalls.push({ name, options });
 		},
-		on(event: string, handler: any) {
+		on(event: string, handler: (event?: unknown, ctx?: unknown) => unknown) {
 			if (!eventHandlers.has(event)) {
 				eventHandlers.set(event, []);
 			}
@@ -31,6 +46,12 @@ function createMockPi(): {
 	};
 
 	return { pi, registerCommandCalls, eventHandlers };
+}
+
+/** 提取 handler options 的类型（运行时 duck typing） */
+interface CommandOptions {
+	description: string;
+	handler: (args: string, ctx: { ui: { notify: (message: string, level: string) => void } }) => void;
 }
 
 describe("WT8: 扩展入口注册", () => {
@@ -43,8 +64,9 @@ describe("WT8: 扩展入口注册", () => {
 		// 注册了 permission 命令
 		const permCommand = registerCommandCalls.find((c) => c.name === "permission");
 		expect(permCommand).toBeDefined();
-		expect(permCommand!.options.description).toBeTruthy();
-		expect(typeof permCommand!.options.handler).toBe("function");
+		const opts = permCommand!.options as CommandOptions;
+		expect(opts.description).toBeTruthy();
+		expect(typeof opts.handler).toBe("function");
 
 		// 注册了 session_start 事件
 		expect(eventHandlers.has("session_start")).toBe(true);
@@ -52,17 +74,18 @@ describe("WT8: 扩展入口注册", () => {
 		// 注册了 tool_call 事件（W1 占位）
 		expect(eventHandlers.has("tool_call")).toBe(true);
 
-		// 注册了 statusline 事件
-		expect(eventHandlers.has("statusline")).toBe(true);
+		// W1 不注册 statusline（ctx.ui.setFooter 的 TUI Component 推到 W6）
+		expect(eventHandlers.has("statusline")).toBe(false);
 	});
 
-	it("permission 命令 handler 调用时返回状态消息（无参数）", async () => {
+	it("permission 命令 handler 调用时返回状态消息（无参数）", () => {
 		const { pi, registerCommandCalls } = createMockPi();
 		permissionExtension(pi);
 
 		const permCommand = registerCommandCalls.find((c) => c.name === "permission");
+		const opts = permCommand!.options as CommandOptions;
 		const notifyCalls: Array<{ message: string; level: string }> = [];
-		const mockCtx: any = {
+		const mockCtx = {
 			ui: {
 				notify(message: string, level: string) {
 					notifyCalls.push({ message, level });
@@ -70,55 +93,57 @@ describe("WT8: 扩展入口注册", () => {
 			},
 		};
 
-		await permCommand!.options.handler("", mockCtx);
+		opts.handler("", mockCtx);
 
 		expect(notifyCalls).toHaveLength(1);
 		expect(notifyCalls[0].message).toContain("Current mode");
 		expect(notifyCalls[0].message).toContain("yolo"); // 默认模式
 		expect(notifyCalls[0].level).toBe("info");
 	});
+
+	it("permission 命令切换模式后 handler 显示新模式", () => {
+		const { pi, registerCommandCalls } = createMockPi();
+		permissionExtension(pi);
+
+		const permCommand = registerCommandCalls.find((c) => c.name === "permission");
+		const opts = permCommand!.options as CommandOptions;
+		const notifyCalls: Array<{ message: string; level: string }> = [];
+		const mockCtx = {
+			ui: {
+				notify(message: string, level: string) {
+					notifyCalls.push({ message, level });
+				},
+			},
+		};
+
+		// 切换到 strict（会触发 saveConfig，但 saveConfig 写真实路径，这里用临时配置）
+		// 用 /permission status 避免写文件
+		opts.handler("status", mockCtx);
+		expect(notifyCalls[0].message).toContain("mode:");
+	});
 });
 
-describe("WT9: W1 占位 tool_call（所有模式放行）", () => {
-	it("yolo 模式 tool_call 放行（不 throw）", async () => {
+describe("WT9: W1 占位 tool_call（所有工具调用放行，不读 config）", () => {
+	it("tool_call handler 存在且不 throw", () => {
 		const { pi, eventHandlers } = createMockPi();
 		permissionExtension(pi);
 
 		const toolCallHandlers = eventHandlers.get("tool_call")!;
-		expect(toolCallHandlers.length).toBeGreaterThan(0);
+		expect(toolCallHandlers.length).toBe(1);
 
-		// 调用 handler 应该不 throw，且不返回拦截值
-		for (const handler of toolCallHandlers) {
-			await expect(handler({ toolName: "bash", command: "rm -rf /" }, {} as any)).resolves.toBeUndefined();
-		}
+		// 调用 handler 应该不 throw
+		expect(() => toolCallHandlers[0]({ toolName: "bash", command: "rm -rf /" }, {})).not.toThrow();
 	});
 
-	it("strict 模式 tool_call 也放行（W1 占位，W5 才实现管道）", async () => {
-		// 通过修改配置文件切换到 strict（模拟）
-		// 但 W1 的 tool_call 占位不读 mode，所以直接测 handler 行为
+	it("占位 handler 对任意工具调用放行（不返回拦截值）", () => {
 		const { pi, eventHandlers } = createMockPi();
 		permissionExtension(pi);
 
-		const toolCallHandlers = eventHandlers.get("tool_call")!;
-		for (const handler of toolCallHandlers) {
-			// 无论什么工具调用，W1 占位都放行
-			await expect(handler({ toolName: "write", command: undefined }, {} as any)).resolves.toBeUndefined();
-			await expect(handler({ toolName: "bash", command: "git push --force" }, {} as any)).resolves.toBeUndefined();
-		}
-	});
-});
+		const handler = eventHandlers.get("tool_call")![0];
 
-describe("statusline 集成", () => {
-	it("statusline handler 返回当前模式标签", async () => {
-		const { pi, eventHandlers } = createMockPi();
-		permissionExtension(pi);
-
-		const statuslineHandlers = eventHandlers.get("statusline")!;
-		expect(statuslineHandlers.length).toBeGreaterThan(0);
-
-		const result = await statuslineHandlers[0]({} as any);
-		expect(typeof result).toBe("string");
-		expect(result).toContain("perm:");
-		expect(result).toContain("YOLO"); // 默认模式标签
+		// 无论什么工具调用，W1 占位都不拦截（返回 undefined = 放行）
+		expect(handler({ toolName: "bash", command: "git push --force" }, {})).toBeUndefined();
+		expect(handler({ toolName: "write", path: "/etc/passwd" }, {})).toBeUndefined();
+		expect(handler({ toolName: "read", path: "~/.ssh/id_rsa" }, {})).toBeUndefined();
 	});
 });

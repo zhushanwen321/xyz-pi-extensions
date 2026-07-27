@@ -37,7 +37,18 @@ export function getConfigPath(): string {
 
 interface CacheEntry {
 	mtimeMs: number;
+	size: number;
 	config: PermissionConfig;
+}
+
+/** 深拷贝 config（防止调用方修改污染缓存） */
+function cloneConfig(config: PermissionConfig): PermissionConfig {
+	return {
+		mode: config.mode,
+		enabled: config.enabled,
+		classifier: { ...config.classifier },
+		userRules: config.userRules.map((r) => ({ ...r })),
+	};
 }
 
 /** 模块级缓存：path → {mtimeMs, config}。单进程多 session 共享读缓存是安全的（配置只读） */
@@ -127,27 +138,28 @@ export function loadAndWatchConfig(
 	} catch {
 		// 文件不可 stat（权限问题/被删除）→ 用缓存或默认
 		const cached = configCache.get(configPath);
-		return cached ? cached.config : { ...DEFAULT_CONFIG };
+		return cached ? cloneConfig(cached.config) : cloneConfig(DEFAULT_CONFIG);
 	}
 
 	const cached = configCache.get(configPath);
-	if (cached && cached.mtimeMs === stat.mtimeMs) {
-		return cached.config;
+	// mtime + size 双 key：防止 APFS 等文件系统 mtime 精度截断导致快速连续保存后缓存失效
+	if (cached && cached.mtimeMs === stat.mtimeMs && cached.size === stat.size) {
+		return cloneConfig(cached.config);
 	}
 
 	try {
 		const raw = readFileSync(configPath, "utf-8");
 		const parsed: unknown = JSON.parse(raw);
 		const config = normalizeConfig(parsed);
-		configCache.set(configPath, { mtimeMs: stat.mtimeMs, config });
-		return config;
+		configCache.set(configPath, { mtimeMs: stat.mtimeMs, size: stat.size, config });
+		return cloneConfig(config);
 	} catch (error) {
 		const message = error instanceof Error ? error.message : String(error);
 		onWarning?.(`[pi-permission] Config parse failed at '${configPath}', using default: ${message}`);
 		const fallback = { ...DEFAULT_CONFIG, classifier: { ...DEFAULT_CLASSIFIER_CONFIG } };
-		// 解析失败也更新缓存 mtime，避免每次都重读损坏文件
-		configCache.set(configPath, { mtimeMs: stat.mtimeMs, config: fallback });
-		return fallback;
+		// 解析失败也更新缓存 mtime+size，避免每次都重读损坏文件
+		configCache.set(configPath, { mtimeMs: stat.mtimeMs, size: stat.size, config: fallback });
+		return cloneConfig(fallback);
 	}
 }
 
@@ -162,28 +174,31 @@ export function saveConfig(
 	config: PermissionConfig,
 	configPath: string = getConfigPath(),
 ): { success: boolean; error?: string } {
-	const normalized = normalizeConfig(config);
+	// 信任调用方传入的已类型化对象，不重新 normalize（避免 normalizeRule 重分配 fallback id 覆盖用户意图）
 	const tmpPath = `${configPath}.tmp`;
+	const content = `${JSON.stringify(config, null, 2)}\n`;
 
 	try {
 		mkdirSync(dirname(configPath), { recursive: true });
-		writeFileSync(tmpPath, `${JSON.stringify(normalized, null, 2)}\n`, { encoding: "utf-8", mode: 0o600 });
+		writeFileSync(tmpPath, content, { encoding: "utf-8", mode: 0o600 });
 		renameSync(tmpPath, configPath);
 
-		// 更新缓存（用新文件的 mtime）
+		// 更新缓存（用新文件的 mtime + size）
 		try {
 			const newStat = statSync(configPath);
-			configCache.set(configPath, { mtimeMs: newStat.mtimeMs, config: normalized });
-		} catch {
-			// stat 失败不影响保存成功，缓存下次 load 时会重读
+			configCache.set(configPath, { mtimeMs: newStat.mtimeMs, size: newStat.size, config: cloneConfig(config) });
+		} catch (statErr) {
+			// stat 失败不影响保存成功；缓存下次 load 时会重读。记录原因便于调试。
+			console.warn(`[pi-permission] saveConfig stat after write failed:`, statErr instanceof Error ? statErr.message : String(statErr));
 		}
 
 		return { success: true };
 	} catch (error) {
 		try {
 			if (existsSync(tmpPath)) unlinkSync(tmpPath);
-		} catch {
-			// 清理失败忽略
+		} catch (cleanupErr) {
+			// tmp 清理失败不能阻塞保存失败的返回；记录原因
+			console.warn(`[pi-permission] saveConfig tmp cleanup failed:`, cleanupErr instanceof Error ? cleanupErr.message : String(cleanupErr));
 		}
 		const message = error instanceof Error ? error.message : String(error);
 		return { success: false, error: `Failed to save config at '${configPath}': ${message}` };
@@ -191,6 +206,6 @@ export function saveConfig(
 }
 
 /** 测试/内部用：设置特定路径的缓存（绕过文件系统） */
-export function setConfigCache(configPath: string, config: PermissionConfig, mtimeMs: number): void {
-	configCache.set(configPath, { mtimeMs, config });
+export function setConfigCache(configPath: string, config: PermissionConfig, mtimeMs: number, size: number): void {
+	configCache.set(configPath, { mtimeMs, size, config });
 }

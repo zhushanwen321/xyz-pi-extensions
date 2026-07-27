@@ -90,7 +90,12 @@ function switchMode(
 		return `[pi-permission] Already in ${MODE_LABELS[mode]} mode.`;
 	}
 
-	const newConfig: PermissionConfig = { ...config, mode };
+	const newConfig: PermissionConfig = {
+		mode,
+		enabled: config.enabled,
+		classifier: { ...config.classifier },
+		userRules: config.userRules.map((r) => ({ ...r })),
+	};
 	const result = onSave(newConfig);
 
 	if (!result.success) {
