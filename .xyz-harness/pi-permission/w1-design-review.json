@@ -1,0 +1,48 @@
+{
+  "designReviewJudgment": {
+    "necessity": "W1 是扩展骨架，为 W2-W6 提供集成基础：types.ts 声明全部类型（后续 wave import）、config.ts 提供配置管理、index.ts 注册 Pi hook（session_start/tool_call/statusline）、commands.ts 提供 /permission 命令。没有 W1，W2-W4 的模块无法接入 Pi 运行时。W1 的占位 tool_call（所有模式放行）确保扩展安装后不影响现有工作流，W5 替换为真实管道。",
+    "sufficiency": {
+      "gaps": [
+        "statusline API 未在 plan 明确——Pi 的 statusline 集成方式（pi.on('statusline')? 或 ctx.setStatusline?）需 T5 实现时核实。参考 statusline 扩展的 src/index.ts。",
+        "Pi CommandDefinition 的精确结构（参数 schema、execute 返回值）需 T4 实现时对照 ask-user 扩展的命令注册方式确认。"
+      ],
+      "overlaps": [],
+      "meceNote": "7 个任务覆盖 W1 全部交付物：T1 包定义 + 入口、T2 类型、T3 配置、T4 命令、T5 扩展工厂、T6-T7 测试。任务依赖图：T1→T2→T3→T4→T5（串行依赖链），T6 依赖 T3，T7 依赖 T5。文件清单 10 个（6 源码 + 3 测试 + 1 vitest 配置）与任务覆盖一致。两个 gap 都是 API 细节，实现时查参考扩展即可，不影响 plan 结构。"
+    },
+    "alternatives": "考虑过：(1) W1 只做 package.json + 空入口，types/config/commands 放到各自 wave——不选，因为 types.ts 是所有 wave 的共享依赖，统一在 W1 声明避免碎片化；config.ts 是 W1 的 inheritedItemIds（I6）必须在 W1 实现。(2) W1 把 tool_call 占位做成完整的 mode 判断（yolo 放行，其他 deny）——不选，W1 阶段管道未实现，非 yolo 模式直接 deny 会阻塞用户，占位全部放行更安全（W5 替换）。",
+    "tradeoffs": [
+      {
+        "id": "WT1",
+        "decision": "types.ts 在 W1 统一声明所有类型（含 W2-W5 用的）",
+        "reason": "避免跨 wave 类型定义碎片化；W2-W5 import 同一来源",
+        "cost": "W1 的 types.ts 较大（~100 行），部分类型 W1 阶段不使用（如 BashAnalysis W2 才用）；后续 wave 若需改类型定义要改 W1 的文件"
+      },
+      {
+        "id": "WT2",
+        "decision": "W1 tool_call 占位全部放行（不按 mode 区分）",
+        "reason": "W1 阶段管道未实现，非 yolo 模式若 deny 会阻塞用户工作流；占位放行确保扩展安装无副作用",
+        "cost": "W1 阶段 /permission 切换到 strict 模式实际不生效（仍放行），用户可能困惑；需在模式切换 UI 提示 'pipeline not yet active in this version' 或日志说明"
+      }
+    ],
+    "risks": [
+      {
+        "id": "WR1",
+        "item": "Pi SDK API（ExtensionAPI/ExtensionContext/pi.on/pi.registerCommand/ctx.ui.custom）结构与假设不符",
+        "severity": "medium",
+        "mitigation": "T5 实现前先读 ask-user 扩展的 src/index.ts（最接近的命令 + UI 交互参考）和 pi-mono fork 的 coding-agent types.d.ts 确认 API 签名。如 ctx.ui.custom 不存在则退化为文本菜单。"
+      },
+      {
+        "id": "WR2",
+        "item": "config.json 文件路径在 Pi 不同环境（PI_CODING_AGENT_DIR / worktree / packaging）下定位错误",
+        "severity": "low",
+        "mitigation": "getConfigPath() 用 homedir() + '.pi/agent/' 基础路径，支持 PI_CODING_AGENT_DIR 覆盖（参考 pi-permission-system defaultPolicyAgentDir）。测试用临时目录验证，不依赖真实 ~/.pi 路径。"
+      }
+    ],
+    "layerSpecific": {
+      "testCaseCoverageNote": "9 个 testCase 覆盖 W1 全部交付：WT1-WT5/WT7 覆盖 config.ts（加载/解析/容错/mtime/保存），WT6 覆盖 types.ts 常量，WT8-WT9 覆盖 index.ts 入口注册和 tool_call 占位。commands.ts 的 /permission 命令 UI 交互（WT8 部分覆盖注册，但菜单交互需 manual 测试——ctx.ui.custom 难以单元测试）。",
+      "boundaryConditionNote": "边界覆盖：配置文件不存在（WT1）、malformed JSON（WT3）、mtime 相同/不同（WT4/WT5）、四种 mode（WT9 全放行）。未覆盖的边界：并发写同一配置文件（Pi 单 session 不太可能，不测）、配置文件权限错误（saveConfig 用 0o600，测试可加但非关键）。",
+      "mockStrategyNote": "config 测试用真实 fs + 临时目录（os.tmpdir + 随机子目录），不用 mock fs（更接近真实行为，参考 statusline 测试模式）。extension 测试用 mock pi 对象（{ registerCommand: jest.fn(), on: jest.fn() } 记录调用）。ctx.ui.custom 的 UI 交互不在 W1 单元测试范围（W6 集成测试或 manual）。",
+      "tddRedReadinessNote": "testCases 已明确 input/expected，可直接转 vitest 断言。T6/T7 实现时按 testCase id 组织测试（describe.each 或独立 it），确保每个 WT 有对应测试。Red 阶段：先写测试（fail），再实现使其 pass。但 W1 的部分测试（WT8/WT9 extension 集成）依赖 mock pi，需先搭 mock 框架。"
+    }
+  }
+}

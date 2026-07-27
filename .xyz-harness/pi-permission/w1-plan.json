@@ -1,0 +1,208 @@
+{
+  "testCases": [
+    {
+      "id": "WT1",
+      "name": "默认配置生成：首次无配置文件时创建默认配置",
+      "scenario": "~/.pi/agent/permission-config.json 不存在时，loadAndWatchConfig 应创建默认配置（mode=yolo, enabled=true, classifier 默认值）并返回",
+      "input": "模拟 homedir 下无 permission-config.json 的环境（测试用临时目录）",
+      "expected": "返回 PermissionConfig={mode:'yolo', enabled:true, classifier:{enabled:true,model:'auto',timeout:90,autoApproveLowRisk:true,autoDenyHighRisk:true}, userRules:[]}；文件被创建且内容为合法 JSON",
+      "type": "unit"
+    },
+    {
+      "id": "WT2",
+      "name": "配置解析：合法配置文件正确解析为 PermissionConfig",
+      "scenario": "permission-config.json 含完整配置（mode='auto', 自定义 classifier model, userRules 数组）",
+      "input": "临时目录下放合法 JSON 配置文件",
+      "expected": "返回的 PermissionConfig 各字段与文件一致；userRules 数组正确反序列化为 Rule[]",
+      "type": "unit"
+    },
+    {
+      "id": "WT3",
+      "name": "配置解析容错：malformed JSON fallback 到默认配置",
+      "scenario": "permission-config.json 内容是非法 JSON（如缺少引号、尾随逗号在 strict 模式）",
+      "input": "临时目录下放 malformed JSON 文件",
+      "expected": "不 throw；返回默认 PermissionConfig（mode=yolo）；可选地记录警告（通过回调或日志）",
+      "type": "unit"
+    },
+    {
+      "id": "WT4",
+      "name": "配置 mtime 缓存：文件未变化时不重读",
+      "scenario": "连续两次调用 loadAndWatchConfig，中间不修改文件",
+      "input": "同一文件路径调用两次",
+      "expected": "第二次返回缓存的同一对象引用（或深相等的对象）；可通过 mock fs.readFileSync 计数验证只读一次",
+      "type": "unit"
+    },
+    {
+      "id": "WT5",
+      "name": "配置 mtime 缓存：文件变化时重读",
+      "scenario": "第一次调用后修改文件 mtime（touch 或写入新内容），第二次调用应重读",
+      "input": "第一次调用 → 修改文件 → 第二次调用",
+      "expected": "第二次返回新内容（反映修改）；mock fs.readFileSync 计数验证读了两次",
+      "type": "unit"
+    },
+    {
+      "id": "WT6",
+      "name": "PermissionMode 枚举完整性",
+      "scenario": "验证 PERMISSION_MODES 常量包含全部四档且顺序正确",
+      "input": "导入 PERMISSION_MODES 和 MODE_DESCRIPTIONS",
+      "expected": "PERMISSION_MODES=['yolo','auto','approve','strict']；MODE_DESCRIPTIONS 四个 key 都有值；isValidPermissionMode(x) 对四档返回 true 对其他返回 false",
+      "type": "unit"
+    },
+    {
+      "id": "WT7",
+      "name": "保存配置：setConfig 写入文件并更新缓存",
+      "scenario": "调用 saveConfig(newConfig) 后，文件应更新且后续 loadAndWatchConfig 返回新配置",
+      "input": "临时目录 + 新的 PermissionConfig（mode='strict'）",
+      "expected": "文件被写入合法 JSON；loadAndWatchConfig 返回 mode='strict'；文件权限 0o600（仅用户可读写）",
+      "type": "unit"
+    },
+    {
+      "id": "WT8",
+      "name": "扩展入口注册：permissionExtension(pi) 注册命令和事件",
+      "scenario": "调用扩展工厂函数，验证 pi.registerCommand 和 pi.on 被正确调用",
+      "input": "mock pi 对象（记录 registerCommand/on 调用）",
+      "expected": "registerCommand 被调用一次，命令名 'permission'；pi.on 被调用注册 'session_start' 和 'tool_call' 事件处理器；不 throw",
+      "type": "integration"
+    },
+    {
+      "id": "WT9",
+      "name": "W1 占位 tool_call：所有模式放行",
+      "scenario": "W1 阶段 tool_call hook 是占位，无论什么模式都放行（W5 替换为管道）",
+      "input": "mock tool_call event（任意 toolName/command）+ 四种 mode 的 PermissionContext",
+      "expected": "四种 mode 下都返回允许（不阻塞）；可记录日志说明 'W1 placeholder, W5 will implement pipeline'",
+      "type": "integration"
+    }
+  ],
+  "tasks": [
+    {
+      "id": "T1",
+      "type": "impl",
+      "files": ["extensions/permission/package.json", "extensions/permission/index.ts"],
+      "steps": [
+        "创建 extensions/permission/package.json：name=@zhushanwen/pi-permission, version=0.1.0, type=module, main=src/index.ts, pi.extensions=['./index.ts'], keywords=['pi-package','permission','security'], license=MIT, files=['src/','index.ts'], peerDependencies 含 @earendil-works/pi-ai + @mariozechner/pi-coding-agent + @earendil-works/pi-tui, scripts 含 typecheck/test/test:watch, devDependencies 含 vitest",
+        "创建 extensions/permission/index.ts：单行 re-export 'export { default } from \"./src/index.ts\";'"
+      ]
+    },
+    {
+      "id": "T2",
+      "type": "impl",
+      "files": ["extensions/permission/src/types.ts"],
+      "steps": [
+        "定义 PermissionMode 类型（'yolo'|'auto'|'approve'|'strict'）+ PERMISSION_MODES 常量 + MODE_DESCRIPTIONS 记录 + isValidPermissionMode 守卫函数（对应 DM1）",
+        "定义 Rule 接口（id/tool/pattern/action/source/description?，对应 DM2）",
+        "定义 PermissionDecision 接口（action/reason/source/riskLevel?/matchedRule?/confidence?，对应 DM3）",
+        "定义 ClassifierConfig 接口（enabled/model/timeout/autoApproveLowRisk/autoDenyHighRisk，对应 DM4）",
+        "定义 PermissionConfig 接口（mode/enabled/classifier/userRules）+ DEFAULT_CONFIG 常量",
+        "定义 PermissionCheckInput/PermissionContext/BashAnalysis/RuleMatchResult/ClassifierResult/ToolInvocationContext 等后续 wave 用的类型（统一在 types.ts 声明，W2-W5 import）"
+      ]
+    },
+    {
+      "id": "T3",
+      "type": "impl",
+      "files": ["extensions/permission/src/config.ts"],
+      "steps": [
+        "实现 loadAndWatchConfig(configPath?): PermissionConfig（对应 I6）",
+        "首次调用时若文件不存在则创建默认配置（参考 pi-permission-system extension-config.ts ensurePermissionSystemConfig 模式）",
+        "用 mtime 戳缓存（模块级 Map<path, {mtime, config}>），文件未变化返回缓存",
+        "JSON 解析用 try/catch，失败 fallback 到 DEFAULT_CONFIG + 通过可选 onWarning 回调报告",
+        "实现 saveConfig(config, configPath?): 写入文件（原子写：tmp 文件 + rename，参考 pi-permission-system savePermissionSystemConfig），权限 0o600",
+        "导出 getConfigPath(): 用 homedir() + '.pi/agent/permission-config.json'，支持 PI_CODING_AGENT_DIR 环境变量覆盖"
+      ],
+      "dependsOn": ["T2"]
+    },
+    {
+      "id": "T4",
+      "type": "impl",
+      "files": ["extensions/permission/src/commands.ts"],
+      "steps": [
+        "实现 createPermissionCommand(getConfig, setConfig) 工厂，返回 Pi CommandDefinition",
+        "命令名 'permission'，无参数时显示当前模式 + 四档切换菜单",
+        "切换菜单用 ctx.ui.custom（参考 ask-user AskUserComponent 模式），方向键选择 + Enter 确认 + Esc 取消",
+        "确认后调 saveConfig 持久化 + 返回确认消息",
+        "headless 检查：ctx.mode==='rpc' 或无 ctx.ui.custom 时退化为文本菜单（输入数字选择）"
+      ],
+      "dependsOn": ["T2", "T3"]
+    },
+    {
+      "id": "T5",
+      "type": "impl",
+      "files": ["extensions/permission/src/index.ts"],
+      "steps": [
+        "实现 export default function permissionExtension(pi: ExtensionAPI): void",
+        "pi.on('session_start', ...) 初始化闭包状态：loadAndWatchConfig 存入闭包变量（不存模块级 let）",
+        "pi.registerCommand(createPermissionCommand(...)) 注册 /permission 命令",
+        "pi.on('tool_call', ...) 占位实现：W1 阶段所有模式都放行（return undefined 或 allow），日志记录 'W1 placeholder'，W5 替换",
+        "statusline 集成：pi.on('statusline', ...) 或类似 hook 显示当前模式图标（需确认 Pi statusline API，参考 statusline 扩展）",
+        "配置热重载：tool_call 时检查 config mtime，变化则重读"
+      ],
+      "dependsOn": ["T2", "T3", "T4"]
+    },
+    {
+      "id": "T6",
+      "type": "test",
+      "files": ["extensions/permission/src/__tests__/config.test.ts", "extensions/permission/src/__tests__/types.test.ts", "extensions/permission/vitest.config.ts"],
+      "steps": [
+        "创建 vitest.config.ts（参考 statusline/vitest.config.ts，include=['src/__tests__/**/*.test.ts']）",
+        "config.test.ts 覆盖 WT1-WT5/WT7（默认配置/解析/容错/mtime缓存/保存），用临时目录 + mock homedir",
+        "types.test.ts 覆盖 WT6（PERMISSION_MODES/MODE_DESCRIPTIONS/isValidPermissionMode）",
+        "所有测试用真实 fs（临时目录），不用 mock fs（更接近真实行为）"
+      ],
+      "dependsOn": ["T3"]
+    },
+    {
+      "id": "T7",
+      "type": "test",
+      "files": ["extensions/permission/src/__tests__/extension.test.ts"],
+      "steps": [
+        "extension.test.ts 覆盖 WT8/WT9（扩展入口注册 + 占位 tool_call），用 mock pi 对象记录调用",
+        "验证 registerCommand 和 pi.on 调用参数正确",
+        "验证四种 mode 下 tool_call 占位都放行"
+      ],
+      "dependsOn": ["T5"]
+    }
+  ],
+  "files": [
+    {"id": "F1", "path": "extensions/permission/package.json", "action": "create", "description": "包定义：name=@zhushanwen/pi-permission, pi.extensions=['./index.ts'], peerDeps 含 pi-ai/pi-coding-agent/pi-tui"},
+    {"id": "F2", "path": "extensions/permission/index.ts", "action": "create", "description": "入口 shim，re-export src/index.ts"},
+    {"id": "F3", "path": "extensions/permission/src/types.ts", "action": "create", "description": "全部类型定义（DM1-DM5 + 后续 wave 用的类型），统一声明避免碎片化"},
+    {"id": "F4", "path": "extensions/permission/src/config.ts", "action": "create", "description": "配置加载/保存/mtime缓存（I6 loadAndWatchConfig + saveConfig）"},
+    {"id": "F5", "path": "extensions/permission/src/commands.ts", "action": "create", "description": "/permission 命令实现（ctx.ui.custom 菜单 + 模式切换）"},
+    {"id": "F6", "path": "extensions/permission/src/index.ts", "action": "create", "description": "扩展工厂函数（session_start + registerCommand + tool_call 占位 + statusline）"},
+    {"id": "F7", "path": "extensions/permission/src/__tests__/config.test.ts", "action": "create", "description": "配置加载/保存测试（WT1-WT5/WT7）"},
+    {"id": "F8", "path": "extensions/permission/src/__tests__/types.test.ts", "action": "create", "description": "类型/常量测试（WT6）"},
+    {"id": "F9", "path": "extensions/permission/src/__tests__/extension.test.ts", "action": "create", "description": "扩展入口集成测试（WT8/WT9）"},
+    {"id": "F10", "path": "extensions/permission/vitest.config.ts", "action": "create", "description": "vitest 配置（参考 statusline）"}
+  ],
+  "contracts": [
+    {
+      "id": "WC1",
+      "name": "loadAndWatchConfig",
+      "type": "function",
+      "definition": "export function loadAndWatchConfig(configPath?: string, onWarning?: (msg: string) => void): PermissionConfig"
+    },
+    {
+      "id": "WC2",
+      "name": "saveConfig",
+      "type": "function",
+      "definition": "export function saveConfig(config: PermissionConfig, configPath?: string): { success: boolean; error?: string }"
+    },
+    {
+      "id": "WC3",
+      "name": "permissionExtension",
+      "type": "function",
+      "definition": "export default function permissionExtension(pi: ExtensionAPI): void"
+    },
+    {
+      "id": "WC4",
+      "name": "PermissionConfig",
+      "type": "schema",
+      "definition": "export interface PermissionConfig { mode: PermissionMode; enabled: boolean; classifier: ClassifierConfig; userRules: Rule[] }"
+    },
+    {
+      "id": "WC5",
+      "name": "getConfigPath",
+      "type": "function",
+      "definition": "export function getConfigPath(): string  // ~/.pi/agent/permission-config.json, 支持 PI_CODING_AGENT_DIR"
+    }
+  ]
+}
