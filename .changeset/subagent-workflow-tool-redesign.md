@@ -2,6 +2,8 @@
 "@zhushanwen/pi-subagent-workflow": minor
 ---
 
+> **版本口径**：本包处于 0.x 阶段。按 SemVer §6「0.x 可能在任何次版本引入破坏性变更」，minor bump 允许含 breaking。下方标注的 **Breaking** 是改动性质说明，不对应 major bump。
+
 重构 subagent-workflow tool 面，提升弱模型调用正确率：
 
 **Breaking** — `workflow` tool 删除 `retry-node` / `skip-node` 两个 action（7 → 5 action：run/status/pause/resume/abort）。这两个 action 语义尴尬（retry-node 重跑失败节点但不改脚本输出；skip-node 注入零 usage 占位结果），删除后 `node-ops.ts` 整文件移除。共享基础设施 `executeAgentCall` / `postBudgetUpdate` 仍由主路径使用，无死代码。`callId` schema 字段随之移除。
