@@ -1,0 +1,17 @@
+{
+  "summary": "W1 完成 pi-permission 扩展骨架：types.ts（全部类型定义供 W2-W5 import）、config.ts（loadAndWatchConfig mtime+size 缓存 + saveConfig 原子写 + 深拷贝防污染）、commands.ts（/permission 文本菜单命令）、index.ts（session_start + registerCommand + tool_call 占位）。statusline 推到 W6（SDK 不支持 pi.on('statusline')，需 ctx.ui.setFooter TUI Component）。24 测试全过，typecheck 零错误。reviewer 发现 2 critical + 5 major 已全部修复。",
+  "artifacts": [
+    {"type": "code", "ref": "extensions/permission/package.json", "note": "包定义 @zhushanwen/pi-permission"},
+    {"type": "code", "ref": "extensions/permission/index.ts", "note": "入口 shim re-export src/index.ts"},
+    {"type": "code", "ref": "extensions/permission/src/types.ts", "note": "全部类型定义（DM1-DM5 + W2-W5 用的类型）"},
+    {"type": "code", "ref": "extensions/permission/src/config.ts", "note": "I6 loadAndWatchConfig + saveConfig"},
+    {"type": "code", "ref": "extensions/permission/src/commands.ts", "note": "/permission 命令"},
+    {"type": "code", "ref": "extensions/permission/src/index.ts", "note": "扩展工厂"},
+    {"type": "test", "ref": "extensions/permission/src/__tests__/config.test.ts", "note": "WT1-WT5/WT7 配置测试 13 个"},
+    {"type": "test", "ref": "extensions/permission/src/__tests__/types.test.ts", "note": "WT6 类型测试 6 个"},
+    {"type": "test", "ref": "extensions/permission/src/__tests__/extension.test.ts", "note": "WT8/WT9 扩展入口测试 5 个"},
+    {"type": "config", "ref": "extensions/permission/vitest.config.ts", "note": "vitest 配置"},
+    {"type": "config", "ref": "extensions/permission/tsconfig.json", "note": "TypeScript 配置"},
+    {"type": "config", "ref": "cw.config.json", "note": "cw testRunner 收窄到本包"}
+  ]
+}
