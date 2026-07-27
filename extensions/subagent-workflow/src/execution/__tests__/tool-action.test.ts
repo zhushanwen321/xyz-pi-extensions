@@ -69,9 +69,9 @@ function makeService(over: Partial<SubagentService> = {}): SubagentService {
 // startHandler
 // ============================================================
 describe("startHandler", () => {
-  it("缺 startParam → throw", async () => {
+  it("缺 input → throw", async () => {
     const svc = makeService();
-    await expect(startHandler(svc, undefined, undefined)).rejects.toThrow(/startParam is required/);
+    await expect(startHandler(svc, undefined, undefined)).rejects.toThrow(/task and slug/);
   });
 
   it("task 空白 → throw", async () => {

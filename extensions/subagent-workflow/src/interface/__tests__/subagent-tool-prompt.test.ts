@@ -85,23 +85,22 @@ describe("subagent tool description — 行为约束器（非功能说明书）"
     expect(DESCRIPTION).toMatch(/SAME message/i);
   });
 
-  it("Examples 段含完整 JSON 正例（含 startParam 嵌套结构）", () => {
-    // 弱模型信任 schema 结构信号 > 文本信号，容易把 task/slug 平铺到顶层。
-    // description 必须有完整 JSON 正例，让模型能直接照抄 startParam 嵌套结构。
-    expect(DESCRIPTION).toContain('{"action":"start","startParam"');
-  });
-
-  it("Anti-patterns 段含参数结构反例（top level 平铺 task/slug）", () => {
-    // 显式说明 task/slug 不能平铺到顶层，必须嵌在 startParam 里。
-    expect(DESCRIPTION).toContain("top level");
+  it("Examples 段含平铺 JSON 正例（task/slug 在顶层，无 startParam envelope）", () => {
+    // 弱模型信任 schema 结构信号 > 文本信号，原本嵌套 startParam 容器经常被省略。
+    // 现已拍平：task/slug 等 13 字段直接放在顶层。description 必须有完整平铺 JSON 正例，
+    // 让模型能直接照抄。强约束：startParam envelope 必须从 description 中彻底消失。
+    expect(DESCRIPTION).toContain('"action":"start","task"');
+    expect(DESCRIPTION).not.toContain('"startParam"');
   });
 });
 
 describe("subagent tool runtime handler — 错误文案含纠正正例", () => {
-  // 读源码文本断言 executeSubagent 的平铺检测 throw 含 Correct 正例，
+  // 读源码文本断言 startHandler throw 含 Correct 正例，
   // 让弱模型撞错后第二次能直接照抄正确形态。
-  it("subagent-tool.ts 含 runtime 平铺检测 throw + Correct 纠正正例", () => {
-    expect(SUBAGENT_TOOL_SRC).toContain("Correct:");
-    expect(SUBAGENT_TOOL_SRC).toContain("params.action === \"start\" && !params.startParam");
+  // 拍平后：startParam envelope 删除，平铺 task/slug 是合法形态；
+  // 平铺检测 guard（hasFlattenedStartFields）已删除，源码不应再含此表达式。
+  it("subagent-actions.ts startHandler 含 Correct 纠正正例 + 平铺检测 guard 已从 subagent-tool.ts 删除", () => {
+    expect(SUBAGENT_TOOL_SRC).not.toContain('params.action === "start" && !params.startParam');
+    expect(SUBAGENT_TOOL_SRC).not.toContain("hasFlattenedStartFields");
   });
 });
