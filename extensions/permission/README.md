@@ -97,69 +97,257 @@ ln -s /path/to/xyz-pi-extensions-workspace/feat-permission-and-auto-mode/extensi
 /permission model        overlay 选择 AI classifier 模型（W7）
 ```
 
-## 内置规则
+## 内置规则（摘要）
 
-### 白名单（builtin-safe）
+内置规则分两类，均代码硬编码，用户不可改：
 
-Codex safelist 移植，24 条无条件安全命令 + 5 条条件安全命令（带 flag 子检查）：
-- 无条件：`ls`、`pwd`、`echo`、`cat`、`git status`、`git diff`、`git log` 等
-- 条件：`git add <safe-path>`、`npm install`（无危险 flag）等
+- **白名单（builtin-safe）**：Codex safelist 移植，24 条无条件安全命令（`cat`/`cd`/`echo`/`ls`/`grep`/`pwd` 等）+ 5 条带 flag 子检查的条件安全命令（`base64`/`find`/`rg`/`git`/`sed`）。命中白名单 → 直接 `allow`（不跑规则遍历与 AI）。
+- **危险规则（builtin-danger）**：12 条正则规则（`rm -rf`、`sudo`、`chmod 777`、`curl ... | sh`、`git push --force`、`git reset --hard` 等）。pattern 是 RegExp 源字符串（含 `\b`/`\s`），用 `new RegExp(pattern, 'i')` 编译，`action` 固定 `deny`。
 
-命中白名单 → 直接 `allow`（不跑规则/AI）。
+完整清单与每条规则的 pattern/示例见下方「规则系统」第 2、3 节。
 
-### 危险规则（builtin-danger）
+## 规则系统
 
-12 条正则规则，匹配高危命令模式：
-- `rm -rf /`、`rm -rf ~`
-- `chmod 777`
-- `curl ... | sh` / `wget ... | sh`
-- `dd of=/dev/...`
-- 等等
+本节是用户编辑规则的完整指南，覆盖三层规则来源、内置白名单/危险规则全量清单、自定义规则语法、匹配优先级与常见场景示例。
 
-builtin-danger 的 pattern 是 RegExp 源字符串（含 `\b`/`\s`），用 `new RegExp(pattern, 'i')` 编译。
+### 1. 规则系统总览
 
-## 自定义规则
+规则（Rule）是层 2「规则匹配」的核心数据单元。每条规则描述「某条命令匹配某模式时执行某动作」。规则来源分三层：
 
-在 `permission-config.json` 的 `userRules` 数组添加：
+| 来源 | source 字段 | 数量 | 形态 | 可改 |
+|------|-------------|------|------|------|
+| 内置安全白名单 | `builtin-safe` | 24 无条件 + 5 条件 | 函数实现（`isKnownSafeCommand`），不进 `Rule[]` 数组 | 不可改 |
+| 内置危险规则 | `builtin-danger` | 12 条正则 | `BUILTIN_DANGER_RULES` 常量，代码硬编码 | 不可改 |
+| 用户自定义规则 | `user` | 任意 | `permission-config.json` 的 `userRules` 数组 | 可改 |
+
+规则层在整个权限管道中的位置（auto / approve 模式）：
+
+```
+W2 AST 结构分析 → W3 规则匹配 → W4 AI Classifier（仅 auto）
+```
+
+W3 内部评估顺序：
+
+1. **`isKnownSafeCommand(argv)`**：命中 24+5 白名单 → 直接 `allow`（虚拟 `builtin-safe` rule），不进后续遍历
+2. **`[...BUILTIN_DANGER_RULES, ...userRules]`**：按数组顺序遍历，last-match-wins
+3. **无匹配**：返回 `ask`（交下游 W4 AI 或人工审批，不静默 deny）
+
+注意：只有 bash 工具的命令字符串会走规则匹配；非 bash 工具（Read/Write/Edit 等）在 `pipeline.ts` 的 `matchNonBashTool` 中单独评估用户规则（详见第 5 节「tool 字段」）。
+
+### 2. 内置安全白名单（builtin-safe，不可改）
+
+由 `BUILTIN_UNCONDITIONAL_SAFE` + `CONDITIONAL_SAFE_COMMANDS` 实现（函数判定，不是 `Rule[]`），命中后直接 `allow`，跳过规则遍历与 AI。
+
+**24 条无条件安全命令**（`BUILTIN_UNCONDITIONAL_SAFE`，仅看 argv[0] basename）：
+
+```
+cat / cd / cut / echo / expr / false / grep / head / id / ls /
+nl / paste / pwd / rev / seq / stat / tail / tr / true / uname /
+uniq / wc / which / whoami
+```
+
+注：Codex 源码里的 `numfmt`/`tac` 仅在 linux 安全，本扩展面向跨平台 agent，统一不加入。
+
+**5 条带 flag 子检查的条件安全命令**（`CONDITIONAL_SAFE_COMMANDS`，argv 级判定）：
+
+| 命令 | 安全条件 | 命中危险即不放行 |
+|------|----------|------------------|
+| `base64` | 不含写文件 flag | 禁 `-o` / `--output` / `--output=*` / `-o*`（合并 flag 如 `-ob64.txt`） |
+| `find` | 不含执行/删除/写文件 flag | 禁 `-exec` / `-execdir` / `-ok` / `-okdir` / `-delete` / `-fls` / `-fprint` / `-fprint0` / `-fprintf` |
+| `rg` | 不含执行外部工具 flag | 禁 `--pre` / `--pre=*` / `--hostname-bin` / `--hostname-bin=*` / `--search-zip` / `-z` |
+| `git` | 子命令属于 `status`/`log`/`diff`/`show`/`branch` 且只读 | 见下文 git 子表 |
+| `sed` | 仅 `sed -n {N\|M,N}p [file]`（argv 长度 ≤ 4） | 其余形式不放行 |
+
+**git 子命令安全判定细则**：
+
+- 子命令白名单：`status` / `log` / `diff` / `show` / `branch`
+- 全局选项禁用：`-C` / `-c` / `-p` / `--config-env` / `--config-env=*` / `--exec-path` / `--exec-path=*` / `--git-dir` / `--git-dir=*` / `--namespace` / `--namespace=*` / `--paginate` / `--super-prefix` / `--super-prefix=*` / `--work-tree` / `--work-tree=*`（短选项内联值如 `-C.` 也禁）
+- 子命令选项禁用：`--output` / `--output=*` / `--ext-diff` / `--textconv` / `--exec` / `--exec=*`
+- `git branch` 仅当全部参数是只读 flag（`--list`/`-l`/`--show-current`/`-a`/`--all`/`-r`/`--remotes`/`-v`/`-vv`/`--verbose`/`--format=*`）时安全，否则视为创建/重命名/删除分支
+
+**sed 安全判定细则**：
+
+仅形如 `sed -n {N\|M,N}p [file]` 的命令安全，argv 长度上限 4。其中第三参数必须匹配 `/^(\d+,)?\d+p$/`（如 `5p`、`2,8p`）。其余 `sed` 用法（如 `s/.../.../`、`-i`）一律不放行。
+
+### 3. 内置危险规则（builtin-danger，不可改）
+
+12 条正则规则（`BUILTIN_DANGER_RULES`），`action` 固定 `deny`，`source` 固定 `builtin-danger`。pattern 是 RegExp 源字符串（含 `\b`/`\s`），由 `resolvePattern` 用 `new RegExp(pattern, 'i')` 编译（大小写不敏感）。
+
+| id | pattern（正则字面量）| description | 匹配示例 |
+|----|----------------------|-------------|----------|
+| bd-001 | `\brm\s+(-[^\s]*r\|--recursive)` | recursive delete | `rm -rf /`、`rm -fr x`、`rm --recursive y` |
+| bd-002 | `\bsudo\b` | sudo | `sudo`、`sudo -E apt update` |
+| bd-003 | `\bchmod\b.*777` | world-writable permissions | `chmod 777 /tmp`、`chmod 0777 file` |
+| bd-004 | `>\s*/dev/[sh]d[a-z]` | raw device redirect | `dd ... > /dev/sda` |
+| bd-005 | `\bgit\s+push\s+.*(-f\b\|--force\b)` | force push | `git push --force`、`git push -f` |
+| bd-006 | `\bgit\s+reset\s+--hard\b` | hard reset | `git reset --hard HEAD~1` |
+| bd-007 | `\bgit\s+clean\s+-[^\s]*f` | git clean | `git clean -fd`、`git clean -dfx` |
+| bd-008 | `\bgit\s+checkout\s+\.\s*($\|[;&\|])` | git checkout (discard all) | `git checkout .` |
+| bd-009 | `\bgit\s+restore\b` | git restore | `git restore file.txt` |
+| bd-010 | `\b(curl\|wget)\b.*\|\s*(ba)?sh\b` | pipe to shell | `curl http://x \| sh`、`wget x \| bash` |
+| bd-011 | `\bgh\s+repo\s+(create\|delete\|rename\|archive)\b` | modify GitHub repo | `gh repo delete foo` |
+| bd-012 | `\bgh\s+release\s+(create\|delete\|edit)\b` | modify GitHub release | `gh release create v1` |
+
+### 4. 自定义规则（用户编辑指南）
+
+在 `~/.pi/agent/permission-config.json` 的 `userRules` 数组中添加。完整示例：
 
 ```json
 {
   "userRules": [
-    {
-      "id": "deny-rm-star",
-      "tool": "bash",
-      "pattern": "rm *",
-      "action": "deny",
-      "source": "user",
-      "description": "deny all rm commands"
-    },
-    {
-      "id": "allow-ls",
-      "tool": "bash",
-      "pattern": "ls *",
-      "action": "allow",
-      "source": "user"
-    }
+    { "id": "user-001", "tool": "bash", "pattern": "npm *", "action": "allow", "source": "user", "description": "允许所有 npm 命令" },
+    { "id": "user-002", "tool": "bash", "pattern": "git push *", "action": "deny", "source": "user", "description": "禁止 git push" },
+    { "id": "user-003", "tool": "bash", "pattern": "docker *", "action": "ask", "source": "user", "description": "docker 转人工" },
+    { "id": "user-004", "tool": "*", "pattern": "*", "action": "ask", "source": "user", "description": "兜底：所有未匹配工具转人工" }
   ]
 }
 ```
 
-### 规则字段
+加载时配置层（`normalizeRule`）会对每条规则归一化，缺失字段有兜底：
 
-| 字段 | 说明 |
-|------|------|
-| `id` | 唯一 id（用户规则建议 `user-<n>`） |
-| `tool` | 工具名匹配（`bash` 精确匹配，`*` 通配所有工具） |
-| `pattern` | 命令匹配（OpenCode wildcard：`*` 跨任意字符，`?` 单字符） |
-| `action` | 决策动作（`allow` / `deny` / `ask`） |
-| `source` | 规则来源（用户规则固定 `user`） |
-| `description` | 可选描述 |
+- `id` 缺失 → 自动分配 `user-<n>`（按数组下标 +1）
+- `tool` 缺失 → `*`（匹配所有工具）
+- `pattern` 缺失 → `*`（匹配所有命令）
+- `action` 非 `allow`/`deny`/`ask` → 该规则被丢弃（不影响其他规则）
+- `source` 非 `user` → 归一化为 `user`
 
-### 匹配语义
+### 5. 规则字段详解
 
-- **拼接顺序**：`[...builtin-danger, ...userRules]`（builtin 在前，user 在后）
-- **last-match-wins**：多条规则匹配时，最后一条胜出（user 可覆盖 builtin）
-- **no-match → ask**：无匹配返回 `ask`（交下游 AI/人工，不静默 deny）
+| 字段 | 类型 | 必填 | 说明 |
+|------|------|------|------|
+| `id` | string | 是 | 唯一 id，用户规则建议 `user-<n>`（缺失会自动分配） |
+| `tool` | string | 是 | 工具名匹配，wildcard 语法。`bash` 精确匹配 bash 工具；`*` 匹配所有工具（含 Read/Write/Edit）；也可写具体工具名如 `read`、`write` |
+| `pattern` | string | 是 | 命令/目标匹配，wildcard 语法。bash 工具对 `argv.join(' ')` 匹配；非 bash 工具对 `toolName` 匹配 |
+| `action` | `"allow"` \| `"deny"` \| `"ask"` | 是 | 决策动作，详见第 8 节 |
+| `source` | `"user"` | 是 | 规则来源，用户规则固定 `user`（写成其他值也会被归一化回 `user`） |
+| `description` | string | 否 | 人类可读描述，在 matchedRule 与拒绝理由中展示 |
+
+**tool 字段语义补充**：
+
+- bash 工具的命令匹配由 `matcher.ts` 的 `matchRulesForArgv` 负责，它**只遍历规则数组、不对 rule.tool 做过滤**（因为 bash 工具上下文已确定）。所以 bash 规则的 `tool` 字段写什么不影响匹配结果，惯例写 `"bash"`。
+- 非 bash 工具（Read/Write/Edit 等）由 `pipeline.ts` 的 `matchNonBashTool` 负责，它会先用 `wildcardToRegExp(rule.tool).test(toolName)` 过滤，再判定 `pattern`。要让规则对非 bash 工具生效，`tool` 必须能匹配工具名（如 `read`、`write`，或 `*`）。
+
+### 6. wildcard 语法
+
+`pattern` 与非 bash 的 `tool` 字段都用 OpenCode 风格 wildcard（`wildcardToRegExp` 编译）：
+
+- `*` 匹配任意字符（含空格），等价于 `.*`
+- `?` 匹配单个字符，等价于 `.`
+- 末尾 ` *` 改写为可选的 `( .*)?`，使 `ls *` 也能匹配无参的裸 `ls`
+- 特殊字符 `. + ^ $ { } ( ) | [ ] \` 按字面量匹配（自动转义）
+- 路径分隔符 `\` 统一归一化为 `/`
+- 全锚定 `^...$`
+- 非 Windows：大小写敏感，用 `s`（dotAll）flag；Windows：大小写不敏感，用 `si` flag
+
+常见 pattern 示例：
+
+| pattern | 匹配 | 不匹配 |
+|---------|------|--------|
+| `npm *` | `npm install`、`npm`、`npm run build` | `pnpm install` |
+| `git commit -m *` | `git commit -m "msg"` | `git commit` |
+| `rm -rf *` | `rm -rf /tmp/x` | `rm -r /tmp` |
+| `docker *` | `docker ps`、`docker` | `docker-compose up`（中间有 `-` 仍命中 `docker *`） |
+
+### 7. 匹配优先级（last-match-wins）
+
+规则遍历遵循 **last-match-wins**（最后一条匹配的规则胜出）。拼接顺序由 pipeline 固定：
+
+```
+[...BUILTIN_DANGER_RULES, ...userRules]
+```
+
+即内置危险规则在前，用户规则在后。配合 last-match-wins：
+
+- 多条规则都匹配时，**数组末尾的那条**胜出
+- 用户规则在 builtin-danger 之后，因此**用户规则可以覆盖内置危险规则**
+- 在 `userRules` 数组内部，**靠后的规则覆盖靠前的**
+- 无任何匹配 → `ask`（交下游，不静默 deny）
+
+**覆盖示例**：命令 `git push --force origin main`
+
+1. 遍历到 bd-005（`git push ... --force`）→ 命中 deny，记为 winner
+2. 遍历到 `userRules` 末尾的 `{ pattern: "git push *", action: "allow" }` → 命中 allow，覆盖 winner
+3. 最终 action = `allow`（用户已显式放行，风险自负）
+
+**叠加示例**：想让 `npm install` 放行但 `npm publish` 拦截，按顺序写两条（deny 在后才能胜出）：
+
+```json
+{ "id": "user-allow-npm",  "tool": "bash", "pattern": "npm *",       "action": "allow", "source": "user" },
+{ "id": "user-deny-publish", "tool": "bash", "pattern": "npm publish *", "action": "deny",  "source": "user" }
+```
+
+### 8. action 三态语义
+
+| action | 行为 | 适用场景 |
+|--------|------|----------|
+| `allow` | 直接放行，跳过 AI 与人工审批 | 信任的命令（白名单/常驻开发命令） |
+| `deny` | 直接拦截，返回 `{ block: true, reason }` | 禁止的命令（覆盖 builtin allow 或封禁危险操作） |
+| `ask` | 转下游：auto 模式 → W4 AI Classifier；approve/strict 模式 → 人工审批 | 不确定是否安全的命令，交给 AI 或人判断 |
+
+注意 `deny` 与「无匹配」不同：无匹配返回 `ask`（让命令进入下游评估），`deny` 是显式拦截。要拦截必须显式写 `action: "deny"`。
+
+### 9. 常见场景示例
+
+**场景 1：允许所有 npm 命令**
+
+```json
+{ "id": "user-npm", "tool": "bash", "pattern": "npm *", "action": "allow", "source": "user" }
+```
+
+**场景 2：禁止 git push（含 --force）**
+
+```json
+{ "id": "user-no-push", "tool": "bash", "pattern": "git push *", "action": "deny", "source": "user" }
+```
+
+**场景 3：docker 转人工审批**
+
+```json
+{ "id": "user-docker", "tool": "bash", "pattern": "docker *", "action": "ask", "source": "user" }
+```
+
+**场景 4：允许 npm install 但禁止 npm publish**
+
+```json
+{ "id": "user-npm-allow",   "tool": "bash", "pattern": "npm *",        "action": "allow", "source": "user" },
+{ "id": "user-publish-deny", "tool": "bash", "pattern": "npm publish *", "action": "deny",  "source": "user" }
+```
+
+publish 规则在后，last-match-wins 时 deny 胜出。
+
+**场景 5：全工具兜底审批（如所有 Write/Edit 都问一下）**
+
+```json
+{ "id": "user-all-ask", "tool": "*", "pattern": "*", "action": "ask", "source": "user" }
+```
+
+对非 bash 工具生效（`matchNonBashTool` 会用 `tool='*'` 匹配任意 toolName）。建议放在 `userRules` 末尾作为兜底。
+
+**场景 6：覆盖内置危险规则（谨慎）**
+
+例如内置 bd-001 禁止 `rm -rf`，但容器内想放行清理 `/tmp`：
+
+```json
+{ "id": "user-rm-tmp", "tool": "bash", "pattern": "rm -rf /tmp/*", "action": "allow", "source": "user" }
+```
+
+放在 `userRules` 末尾即覆盖 bd-001。务必缩窄 pattern 范围，避免误放行。
+
+### 10. 配置文件管理
+
+- **路径**：`~/.pi/agent/permission-config.json`，可用 `PI_CODING_AGENT_DIR` 环境变量覆盖基础目录
+- **首次创建**：扩展启动时若文件不存在，自动写入默认配置（`mode: "yolo"`、空 `userRules`）
+- **权限**：`0o600`（原子写：先写 `.tmp` 再 rename，避免半写状态）
+- **编辑方式**：目前需手动编辑 JSON 文件（未来计划提供 `/permission add-rule` 命令辅助编辑）
+- **热重载**：每次 tool_call 都重读配置，用 `mtimeMs + size` 双 key 缓存检测变化（防 APFS 等 mtime 精度截断）。编辑保存后下一次命令即生效，无需重启
+
+### 11. 调试技巧
+
+- `/permission status`：查看当前配置摘要（含 `userRules` 数量）
+- 查看决策来源：`PermissionDecision.source`（`mode` / `ast` / `rule` / `ai` / `user`），区分是模式直接放行、AST 拦截、规则命中、AI 分类还是人工审批
+- 查看命中规则：`PermissionDecision.matchedRule`（命中时携带 Rule 对象），从 `id` 可判断是 `builtin-safe`（白名单虚拟规则）、`bd-<n>`（内置危险）还是 `user-<n>`（用户规则）
+- 故意写一条 `deny` + 带 `description` 的用户规则触发拦截，从 tool_result 的 block reason 文案反查命中的是哪条规则
+- 规则 pattern 编译失败会被静默跳过（regex 构造异常不阻塞管道），怀疑某条规则没生效时先用 `/^(\d+,)?\d+p$/` 这类标准语法自测
 
 ## AI Classifier
 
