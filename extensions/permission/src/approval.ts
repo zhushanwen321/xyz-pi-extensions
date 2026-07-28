@@ -5,8 +5,9 @@
  *  - tui：ctx.ui.custom 自定义 Component（ApprovalComponent，G4 补 invalidate）。
  *    G3：调 ctx.ui.custom 前先检查 signal.aborted 短路（AI 先于 UI factory 执行时
  *    controller.abort() 触发但 comp 尚未创建，cancel 落空）。
- *  - rpc：ctx.ui.select（GUI 对话框）。先查 SDK select 签名：Promise<string | undefined>。
- *  - headless（json/print）：deny + notify（无交互 UI，fail-closed 拒绝）。
+ *  - rpc：ctx.ui.select（GUI 对话框）。M2：接收 signal，abort 短路 + 透传给 ui.select。
+ *  - headless（json/print）：无交互 UI。M1：返回永不主动 resolve 的 Promise（让 Racing 中的
+ *    AI 有机会赢），仅在 signal abort 时 fail-closed deny（避免 headless 下 auto 退化为 strict）。
  *
  * ApprovalComponent 是简化版 TUI 组件（参考 ask-user AskUserComponent）：
  *  - 显示工具名 + 命令 + 触发原因 + 可选 AI 预分类。
@@ -44,14 +45,14 @@ import type { ToolInvocationContext, UserDecision } from "./types.js";
 export interface ApprovalContext {
 	mode: "tui" | "rpc" | "json" | "print";
 	ui: {
-		notify(msg: string, type?: string): void;
-		select(title: string, options: string[], opts?: unknown): Promise<string | undefined>;
+		notify(msg: string, type?: "info" | "warning" | "error"): void;
+		select(title: string, options: string[], opts?: { signal?: AbortSignal; timeout?: number }): Promise<string | undefined>;
 		custom<T = void>(
 			factory: (tui: unknown, theme: unknown, kb: unknown, done: (result: T) => void) => Component,
 			options?: { overlay?: boolean },
 		): Promise<T>;
 		/** W6 T9 G3：可选文本输入（Reject-with-Reason 用）。SDK 提供，mock 可能缺失。 */
-		input?(title: string, placeholder?: string, opts?: unknown): Promise<string | undefined>;
+		input?(title: string, placeholder?: string, opts?: { signal?: AbortSignal; timeout?: number }): Promise<string | undefined>;
 	};
 }
 
@@ -76,10 +77,13 @@ export async function requestUserApproval(
 		case "tui":
 			return await requestTui(req, signal, approvalCtx);
 		case "rpc":
-			return await requestRpc(req, approvalCtx);
+			// M2：传 signal 给 requestRpc（abort 时短路 + 透传给 ui.select 关闭对话框）
+			return await requestRpc(req, signal, approvalCtx);
 		case "json":
 		case "print":
 		default:
+			// headless 立即 fail-closed deny（无 UI 无 AI 可判）。
+			// auto 模式的 Racing 在 headless 下不调用此路径（见 runLayer3WithRacing 的 isHeadless 分支）。
 			return requestHeadless(req, approvalCtx);
 	}
 }
@@ -112,10 +116,23 @@ async function requestTui(
 // ──────────────────────── RPC 分支 ────────────────────────
 
 /** RPC 模式：ctx.ui.select（GUI 单选对话框）+ W6 T9 G3 Reject-with-Reason。 */
-async function requestRpc(req: ApprovalRequest, approvalCtx: ApprovalContext): Promise<UserDecision> {
+async function requestRpc(
+	req: ApprovalRequest,
+	signal: AbortSignal | undefined,
+	approvalCtx: ApprovalContext,
+): Promise<UserDecision> {
 	const title = formatTitle(req);
+	// TODO: spec 未要求 session/always scope，当前仅支持 once。
+	// 未来如需扩展，options 加 "Approve (session)" / "Approve (always)"，UserDecision.scope 透传。
 	const options = ["Approve (once)", "Deny"];
-	const choice = await approvalCtx.ui.select(title, options);
+	// M2：与 requestTui 一致——调 select 前检查 signal.aborted 短路（AI 先于对话框弹出赢 race 时，
+	// controller.abort() 已触发但 select 尚未发起，这里 fail-closed deny 避免弹出无意义对话框）。
+	if (signal?.aborted) {
+		approvalCtx.ui.notify(`[pi-permission] approval aborted before prompt: ${req.toolName}`, "warning");
+		return { approved: false, reason: "aborted before prompt (AI won the race)" };
+	}
+	// M2：把 signal 透传给 ui.select（SDK 支持 { signal } options），AI 赢 race abort 时关闭对话框。
+	const choice = await approvalCtx.ui.select(title, options, signal ? { signal } : undefined);
 	if (choice === undefined) {
 		return { approved: false, reason: "user dismissed the prompt" };
 	}
@@ -165,7 +182,16 @@ export async function collectRejectReason(
 
 // ──────────────────────── headless 分支 ────────────────────────
 
-/** headless（json/print）：无交互 UI → fail-closed deny + notify。 */
+/**
+ * headless（json/print）：无交互 UI → fail-closed deny。
+ *
+ * 此函数服务于 strict/approve 的 `askUser` 路径——这些路径无 AI 层可兜底，
+ * headless 下既无法问用户也无法判风险，立即 deny 是唯一正确行为。
+ *
+ * auto 模式的 Racing（`runLayer3WithRacing`）在 headless 下不调用此函数——
+ * `CheckPermissionDeps.isHeadless()` 让 Racing 跳过 user promise，纯等 AI 判定
+ * （M1 修正：headless 下 auto 应让 AI classifier 有机会赢，而非立即 deny 退化成 strict）。
+ */
 function requestHeadless(req: ApprovalRequest, approvalCtx: ApprovalContext): UserDecision {
 	approvalCtx.ui.notify(`[pi-permission] headless mode auto-deny: ${req.reason}`, "warning");
 	return { approved: false, reason: `headless mode (${approvalCtx.mode}): cannot prompt, auto-deny` };
@@ -266,6 +292,8 @@ export class ApprovalComponent implements Component {
 	private approve(): void {
 		if (this._resolved) return;
 		this._resolved = true;
+		// TODO: spec 未要求 session/always scope，当前硬编码 "once"。未来如需扩展，
+		// 增加 handleInput 对应键位（如 's' → session、'a' → always）并透传 UserDecision.scope。
 		this.done({ approved: true, reason: "approved via tui", scope: "once" });
 	}
 

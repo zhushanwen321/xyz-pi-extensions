@@ -35,23 +35,38 @@ function makeApprovalCtx(overrides: Partial<ApprovalContext> = {}): ApprovalCont
 const req: ApprovalRequest = { toolName: "bash", command: "rm -rf /tmp", reason: "no allow rule" };
 const ctx: ToolInvocationContext = { toolName: "bash", command: "rm -rf /tmp", cwd: "/tmp" };
 
-// ──────────────────────── headless 分支 ────────────────────────
+// ──────────────────────── headless 分支（M1） ────────────────────────
 
-describe("requestUserApproval: headless 模式", () => {
-	it("json 模式 → fail-closed deny + notify", async () => {
+describe("requestUserApproval: headless 模式（M1）", () => {
+	it("json 模式 → 立即 fail-closed deny + notify", async () => {
 		const approvalCtx = makeApprovalCtx({ mode: "json" });
-		const decision = await requestUserApproval(req, ctx, undefined, approvalCtx);
+		const controller = new AbortController();
+		const decision = await requestUserApproval(req, ctx, controller.signal, approvalCtx);
+		expect(decision.approved).toBe(false);
+		expect(decision.reason).toContain("headless");
+		expect(decision.reason).toContain("cannot prompt");
+		expect(approvalCtx.ui.notify).toHaveBeenCalledOnce();
+	});
+
+	it("print 模式 → 立即 fail-closed deny + notify", async () => {
+		const approvalCtx = makeApprovalCtx({ mode: "print" });
+		const decision = await requestUserApproval(req, ctx, new AbortController().signal, approvalCtx);
 		expect(decision.approved).toBe(false);
 		expect(decision.reason).toContain("headless");
 		expect(approvalCtx.ui.notify).toHaveBeenCalledOnce();
 	});
 
-	it("print 模式 → fail-closed deny + notify", async () => {
-		const approvalCtx = makeApprovalCtx({ mode: "print" });
-		const decision = await requestUserApproval(req, ctx, undefined, approvalCtx);
+	it("headless 即使 signal 已 aborted 也立即 deny（不依赖 signal）", async () => {
+		const approvalCtx = makeApprovalCtx({ mode: "json" });
+		const controller = new AbortController();
+		controller.abort();
+		const decision = await requestUserApproval(req, ctx, controller.signal, approvalCtx);
 		expect(decision.approved).toBe(false);
-		expect(approvalCtx.ui.notify).toHaveBeenCalledOnce();
+		expect(decision.reason).toContain("headless");
 	});
+
+	// M1 语义：headless auto 的 Racing 在 runLayer3WithRacing 内部通过 isHeadless() 分支处理，
+	// requestHeadless 只服务 strict/approve 的 askUser 路径（立即 deny，无 AI 可兜底）。
 });
 
 // ──────────────────────── rpc 分支 ────────────────────────
@@ -96,6 +111,49 @@ describe("requestUserApproval: rpc 模式", () => {
 		const decision = await requestUserApproval(req, ctx, undefined, approvalCtx);
 		expect(decision.approved).toBe(false);
 		expect(decision.reason).toContain("dismissed");
+	});
+
+	it("M2：signal 已 aborted → 短路 deny，不调 ctx.ui.select", async () => {
+		const controller = new AbortController();
+		controller.abort();
+		const selectMock = vi.fn(() => Promise.resolve("Approve (once)"));
+		const approvalCtx = makeApprovalCtx({
+			mode: "rpc",
+			ui: { notify: vi.fn(), select: selectMock, custom: vi.fn() },
+		});
+		const decision = await requestUserApproval(req, ctx, controller.signal, approvalCtx);
+		expect(decision.approved).toBe(false);
+		expect(decision.reason).toContain("aborted before prompt");
+		expect(selectMock).not.toHaveBeenCalled();
+	});
+
+	it("M2：signal 透传给 ctx.ui.select（options.signal）", async () => {
+		const controller = new AbortController();
+		const selectMock = vi.fn((_title, _options, opts) => {
+			// 验证 opts.signal 是传入的 controller.signal
+			expect(opts?.signal).toBe(controller.signal);
+			return Promise.resolve("Deny");
+		});
+		const approvalCtx = makeApprovalCtx({
+			mode: "rpc",
+			ui: { notify: vi.fn(), select: selectMock, custom: vi.fn() },
+		});
+		await requestUserApproval(req, ctx, controller.signal, approvalCtx);
+		expect(selectMock).toHaveBeenCalledOnce();
+	});
+
+	it("M2：无 signal 时不透传 options（select 第三参为 undefined）", async () => {
+		const selectMock = vi.fn((_title, _options, opts) => {
+			expect(opts).toBeUndefined();
+			return Promise.resolve("Approve (once)");
+		});
+		const approvalCtx = makeApprovalCtx({
+			mode: "rpc",
+			ui: { notify: vi.fn(), select: selectMock, custom: vi.fn() },
+		});
+		const decision = await requestUserApproval(req, ctx, undefined, approvalCtx);
+		expect(decision.approved).toBe(true);
+		expect(selectMock).toHaveBeenCalledOnce();
 	});
 });
 

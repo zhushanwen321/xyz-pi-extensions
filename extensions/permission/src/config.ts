@@ -141,7 +141,13 @@ export function loadAndWatchConfig(
 	}
 
 	const cached = configCache.get(configPath);
-	// mtime + size 双 key：防止 APFS 等文件系统 mtime 精度截断导致快速连续保存后缓存失效
+	// mtime + size 双 key：防止 APFS 等文件系统 mtime 精度截断导致快速连续保存后缓存失效。
+	//
+	// 已知 limitation（m5）：mtime + size 不是内容指纹，「同毫秒同字节大小但内容不同」的写入
+	// （如交换两条等长 userRules 的顺序）会误命中缓存返回旧 config。完整消除需内容哈希（如 sha256），
+	// 但每次 load 都算哈希成本过高（config 可能较大），且 permission-config 写入频率低（用户手动编辑
+	// 或 /permission 命令）、mtime 变化的概率远高于同毫秒同大小写不同内容，故权衡采用 mtime+size。
+	// saveConfig 已在写后立即用新 stat 更新缓存（见下方 saveConfig），覆盖最常见的「写后读」竞态。
 	if (cached && cached.mtimeMs === stat.mtimeMs && cached.size === stat.size) {
 		return cloneConfig(cached.config);
 	}

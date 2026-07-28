@@ -9,7 +9,7 @@ import { describe, expect, it } from "vitest";
 
 import type { ApprovalContext } from "../approval.js";
 import type { CheckPermissionDeps } from "../pipeline.js";
-import { createPipelineDeps, createProductionClassifier } from "../production.js";
+import { _resetClassifierSingletonForTest, createPipelineDeps, createProductionClassifier } from "../production.js";
 
 function makeApprovalCtx(): ApprovalContext {
 	return {
@@ -69,12 +69,15 @@ describe("createPipelineDeps", () => {
 		expect(analysis.commands).toEqual([["ls", "-la"]]);
 	});
 
-	it("requestUserApproval 走 headless 分支（fail-closed deny）", async () => {
+	it("requestUserApproval 走 headless 分支（M1：signal abort → fail-closed deny）", async () => {
 		const deps = createPipelineDeps(makeApprovalCtx());
+		// M1：headless 无 signal 时永挂，故用已 aborted 的 signal 触发 fail-closed deny。
+		const controller = new AbortController();
+		controller.abort();
 		const decision = await deps.requestUserApproval(
 			{ toolName: "bash", command: "rm", reason: "test" },
 			{ toolName: "bash", command: "rm", cwd: "/tmp" },
-			undefined,
+			controller.signal,
 		);
 		expect(decision.approved).toBe(false);
 		expect(decision.reason).toContain("headless");
@@ -84,5 +87,14 @@ describe("createPipelineDeps", () => {
 		const deps: CheckPermissionDeps = createPipelineDeps(makeApprovalCtx());
 		// 仅验证类型兼容（运行时已在上面测试）
 		expect(deps).toBeDefined();
+	});
+
+	it("m1：多次 createPipelineDeps 复用同一 classifier 单例", () => {
+		_resetClassifierSingletonForTest();
+		const deps1 = createPipelineDeps(makeApprovalCtx());
+		const deps2 = createPipelineDeps(makeApprovalCtx());
+		// classifier 是单例，两次装配应引用同一对象（classifyRisk 引用相同）
+		expect(deps1.classifier).toBe(deps2.classifier);
+		expect(deps1.classifier.classifyRisk).toBe(deps2.classifier.classifyRisk);
 	});
 });
