@@ -4,10 +4,14 @@
   "type": "module",
   "main": "index.ts",
   "pi": {
-    "extensions": ["./index.ts"],
+    "extensions": [
+      "./index.ts"
+    ],
     "skills": []
   },
-  "keywords": ["pi-package"],
+  "keywords": [
+    "pi-package"
+  ],
   "scripts": {
     "test": "vitest run",
     "test:watch": "vitest"
@@ -28,5 +32,8 @@
     "croner": {
       "optional": true
     }
+  },
+  "dependencies": {
+    "@sinclair/typebox": "^0.34.49"
   }
 }
