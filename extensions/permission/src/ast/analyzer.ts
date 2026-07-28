@@ -186,6 +186,10 @@ function parsePlainCommand(cmd: Node): string[] | null {
 /**
  * 分析 bash 命令字符串的结构（层 1 AST 安全门）。
  *
+ * 主函数编排：空/超长/初始化快速路径 → parse → collectStructures（DFS）→
+ * parsePlainCommand 提取 argv → 组装 BashAnalysis。DFS + argv 提取已拆为独立
+ * helper（collectStructures / extractCommands），主函数 ≤80 行。
+ *
  * @param command 原始命令字符串
  * @returns BashAnalysis —— 永不 throw，失败时 fail-closed 返回 parseError:true
  */
@@ -197,94 +201,25 @@ export async function analyzeBashStructure(command: string): Promise<BashAnalysi
 
 	// 超长 → fail-closed
 	if (command.length > MAX_COMMAND_LENGTH) {
-		return {
-			clean: false,
-			commands: [],
-			dangerousStructures: ["INPUT_TOO_LONG"],
-			parseError: true,
-		};
+		return failClosed("INPUT_TOO_LONG");
 	}
 
 	const parser = await getBashParser();
 	if (parser === null) {
-		return {
-			clean: false,
-			commands: [],
-			dangerousStructures: ["INIT_FAILED"],
-			parseError: true,
-		};
+		return failClosed("INIT_FAILED");
 	}
 
 	let tree: Tree | null = null;
 	try {
 		tree = parser.parse(command);
-		if (!tree) {
-			return {
-				clean: false,
-				commands: [],
-				dangerousStructures: ["PARSE_NULL"],
-				parseError: true,
-			};
-		}
+		if (!tree) return failClosed("PARSE_NULL");
 
 		const root = tree.rootNode;
-		if (root.hasError) {
-			return {
-				clean: false,
-				commands: [],
-				dangerousStructures: ["ERROR"],
-				parseError: true,
-			};
-		}
+		if (root.hasError) return failClosed("ERROR");
 
-		// ── DFS 遍历（stack-based，与 Rust 一致用 node.children() 不是 namedChildren）──
-		// 收集非白名单节点 + command 节点。
-		const stack: Node[] = [root];
-		const dangerousStructures: string[] = [];
-		const commandNodes: Node[] = [];
-
-		while (stack.length > 0) {
-			const node = stack.pop() as Node;
-			const kind = node.type;
-
-			if (node.isNamed) {
-				if (!ALLOWED_KINDS.has(kind)) {
-					// 非白名单 named node → 危险结构
-					dangerousStructures.push(kind);
-				}
-				if (kind === "command") {
-					commandNodes.push(node);
-				}
-			} else {
-				// anonymous token —— 与 Rust 两条判定对应：
-				// 1. 含 &;| 但不在白名单 → 危险
-				// 2. 不在白名单且非空白 → 危险（括号/反引号/重定向符等）
-				const isAllowedOrWhitespace =
-					ALLOWED_PUNCT_TOKENS.has(kind) || kind.trim().length === 0;
-				if (hasControlOperatorChar(kind) && !ALLOWED_PUNCT_TOKENS.has(kind)) {
-					dangerousStructures.push(kind);
-				} else if (!isAllowedOrWhitespace) {
-					dangerousStructures.push(kind);
-				}
-			}
-
-			// node.children() 在 web-tree-sitter 是 getter（返回 Array<SyntaxNode>）
-			for (const child of node.children) {
-				stack.push(child);
-			}
-		}
-
-		// stack 是 LIFO，按 start_byte 排序恢复源码顺序（与 Rust 一致）
-		commandNodes.sort((a, b) => a.startIndex - b.startIndex);
-
-		const commands: string[][] = [];
-		for (const node of commandNodes) {
-			const words = parsePlainCommand(node);
-			if (words !== null) {
-				commands.push(words);
-			}
-			// words === null 时跳过该 command（clean 已由 dangerousStructures 决定）
-		}
+		// DFS 遍历收集危险结构 + command 节点（拆为 helper，主函数保持精简）
+		const { dangerousStructures, commandNodes } = collectStructures(root);
+		const commands = extractCommands(commandNodes);
 
 		return {
 			clean: dangerousStructures.length === 0,
@@ -296,14 +231,96 @@ export async function analyzeBashStructure(command: string): Promise<BashAnalysi
 		// 任何意外异常 → fail-closed
 		const msg = err instanceof Error ? err.message : String(err);
 		console.warn(`[pi-permission/ast] analyzeBashStructure exception: ${msg}`);
-		return {
-			clean: false,
-			commands: [],
-			dangerousStructures: [msg || "EXCEPTION"],
-			parseError: true,
-		};
+		return failClosed(msg || "EXCEPTION");
 	} finally {
 		// G1 critical: Tree 是 wasm 堆对象，不受 V8 GC 管，必须显式 delete 释放。
 		tree?.delete();
 	}
+}
+
+/** 构造 fail-closed BashAnalysis（clean=false, parseError=true, 单条 reason）。 */
+function failClosed(reason: string): BashAnalysis {
+	return {
+		clean: false,
+		commands: [],
+		dangerousStructures: [reason],
+		parseError: true,
+	};
+}
+
+/** DFS 遍历收集结果：危险结构节点类型 + command 节点。 */
+interface StructureCollection {
+	dangerousStructures: string[];
+	commandNodes: Node[];
+}
+
+/**
+ * DFS 遍历 AST（stack-based，与 Rust 一致用 node.children() 不是 namedChildren）。
+ *
+ * 收集：
+ *  - 非白名单 named node → dangerousStructures（command_substitution/subshell 等）
+ *  - 非白名单 anonymous token（含 &;| 或非空白）→ dangerousStructures
+ *  - command 节点 → commandNodes（后续 parsePlainCommand 提取 argv）
+ *
+ * @param root AST 根节点
+ * @returns 危险结构 + command 节点（commandNodes 已按 start_byte 排序恢复源码顺序）
+ */
+function collectStructures(root: Node): StructureCollection {
+	const stack: Node[] = [root];
+	const dangerousStructures: string[] = [];
+	const commandNodes: Node[] = [];
+
+	while (stack.length > 0) {
+		const node = stack.pop()!;
+		const kind = node.type;
+
+		if (node.isNamed) {
+			if (!ALLOWED_KINDS.has(kind)) {
+				// 非白名单 named node → 危险结构
+				dangerousStructures.push(kind);
+			}
+			if (kind === "command") {
+				commandNodes.push(node);
+			}
+		} else {
+			// anonymous token —— 与 Rust 两条判定对应：
+			// 1. 含 &;| 但不在白名单 → 危险
+			// 2. 不在白名单且非空白 → 危险（括号/反引号/重定向符等）
+			const isAllowedOrWhitespace =
+				ALLOWED_PUNCT_TOKENS.has(kind) || kind.trim().length === 0;
+			if (hasControlOperatorChar(kind) && !ALLOWED_PUNCT_TOKENS.has(kind)) {
+				dangerousStructures.push(kind);
+			} else if (!isAllowedOrWhitespace) {
+				dangerousStructures.push(kind);
+			}
+		}
+
+		// node.children 在 web-tree-sitter 是 getter（返回 Array<SyntaxNode>）
+		for (const child of node.children) {
+			stack.push(child);
+		}
+	}
+
+	// stack 是 LIFO，按 start_byte 排序恢复源码顺序（与 Rust 一致）
+	commandNodes.sort((a, b) => a.startIndex - b.startIndex);
+	return { dangerousStructures, commandNodes };
+}
+
+/**
+ * 从 command 节点列表提取 argv（用 parsePlainCommand）。
+ *
+ * parsePlainCommand 返回 null 的 command 跳过（clean 已由 dangerousStructures 决定）。
+ *
+ * @param commandNodes 已按源码顺序排序的 command 节点
+ * @returns argv 数组（每个元素是一条 command 的 argv）
+ */
+function extractCommands(commandNodes: Node[]): string[][] {
+	const commands: string[][] = [];
+	for (const node of commandNodes) {
+		const words = parsePlainCommand(node);
+		if (words !== null) {
+			commands.push(words);
+		}
+	}
+	return commands;
 }

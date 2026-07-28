@@ -191,3 +191,51 @@ export interface UserDecision {
 	reason?: string;
 	scope?: "once" | "session" | "always";
 }
+
+// ──────────────────────── W6 T8: 从 pipeline.ts 迁移的类型 ────────────────────────
+
+/**
+ * 用户审批 UI 需要的数据（runLayer3WithRacing / approve / strict 传给 requestUserApproval）。
+ *
+ * reason 是人类可读的「为什么要审批」（含工具名 + 命令 + 触发原因），由 buildApprovalRequest 构造。
+ * preClassification 仅 auto 模式 AI 先返回时携带（让用户看到 AI 的判断，辅助决策）。
+ *
+ * W6 T8：从 pipeline.ts 迁移到 types.ts（统一类型声明），pipeline.ts re-export 保持 public API。
+ */
+export interface ApprovalRequest {
+	toolName: string;
+	command?: string;
+	reason: string;
+	preClassification?: ClassifierResult;
+}
+
+/**
+ * checkPermission 的外部依赖（DI 便于测试 mock）。
+ *
+ * - analyzeBashStructure：W2 AST 分析（层 1）。
+ * - matchRulesForArgv：W3 规则匹配（层 2，bash happy path）。
+ * - getDefaultRules：W3 内置危险规则（12 条 builtin-danger）。
+ * - classifier.classifyRisk：W4 AI 风险分类（层 3）。
+ * - requestUserApproval：W5 用户审批 UI（TUI/RPC/headless 三分支）。
+ *
+ * 生产装配见 production.ts；测试 mock 见 pipeline.test.ts。
+ *
+ * W6 T8：从 pipeline.ts 迁移到 types.ts（统一类型声明），pipeline.ts re-export 保持 public API。
+ */
+export interface CheckPermissionDeps {
+	analyzeBashStructure: (command: string) => Promise<BashAnalysis>;
+	matchRulesForArgv: (argv: string[], rules: readonly Rule[]) => RuleMatchResult;
+	getDefaultRules: () => Rule[];
+	classifier: {
+		classifyRisk: (
+			ctx: ToolInvocationContext,
+			config: ClassifierConfig,
+			signal?: AbortSignal,
+		) => Promise<ClassifierResult>;
+	};
+	requestUserApproval: (
+		req: ApprovalRequest,
+		ctx: ToolInvocationContext,
+		signal: AbortSignal | undefined,
+	) => Promise<UserDecision>;
+}

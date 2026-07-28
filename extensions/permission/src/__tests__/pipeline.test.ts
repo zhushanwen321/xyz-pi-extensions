@@ -503,3 +503,98 @@ describe("G3: runLayer3WithRacing abort 时序", () => {
 		expect(decision.action).toBe("deny");
 	});
 });
+
+// ──────────────────────── W6 T6: applyAutoApproveOverrides 集成路径 ────────────────────────
+
+describe("W6 T6: applyAutoApproveOverrides 在 auto 模式的偏差补丁路径", () => {
+	it("low+allow+autoApproveLowRisk=false → ask → 转人工审批", async () => {
+		// AI 说 low+allow，但 autoApproveLowRisk=false → override 为 ask → 转人工
+		const cfg = { ...DEFAULT_CFG, autoApproveLowRisk: false };
+		const approve = vi.fn(() =>
+			Promise.resolve<UserDecision>({ approved: true, reason: "user-ok" }),
+		);
+		const deps = makeDeps({
+			analyze: () => Promise.resolve(cleanAnalysis([["curl"]])),
+			matchArgv: () => ({ action: "ask", matchedRule: undefined }),
+			classify: () => Promise.resolve(allowClassifier("low")), // AI allow low
+			approve,
+		});
+		const decision = await checkPermission("bash", { command: "curl x" }, "auto", cfg, [], deps, ctxBase);
+		// override 为 ask → 转人工 → 用户 approve → allow（source=user）
+		expect(decision.action).toBe("allow");
+		expect(decision.source).toBe("user");
+		expect(approve).toHaveBeenCalledOnce();
+	});
+
+	it("high+allow+autoDenyHighRisk=true → deny（override 生效，AI 决策胜出）", async () => {
+		// AI 说 high+allow，但 autoDenyHighRisk=true → override 为 deny。
+		// racing 会启动 approve（realUserPromise），但 AI 先返回 deny 时
+		// resolveUser 关闭对话框 + 决策源为 ai。用户 approve mock 永不返回
+		// 以确保 AI 赢 race。
+		const approve = vi.fn(() => new Promise<UserDecision>(() => undefined));
+		const deps = makeDeps({
+			analyze: () => Promise.resolve(cleanAnalysis([["curl"]])),
+			matchArgv: () => ({ action: "ask", matchedRule: undefined }),
+			classify: () => Promise.resolve(allowClassifier("high")), // AI allow high（危险）
+			approve,
+		});
+		const decision = await checkPermission("bash", { command: "curl x" }, "auto", DEFAULT_CFG, [], deps, ctxBase);
+		// override 为 deny → source=ai
+		expect(decision.action).toBe("deny");
+		expect(decision.source).toBe("ai");
+		expect(decision.riskLevel).toBe("high");
+	});
+});
+
+// ──────────────────────── W6 T6 G6: realUserPromise race 必要性 ────────────────────────
+
+describe("W6 T6 G6: runLayer3WithRacing 双 promise（userPromise + realUserPromise）", () => {
+	it("AI ask 时 realUserPromise 是最终决策源（userPromise 被 resolveUser 透传）", async () => {
+		// AI 返回 ask → 不 resolveUser，等 realUserPromise 最终决策
+		// 验证 realUserPromise 是真正驱动 AI-ask 分支完成的 promise
+		const deps = makeDeps({
+			classify: () => Promise.resolve(fallbackClassifier()), // outcome=ask
+			approve: () => Promise.resolve<UserDecision>({ approved: false, reason: "user-denied-after-ask" }),
+		});
+		const { runLayer3WithRacing } = await import("../pipeline.js");
+		const decision = await runLayer3WithRacing(
+			deps,
+			{ toolName: "bash", command: "x", cwd: "/tmp" },
+			DEFAULT_CFG,
+			undefined,
+		);
+		// realUserPromise resolve → 决策源 user，reason 透传
+		expect(decision.action).toBe("deny");
+		expect(decision.source).toBe("user");
+		expect(decision.reason).toContain("user-denied-after-ask");
+	});
+
+	it("realUserPromise.then 的 abort 副作用：用户决策后 AI signal 被 abort", async () => {
+		// 用户先返回时 realUserPromise.then 调 controller.abort() + resolveUser
+		// 验证 AI 的 signal 确实被 abort（F9 结论：双 promise 都需要，
+		// realUserPromise 驱动 abort 副作用 + userPromise 驱动 race 透传）
+		// 关键：abort 触发 AI resolve 为 ask（非 allow/deny），确保最终决策走 user 分支
+		// （无论 race 谁先 settle，AI ask 不改 outcome，user approved=true → allow）
+		let aiAborted = false;
+		const deps = makeDeps({
+			classify: (_ctx, _cfg, signal) =>
+				new Promise<ClassifierResult>((resolve) => {
+					signal?.addEventListener("abort", () => {
+						aiAborted = true;
+						resolve(fallbackClassifier()); // outcome=ask，不改 outcome
+					});
+				}),
+			approve: () => Promise.resolve<UserDecision>({ approved: true, reason: "user-fast" }),
+		});
+		const { runLayer3WithRacing } = await import("../pipeline.js");
+		const decision = await runLayer3WithRacing(
+			deps,
+			{ toolName: "bash", command: "x", cwd: "/tmp" },
+			DEFAULT_CFG,
+			undefined,
+		);
+		// 用户 approved=true → allow（无论 AI ask 是否先 settle，最终都走 user 决策）
+		expect(decision.action).toBe("allow");
+		expect(aiAborted).toBe(true); // realUserPromise.then 的 abort 副作用生效
+	});
+});

@@ -1,5 +1,5 @@
 /**
- * 用户审批 UI（W5 集成层）。
+ * 用户审批 UI（W5 集成层 + W6 T9 Reject-with-Reason）。
  *
  * 三分支（按 ctx.mode 分发，ctx 由 caller 从 Pi ExtensionContext 提取）：
  *  - tui：ctx.ui.custom 自定义 Component（ApprovalComponent，G4 补 invalidate）。
@@ -13,7 +13,10 @@
  *  - y/approve、n/deny、Esc/cancel。
  *  - signal abort → comp.cancel()（复用 _resolved 守卫，避免二次 done）。
  *
- * 若 pi-tui API 后续有阻碍，fallback 已就位（RPC/headless 完整），TUI 标 TODO W6 完善。
+ * W6 T9 G3 Reject-with-Reason：用户拒绝时，若 ctx.ui.input 存在则弹出文本输入框
+ * 采集真实拒绝理由（回传给 agent，辅助理解为何被拒）；ctx.ui.input 不存在则 fallback
+ * 用固定 "denied via rpc/tui" 文案。当前 RPC 分支已完整接入 ctx.ui.input；
+ * TUI 分支因 pi-tui Input 组件集成成本较高，暂保留简化 deny（TODO 后续迭代）。
  */
 
 import { type Component, matchesKey, type SelectItem, truncateToWidth } from "@mariozechner/pi-tui";
@@ -28,10 +31,15 @@ import type { ToolInvocationContext, UserDecision } from "./types.js";
  *
  * 提取为独立接口便于：
  *  - 测试 mock（不依赖完整 ExtensionContext）。
- *  - 明确 requestUserApproval 只用 mode + ui.{custom,select,notify}。
+ *  - 明确 requestUserApproval 只用 mode + ui.{custom,select,notify,input}。
  *
  * mode 来自 ExtensionContext.mode（"tui"|"rpc"|"json"|"print"）。
  * headless = mode !== "tui" && mode !== "rpc"（json/print 无交互 UI）。
+ *
+ * W6 T9 G3：ui.input 可选（SDK 提供，但测试 mock 可能缺失）。
+ * Reject-with-Reason 的「受阻」定义为可观测条件：
+ *  - ui.input 存在（typeof === 'function'）→ 采集真实 reason
+ *  - ui.input 缺失 → fallback 固定文案
  */
 export interface ApprovalContext {
 	mode: "tui" | "rpc" | "json" | "print";
@@ -42,6 +50,8 @@ export interface ApprovalContext {
 			factory: (tui: unknown, theme: unknown, kb: unknown, done: (result: T) => void) => Component,
 			options?: { overlay?: boolean },
 		): Promise<T>;
+		/** W6 T9 G3：可选文本输入（Reject-with-Reason 用）。SDK 提供，mock 可能缺失。 */
+		input?(title: string, placeholder?: string, opts?: unknown): Promise<string | undefined>;
 	};
 }
 
@@ -101,7 +111,7 @@ async function requestTui(
 
 // ──────────────────────── RPC 分支 ────────────────────────
 
-/** RPC 模式：ctx.ui.select（GUI 单选对话框）。 */
+/** RPC 模式：ctx.ui.select（GUI 单选对话框）+ W6 T9 G3 Reject-with-Reason。 */
 async function requestRpc(req: ApprovalRequest, approvalCtx: ApprovalContext): Promise<UserDecision> {
 	const title = formatTitle(req);
 	const options = ["Approve (once)", "Deny"];
@@ -112,7 +122,45 @@ async function requestRpc(req: ApprovalRequest, approvalCtx: ApprovalContext): P
 	if (choice.startsWith("Approve")) {
 		return { approved: true, reason: "approved via rpc", scope: "once" };
 	}
-	return { approved: false, reason: "denied via rpc" };
+	// W6 T9 G3：Reject-with-Reason。用户选 Deny 后，若 ctx.ui.input 存在则采集真实理由。
+	// 「受阻」可观测条件：typeof ctx.ui.input === 'function'。
+	return { approved: false, reason: await collectRejectReason(req, approvalCtx) };
+}
+
+/**
+ * W6 T9 G3：采集拒绝理由（Reject-with-Reason）。
+ *
+ * 可观测条件：ctx.ui.input 存在（typeof === 'function'）→ 弹文本输入框采集真实 reason。
+ * 否则 fallback 固定文案（"denied via <mode>"）。
+ *
+ * 空输入（用户直接回车）也 fallback 固定文案（不强制要求理由）。
+ *
+ * @param req 审批请求（用于构造提示标题）
+ * @param approvalCtx UI 上下文
+ * @returns 拒绝理由字符串（真实采集或 fallback）
+ */
+export async function collectRejectReason(
+	req: ApprovalRequest,
+	approvalCtx: ApprovalContext,
+): Promise<string> {
+	// 「受阻」可观测条件：ctx.ui.input 必须是函数
+	if (typeof approvalCtx.ui.input !== "function") {
+		return `denied via ${approvalCtx.mode}`;
+	}
+	try {
+		const reason = await approvalCtx.ui.input(
+			`[pi-permission] Reason for denying ${req.toolName}${req.command ? `: ${req.command}` : ""} (optional, press Enter to skip)`,
+			"Why are you denying this?",
+		);
+		// 空输入或 undefined（用户跳过）→ fallback
+		if (reason === undefined || reason.trim().length === 0) {
+			return `denied via ${approvalCtx.mode}`;
+		}
+		return `denied via ${approvalCtx.mode}: ${reason.trim()}`;
+	} catch {
+		// input 调用异常 → fail-soft fallback（不阻塞 deny）
+		return `denied via ${approvalCtx.mode}`;
+	}
 }
 
 // ──────────────────────── headless 分支 ────────────────────────
@@ -157,8 +205,10 @@ interface TuiLike {
  * G4：implements Component，补 invalidate()（调 tui.requestRender()）。
  * signal abort → cancel()（复用 _resolved 守卫）。
  *
- * TODO W6：若需更丰富的 TUI（方向键选择 once/session/always scope、高亮风险等级），
- * 参考 ask-user AskUserComponent 的 SelectList 集成。当前简化版满足核心审批流。
+ * TODO W6：若需更丰富的 TUI（方向键选择 once/session/always scope、高亮风险等级、
+ * Reject-with-Reason 的内联文本输入），参考 ask-user AskUserComponent 的 SelectList
+ * + pi-tui Input 组件集成。当前简化版的 deny 走固定文案（RPC 分支已接入 ctx.ui.input
+ * 采集真实理由，TUI 分支因 Input 组件集成成本较高暂保留简化 deny，后续迭代补齐）。
  */
 export class ApprovalComponent implements Component {
 	private readonly req: ApprovalRequest;

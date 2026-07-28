@@ -217,3 +217,125 @@ describe("MT-cache: resolvePattern 缓存", () => {
 		expect(resolvePattern(builtinRule)).not.toBe(resolvePattern(userR));
 	});
 });
+
+// ──────────────────────── W6 T5 补充：退化路径引号/空格 ────────────────────────
+
+describe("MT-degenerate: matchRules 退化路径处理引号/空格", () => {
+	it("git commit -m 'a b' —— 含空格和单引号的 command 字符串", () => {
+		// 退化路径对原始 command 字符串匹配，引号原样保留
+		// builtin-danger 含 \brm\b 等正则；git commit 不命中 → ask
+		const r = matchRules("bash", "git commit -m 'a b'", getDefaultRules());
+		expect(r.action).toBe("ask");
+		expect(r.matchedRule).toBeUndefined();
+	});
+
+	it("git commit -m 'a b' 命中 user wildcard allow", () => {
+		// user 规则 'git commit *' 应匹配（wildcard * 跨空格）
+		const rules: Rule[] = [userRule("u1", "git commit *", "allow")];
+		const r = matchRules("bash", "git commit -m 'a b'", rules);
+		expect(r.action).toBe("allow");
+		expect(r.matchedRule?.id).toBe("u1");
+	});
+
+	it("含双引号嵌套空格的 command 字符串", () => {
+		// command 字符串原样匹配（不解析引号语义）
+		const r = matchRules("bash", 'echo "hello world"', getDefaultRules());
+		// echo 命中 builtin-danger？查实际行为：echo 不在 danger 列表 → ask
+		expect(r.action).toBe("ask");
+	});
+});
+
+// ──────────────────────── W6 T5 补充：拼接顺序（last-match-wins） ────────────────────────
+
+describe("MT-buildOrder: getDefaultRules + userRules 拼接顺序（last-match-wins）", () => {
+	it("pipeline 拼接顺序：[...getDefaultRules(), ...userRules] —— user 在后", () => {
+		// 模拟 pipeline.ts:403 的拼接：[...deps.getDefaultRules(), ...userRules]
+		// builtin-danger 有 rm 规则（deny），user 加一条 rm allow → user 在后应胜出
+		const builtin = getDefaultRules();
+		const userAllow: Rule = { id: "u-override", tool: "bash", pattern: "rm *", action: "allow", source: "user" };
+		const combined = [...builtin, userAllow];
+
+		// rm 命令：builtin deny 先匹配，user allow 后匹配 → last-match-wins → allow
+		const r = matchRulesForArgv(["rm", "-rf", "/tmp"], combined);
+		expect(r.action).toBe("allow");
+		expect(r.matchedRule?.id).toBe("u-override");
+	});
+
+	it("user deny 在 builtin allow 之后 → deny（last-match-wins）", () => {
+		// 构造场景：先 builtin-safe（虚拟，通过白名单）→ 但白名单优先级最高。
+		// 这里测纯 rules 数组顺序：allow 在前，deny 在后 → deny 胜
+		const allow: Rule = userRule("u1", "npm *", "allow");
+		const deny: Rule = userRule("u2", "npm *", "deny");
+		const combined = [allow, deny];
+		const r = matchRulesForArgv(["npm", "install"], combined);
+		expect(r.action).toBe("deny");
+	});
+
+	it("getDefaultRules 全部 source=builtin-danger", () => {
+		// 验证内置规则的 source 标签（确保拼接时 builtin 在前）
+		const builtin = getDefaultRules();
+		expect(builtin.length).toBeGreaterThan(0);
+		for (const rule of builtin) {
+			expect(rule.source).toBe("builtin-danger");
+			expect(rule.action).toBe("deny");
+		}
+	});
+});
+
+// ──────────────────────── W6 T5 补充：ReDoS 性能 ────────────────────────
+
+describe("MT-redos: wildcard 超长 pattern 不触发 ReDoS（<100ms）", () => {
+	it("100 个 * 的 pattern 编译 + 匹配 < 100ms", () => {
+		// 构造 100 个 * 的 pattern（catastrophic backtracking 风险场景）
+		const pattern = "*".repeat(100);
+		const rule = userRule("u-redos", pattern, "allow");
+
+		const start = Date.now();
+		// 编译（resolvePattern）+ 多次匹配
+		const re = resolvePattern(rule);
+		const target = "a".repeat(50) + " " + "b".repeat(50);
+		for (let i = 0; i < 100; i++) {
+			re.test(target);
+		}
+		const elapsed = Date.now() - start;
+
+		// 阈值 100ms（含编译 + 100 次匹配）；ReDoS 会爆炸到秒级
+		expect(elapsed).toBeLessThan(100);
+	});
+
+	it("matchRulesForArgv 对超长 pattern 命令 < 100ms", () => {
+		const pattern = "*".repeat(100);
+		const rules: Rule[] = [userRule("u1", pattern, "allow")];
+		const argv = ["a".repeat(50), "b".repeat(50)];
+
+		const start = Date.now();
+		const r = matchRulesForArgv(argv, rules);
+		const elapsed = Date.now() - start;
+
+		expect(r.action).toBe("allow");
+		expect(elapsed).toBeLessThan(100);
+	});
+});
+
+// ──────────────────────── W6 T5 补充：matcher no-match ask 契约 ────────────────────────
+
+describe("MT-contract: no-match ask 语义契约", () => {
+	it("matchRulesForArgv no-match 永远返回 { action:'ask', matchedRule:undefined }", () => {
+		// 非白名单命令 + 无匹配规则 → ask（不是 deny，让下游 AI/人工判断）
+		const r = matchRulesForArgv(["curl", "http://example.com"], []);
+		expect(r).toEqual({ action: "ask", matchedRule: undefined });
+	});
+
+	it("matchRules no-match 永远返回 { action:'ask', matchedRule:undefined }", () => {
+		const r = matchRules("bash", "nonexistent-command --flag", []);
+		expect(r).toEqual({ action: "ask", matchedRule: undefined });
+	});
+
+	it("ask 契约：deny 必须有 matchedRule（deny 不应匿名）", () => {
+		// 内置危险规则命中时必须携带 matchedRule（审计/调试用）
+		const r = matchRulesForArgv(["rm", "-rf", "/"], getDefaultRules());
+		expect(r.action).toBe("deny");
+		expect(r.matchedRule).toBeDefined();
+		expect(r.matchedRule?.source).toBe("builtin-danger");
+	});
+});

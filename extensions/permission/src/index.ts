@@ -3,14 +3,15 @@
  *
  * 四档权限模式（yolo/auto/approve/strict）+ 三层管道（AST + 规则 + AI Classifier）。
  *
- * W5 阶段（本文件）：tool_call handler 接入三层管道（checkPermission）。
+ * W5 阶段：tool_call handler 接入三层管道（checkPermission）。
  *  - G5：显式 approvalChain promise chain 串行化（Pi 不保证 tool_call handler 串行，
  *    但权限检查涉及共享状态/UI 对话框，必须串行避免竞态）。
  *  - fail-closed：handler 异常 → block + reason（不放行）。
  *  - session 隔离：config 在 session_start 重建的闭包，每 session 独立。
  *  - yolo 快速路径：mode=yolo 或 enabled=false → 直接 return undefined（不跑管道）。
  *
- * statusline 集成（ctx.ui.setFooter 的 TUI Component）推到 W6，本 wave 不做。
+ * W6 阶段：session_start 注册权限 footer（ctx.ui.setFooter），显示当前 mode + enabled。
+ *  - 单例限制：Pi 只有一个 footer 槽位，会覆盖其他扩展的 footer（README 注明）。
  */
 
 import type {
@@ -23,6 +24,7 @@ import { handlePermissionCommand } from "./commands.js";
 import { getConfigPath, loadAndWatchConfig, saveConfig } from "./config.js";
 import { checkPermission, type CheckPermissionDeps } from "./pipeline.js";
 import { createPipelineDeps } from "./production.js";
+import { registerPermissionFooter } from "./statusline.js";
 import type { PermissionConfig } from "./types.js";
 
 // ──────────────────────── tool_call event 最小子集 ────────────────────────
@@ -62,9 +64,19 @@ export default function permissionExtension(pi: ExtensionAPI): void {
 		config = loadAndWatchConfig(getConfigPath(), (msg) => console.warn(msg));
 	}
 
-	// ──────────────────────── session_start：重载配置 ────────────────────────
-	pi.on("session_start", (_event: unknown, _ctx: ExtensionContext) => {
+	// ──────────────────────── session_start：重载配置 + 注册 footer ────────────────────────
+	pi.on("session_start", (_event: unknown, ctx: ExtensionContext) => {
 		refreshConfig();
+		// W6 T2：注册权限 footer（显示当前 mode + enabled）。
+		// 单例限制：Pi 只有一个 footer 槽位，会覆盖（或被覆盖）其他扩展的 footer
+		// （如 @zhushanwen/pi-statusline）。已知限制，README 注明。
+		// getMode/getEnabled 闭包读最新 config（session 内 mode 可变）。
+		// registerPermissionFooter 内部 duck typing：headless/mock ctx 无 setFooter/theme 时跳过。
+		registerPermissionFooter(
+			ctx.ui as { setFooter?: unknown; theme?: unknown },
+			() => config.mode,
+			() => config.enabled,
+		);
 	});
 
 	// ──────────────────────── /permission 命令 ────────────────────────
@@ -147,6 +159,11 @@ async function processToolCall(
 				options?: { overlay?: boolean },
 			) =>
 				ctx.ui.custom<T>(factory as Parameters<typeof ctx.ui.custom<T>>[0], options),
+			// W6 T9 G3：Reject-with-Reason。ctx.ui.input 存在则透传（采集真实拒绝理由）。
+			// approval.ts 的 collectRejectReason 会用 typeof 判断是否可用，不可用则 fallback。
+			...(typeof ctx.ui.input === "function"
+				? { input: (title: string, placeholder?: string, opts?: unknown) => ctx.ui.input(title, placeholder, opts) }
+				: {}),
 		},
 	};
 	const deps: CheckPermissionDeps = createPipelineDeps(approvalCtx);

@@ -127,6 +127,14 @@ describe("WT8-WT15: 危险结构（clean=false）", () => {
 		expect(r.clean).toBe(false);
 		expect(r.dangerousStructures.length).toBeGreaterThan(0);
 	});
+
+	it("WT15b: echo $HOME —— simple_expansion（裸变量展开）", async () => {
+		// $HOME 在双引号外 → tree-sitter-bash 产出 simple_expansion named node（非白名单）
+		const r = await analyzeBashStructure("echo $HOME");
+		expect(r.clean).toBe(false);
+		expect(r.parseError).toBe(false);
+		expect(r.dangerousStructures).toContain("simple_expansion");
+	});
 });
 
 // ──────────────────────── WT16-WT19: malformed ────────────────────────
@@ -182,15 +190,12 @@ describe("WT20: 空命令", () => {
 
 describe("WT21-WT22: 超长边界", () => {
 	it("WT21: 恰好 65536 字节（边界值，应可解析）", async () => {
-		// 65536 字节的合法命令 —— `ls ` * n（每 3 字节）补齐到 65536
-		const cmd = "ls ".repeat(21845) + "ls"; // 21845*3 + 2 = 65537，调整
+		// 65536 字节的合法命令，padEnd 到精确长度
 		const exact = "ls".padEnd(65536, " x");
 		expect(exact.length).toBe(65536);
 		const r = await analyzeBashStructure(exact);
 		// 边界值不超长 → 走正常解析（clean 取决于 grammar，但 parseError 不应是 INPUT_TOO_LONG）
 		expect(r.dangerousStructures).not.toContain("INPUT_TOO_LONG");
-		// 避免未使用变量告警
-		expect(cmd.length).toBeGreaterThan(0);
 	});
 
 	it("WT22: 65537 字节（超长，fail-closed）", async () => {

@@ -6,6 +6,7 @@ import { describe, expect, it, vi } from "vitest";
 
 import {
 	ApprovalComponent,
+	collectRejectReason,
 	type ApprovalContext,
 	renderApprovalView,
 	requestUserApproval,
@@ -16,14 +17,18 @@ import type { ClassifierResult, ToolInvocationContext, UserDecision } from "../t
 // ──────────────────────── mock helpers ────────────────────────
 
 function makeApprovalCtx(overrides: Partial<ApprovalContext> = {}): ApprovalContext {
-	return {
+	const base: ApprovalContext = {
 		mode: "headless",
 		ui: {
 			notify: vi.fn(),
 			select: vi.fn(() => Promise.resolve(undefined)),
 			custom: vi.fn(() => Promise.resolve(undefined)),
 		},
-		...overrides,
+	};
+	// 浅合并 ui（保留 base.ui 的方法，允许 overrides.ui 增量覆盖/新增如 input）
+	return {
+		mode: overrides.mode ?? base.mode,
+		ui: { ...base.ui, ...overrides.ui },
 	};
 }
 
@@ -227,5 +232,135 @@ describe("renderApprovalView（含 AI 预分类）", () => {
 		expect(joined).toContain("high");
 		expect(joined).toContain("deny");
 		expect(joined).toContain("0.95");
+	});
+});
+
+// ──────────────────────── W6 T9 G3: Reject-with-Reason ────────────────────────
+
+describe("W6 T9 G3: Reject-with-Reason（collectRejectReason）", () => {
+	it("ctx.ui.input 存在 → 采集真实 reason", async () => {
+		const approvalCtx = makeApprovalCtx({
+			mode: "rpc",
+			ui: {
+				notify: vi.fn(),
+				select: vi.fn(),
+				custom: vi.fn(),
+				input: vi.fn(() => Promise.resolve("destroys production data")),
+			},
+		});
+		const reason = await collectRejectReason(req, approvalCtx);
+		expect(reason).toBe("denied via rpc: destroys production data");
+		expect(approvalCtx.ui.input).toHaveBeenCalledOnce();
+	});
+
+	it("ctx.ui.input 不存在 → fallback 固定文案（受阻条件）", async () => {
+		// makeApprovalCtx 默认无 input → fallback
+		const approvalCtx = makeApprovalCtx({ mode: "rpc" });
+		const reason = await collectRejectReason(req, approvalCtx);
+		expect(reason).toBe("denied via rpc");
+	});
+
+	it("ctx.ui.input 返回空字符串 → fallback（用户跳过）", async () => {
+		const approvalCtx = makeApprovalCtx({
+			mode: "rpc",
+			ui: {
+				notify: vi.fn(),
+				select: vi.fn(),
+				custom: vi.fn(),
+				input: vi.fn(() => Promise.resolve("   ")),
+			},
+		});
+		const reason = await collectRejectReason(req, approvalCtx);
+		expect(reason).toBe("denied via rpc");
+	});
+
+	it("ctx.ui.input 返回 undefined → fallback（用户取消）", async () => {
+		const approvalCtx = makeApprovalCtx({
+			mode: "rpc",
+			ui: {
+				notify: vi.fn(),
+				select: vi.fn(),
+				custom: vi.fn(),
+				input: vi.fn(() => Promise.resolve(undefined)),
+			},
+		});
+		const reason = await collectRejectReason(req, approvalCtx);
+		expect(reason).toBe("denied via rpc");
+	});
+
+	it("ctx.ui.input 抛异常 → fail-soft fallback（不阻塞 deny）", async () => {
+		const approvalCtx = makeApprovalCtx({
+			mode: "rpc",
+			ui: {
+				notify: vi.fn(),
+				select: vi.fn(),
+				custom: vi.fn(),
+				input: vi.fn(() => Promise.reject(new Error("input UI crashed"))),
+			},
+		});
+		const reason = await collectRejectReason(req, approvalCtx);
+		expect(reason).toBe("denied via rpc");
+	});
+
+	it("reason 被去空白（trim）", async () => {
+		const approvalCtx = makeApprovalCtx({
+			mode: "rpc",
+			ui: {
+				notify: vi.fn(),
+				select: vi.fn(),
+				custom: vi.fn(),
+				input: vi.fn(() => Promise.resolve("  too dangerous  ")),
+			},
+		});
+		const reason = await collectRejectReason(req, approvalCtx);
+		expect(reason).toBe("denied via rpc: too dangerous");
+	});
+});
+
+describe("W6 T9 G3: RPC 分支拒绝时调 input 采集理由", () => {
+	it("用户选 Deny + ctx.ui.input 存在 → reason 含真实理由", async () => {
+		const approvalCtx = makeApprovalCtx({
+			mode: "rpc",
+			ui: {
+				notify: vi.fn(),
+				select: vi.fn(() => Promise.resolve("Deny")),
+				custom: vi.fn(),
+				input: vi.fn(() => Promise.resolve("not safe for prod")),
+			},
+		});
+		const decision = await requestUserApproval(req, ctx, undefined, approvalCtx);
+		expect(decision.approved).toBe(false);
+		expect(decision.reason).toBe("denied via rpc: not safe for prod");
+		expect(approvalCtx.ui.input).toHaveBeenCalledOnce();
+	});
+
+	it("用户选 Deny + ctx.ui.input 缺失 → reason 是 fallback 文案", async () => {
+		const approvalCtx = makeApprovalCtx({
+			mode: "rpc",
+			ui: {
+				notify: vi.fn(),
+				select: vi.fn(() => Promise.resolve("Deny")),
+				custom: vi.fn(),
+			},
+		});
+		const decision = await requestUserApproval(req, ctx, undefined, approvalCtx);
+		expect(decision.approved).toBe(false);
+		expect(decision.reason).toBe("denied via rpc");
+	});
+
+	it("用户选 Approve → 不调 input（approve 不需要理由）", async () => {
+		const inputMock = vi.fn(() => Promise.resolve("should-not-be-called"));
+		const approvalCtx = makeApprovalCtx({
+			mode: "rpc",
+			ui: {
+				notify: vi.fn(),
+				select: vi.fn(() => Promise.resolve("Approve (once)")),
+				custom: vi.fn(),
+				input: inputMock,
+			},
+		});
+		const decision = await requestUserApproval(req, ctx, undefined, approvalCtx);
+		expect(decision.approved).toBe(true);
+		expect(inputMock).not.toHaveBeenCalled();
 	});
 });

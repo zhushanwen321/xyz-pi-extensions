@@ -18,7 +18,8 @@
 
 import { wildcardToRegExp } from "./rules/wildcard.js";
 import type {
-	BashAnalysis,
+	ApprovalRequest,
+	CheckPermissionDeps,
 	ClassifierConfig,
 	ClassifierResult,
 	PermissionAction,
@@ -30,49 +31,12 @@ import type {
 	UserDecision,
 } from "./types.js";
 
-// ──────────────────────── 依赖注入接口 ────────────────────────
+// ──────────────────────── 依赖注入接口（W6 T8 迁移到 types.ts） ────────────────────────
 
-/**
- * checkPermission 的外部依赖（DI 便于测试 mock）。
- *
- * - analyzeBashStructure：W2 AST 分析（层 1）。
- * - matchRulesForArgv：W3 规则匹配（层 2，bash happy path）。
- * - getDefaultRules：W3 内置危险规则（12 条 builtin-danger）。
- * - classifier.classifyRisk：W4 AI 风险分类（层 3）。
- * - requestUserApproval：W5 用户审批 UI（TUI/RPC/headless 三分支）。
- *
- * 生产装配见 production.ts；测试 mock 见 pipeline.test.ts。
- */
-export interface CheckPermissionDeps {
-	analyzeBashStructure: (command: string) => Promise<BashAnalysis>;
-	matchRulesForArgv: (argv: string[], rules: readonly Rule[]) => RuleMatchResult;
-	getDefaultRules: () => Rule[];
-	classifier: {
-		classifyRisk: (
-			ctx: ToolInvocationContext,
-			config: ClassifierConfig,
-			signal?: AbortSignal,
-		) => Promise<ClassifierResult>;
-	};
-	requestUserApproval: (
-		req: ApprovalRequest,
-		ctx: ToolInvocationContext,
-		signal: AbortSignal | undefined,
-	) => Promise<UserDecision>;
-}
-
-/**
- * 用户审批 UI 需要的数据（runLayer3WithRacing / approve / strict 传给 requestUserApproval）。
- *
- * reason 是人类可读的「为什么要审批」（含工具名 + 命令 + 触发原因），由 buildApprovalRequest 构造。
- * preClassification 仅 auto 模式 AI 先返回时携带（让用户看到 AI 的判断，辅助决策）。
- */
-export interface ApprovalRequest {
-	toolName: string;
-	command?: string;
-	reason: string;
-	preClassification?: ClassifierResult;
-}
+// CheckPermissionDeps 与 ApprovalRequest 已迁移到 types.ts（W6 T8 统一类型声明）。
+// 此处 re-export 保持 public API 不变（下游 approval.ts / production.ts / 测试仍从
+// pipeline.js import 这些类型，不破坏现有 import 路径）。
+export type { ApprovalRequest, CheckPermissionDeps } from "./types.js";
 
 // ──────────────────────── buildApprovalRequest ────────────────────────
 
@@ -264,6 +228,15 @@ export async function runLayer3WithRacing(
 	);
 
 	// 启动用户审批（真实对话框）。用户先返回 → abort AI。
+	//
+	// W6 G6（F9 结论固化）：userPromise 与 realUserPromise 双 promise 都是必要的：
+	//  - realUserPromise：承载 requestUserApproval 的真实返回值 + abort 副作用
+	//    （用户决策后 controller.abort() 取消 AI）。它驱动 AI-ask 分支的最终 await。
+	//  - userPromise：可被 resolveUser 外部 resolve（AI 赢时关闭对话框），用于 race
+	//    透传（AI allow/deny 时 resolveUser 关闭 UI，userPromise 立即 settle）。
+	// 删除任一都会破坏一种竞态：仅 realUserPromise → AI 赢时无法关闭对话框；
+	// 仅 userPromise → AI-ask 分支无法拿到用户的最终决策（userPromise 只能被
+	// resolveUser resolve，AI-ask 时不调 resolveUser）。F9 测试已验证两者缺一不可。
 	const realUserPromise = deps.requestUserApproval(req, ctx, controller.signal).then((d) => {
 		controller.abort(); // 用户已决策，取消 AI
 		resolveUser(d); // 透传给 userPromise（race 用）
