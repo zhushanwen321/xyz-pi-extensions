@@ -17,8 +17,8 @@
  * FR-6.7：移除 pendingPause（ESC 改用 ctx.signal.aborted 守卫，在 event-adapter）。
  */
 
-import type { ExtensionAPI, ExtensionCommandContext, ExtensionContext, Theme } from "@mariozechner/pi-coding-agent";
-import { Text } from "@mariozechner/pi-tui";
+import type { ExtensionAPI, ExtensionCommandContext, ExtensionContext, Theme } from "@earendil-works/pi-coding-agent";
+import { Text } from "@earendil-works/pi-tui";
 
 import { handleGoalCommand } from "./adapters/command-adapter";
 import {

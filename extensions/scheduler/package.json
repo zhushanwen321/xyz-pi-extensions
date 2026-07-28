@@ -25,12 +25,12 @@
     "vitest.config.ts"
   ],
   "peerDependencies": {
-    "@mariozechner/pi-coding-agent": "*",
+    "@earendil-works/pi-coding-agent": "*",
     "@sinclair/typebox": "*",
     "croner": "^9.0.0"
   },
   "peerDependenciesMeta": {
-    "@mariozechner/pi-coding-agent": {
+    "@earendil-works/pi-coding-agent": {
       "optional": true
     },
     "@sinclair/typebox": {

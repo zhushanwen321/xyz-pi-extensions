@@ -25,8 +25,8 @@
  */
 
 import { StringEnum } from "@earendil-works/pi-ai";
-import type { ExtensionAPI, ExtensionContext, Theme } from "@mariozechner/pi-coding-agent";
-import { Text } from "@mariozechner/pi-tui";
+import type { ExtensionAPI, ExtensionContext, Theme } from "@earendil-works/pi-coding-agent";
+import { Text } from "@earendil-works/pi-tui";
 import { type GuiComponent, guiComponent, type GuiRenderResult,guiResult } from "@xyz-agent/extension-protocol";
 import { type Static, Type } from "typebox";
 

@@ -1,6 +1,6 @@
 import * as fs from "node:fs";
 
-import type { ExtensionAPI, ExtensionContext, SessionBeforeCompactEvent, SessionBeforeTreeEvent } from "@mariozechner/pi-coding-agent";
+import type { ExtensionAPI, ExtensionContext, SessionBeforeCompactEvent, SessionBeforeTreeEvent } from "@earendil-works/pi-coding-agent";
 
 import type { PlanSessionMap, PlanState } from "./state.js";
 import { getPlanState } from "./state.js";

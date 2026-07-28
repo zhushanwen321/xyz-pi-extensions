@@ -26,8 +26,8 @@ import { promises as fsPromises } from "node:fs";
 import { homedir } from "node:os";
 import { join as pathJoin } from "node:path";
 
-import type { ExtensionContext } from "@mariozechner/pi-coding-agent";
-import { Key, matchesKey } from "@mariozechner/pi-tui";
+import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
+import { Key, matchesKey } from "@earendil-works/pi-tui";
 
 import {
   getAllToolCalls,

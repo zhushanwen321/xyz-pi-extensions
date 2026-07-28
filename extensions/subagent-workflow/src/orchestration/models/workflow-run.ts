@@ -23,7 +23,7 @@
  * （runtime=undefined）。AbortController 一次性无法复用。
  * - resume 走 assignRuntime(new RunRuntime(...))，重建 worker/gate/controller。
  *
- * retryNode / worker-error-retry（G5-001 + G6-001）：
+ * worker-error-retry（G5-001 + G6-001）：
  * - replaceRuntime(newRt): 前置 status==="running"（G6-001），原子释放前一个 runtime
  * + 绑定新 runtime，全程保持不变式 I1（中间不经过 runtime===undefined 的可见状态）。
  * - paused 状态下 retry 被拒（要 retry 先 resume）。
@@ -243,11 +243,11 @@ export class WorkflowRun {
     this.runtime.release("pause");
     this.runtime = undefined;
  // 不改 status——调用方（transition）负责。独立调用时调用方需自行确保
- // status 一致（如 retryNode 用 replaceRuntime 而非 release+assign）。
+ // status 一致（如 worker-error-retry 用 replaceRuntime 而非 release+assign）。
   }
 
  /**
- * 原地替换 runtime（G5-001：retryNode / worker-error-retry）。
+ * 原地替换 runtime（G5-001：worker-error-retry）。
  *
  * 前置：status==="running"（G6-001：paused 下拒绝，要 retry 先 resume）。
  * 原子地：释放旧 runtime（worker.terminate + abort）+ 绑定新 runtime，

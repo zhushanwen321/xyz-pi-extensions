@@ -14,7 +14,7 @@ import { resolve } from "node:path";
 import type { WorkflowMeta, WorkflowSource } from "./models/workflow-script.ts";
 export type { WorkflowMeta, WorkflowSource };
 
-import { getAgentDir } from "@mariozechner/pi-coding-agent";
+import { getAgentDir } from "@earendil-works/pi-coding-agent";
 
 import {
   discoverResources,

@@ -1,4 +1,4 @@
-import type { ExtensionAPI, ExtensionContext } from '@mariozechner/pi-coding-agent'
+import type { ExtensionAPI, ExtensionContext } from '@earendil-works/pi-coding-agent'
 
 import { autoName, generateTaskId } from './format.js'
 import { computeNextCronRunAt, parseDuration } from './parsing.js'

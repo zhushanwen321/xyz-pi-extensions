@@ -4,7 +4,7 @@
 
 import { AsyncLocalStorage } from "node:async_hooks";
 
-import type { ExtensionMode } from "@mariozechner/pi-coding-agent";
+import type { ExtensionMode } from "@earendil-works/pi-coding-agent";
 
 import type { AgentResult as WorkflowAgentResult } from "../orchestration/models/types.ts";
 // D-A10: workflow 侧 AgentResult 映射（executeAndAwait 出口）
@@ -597,7 +597,7 @@ export class SubagentService {
     mode: ExecutionMode,
   ): ExecutionRecord {
     // FR-1: record id 用全局 UUID，不依赖 transcript/PID
-    const id = crypto.randomUUID();
+    const id = `sa-${crypto.randomUUID()}`;
     const controller = new AbortController();
 
     // 从 async 调用链读父执行上下文：主 session 链上无 store → 顶层 record；

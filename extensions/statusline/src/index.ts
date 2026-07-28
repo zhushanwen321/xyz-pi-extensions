@@ -14,9 +14,9 @@
 import { existsSync } from "node:fs";
 import { join, sep } from "node:path";
 
-import type { AssistantMessage } from "@mariozechner/pi-ai";
-import type { ExtensionAPI, ExtensionContext, ReadonlyFooterDataProvider, Theme } from "@mariozechner/pi-coding-agent";
-import { truncateToWidth } from "@mariozechner/pi-tui";
+import type { AssistantMessage } from "@earendil-works/pi-ai";
+import type { ExtensionAPI, ExtensionContext, ReadonlyFooterDataProvider, Theme } from "@earendil-works/pi-coding-agent";
+import { truncateToWidth } from "@earendil-works/pi-tui";
 import {
 	buildRuntimeProviders,
 	type CacheRatioData,

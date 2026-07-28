@@ -1,3 +1,5 @@
+import type { ExtensionAPI, ExtensionCommandContext } from '@earendil-works/pi-coding-agent'
+
 import { formatRelativeTime, formatSchedule } from './format.js'
 import { parseSchedule } from './parsing.js'
 import type { SchedulerRuntime } from './runtime.js'
@@ -43,7 +45,7 @@ function tokenizeQuoted(input: string): string[] {
  * 尚未触发、runtime 还是 null。getArgumentCompletions / handler 真正执行时才读 runtime 当前值。
  */
 export function registerScheduleCommand(
-  pi: { registerCommand: (name: string, opts: unknown) => void },
+  pi: ExtensionAPI,
   getRuntime: () => SchedulerRuntime | null,
 ) {
   pi.registerCommand('schedule', {
@@ -73,65 +75,76 @@ export function registerScheduleCommand(
       }
       return null
     },
-    handler: async (args: string) => {
-      const runtime = getRuntime()
-      if (!runtime) return 'Scheduler not initialized: session not started.'
-
-      const trimmed = args.trim()
-      if (!trimmed) {
-        // TODO: 打开 TUI 管理器（W5 实现）
-        return 'TUI manager not yet implemented. Use /schedule list to see tasks.'
-      }
-
-      const parts = tokenizeQuoted(trimmed)
-      const first = parts[0]!.toLowerCase()
-
-      // 子命令路由
-      if (first === 'list') {
-        const tasks = runtime.listTasks()
-        if (tasks.length === 0) return 'No scheduled tasks.'
-        return tasks.map(t =>
-          `${t.enabled ? '●' : '○'} ${t.id} ${t.name} · ${formatSchedule(t.schedule)} · ${formatRelativeTime(t.nextRunAt)}`
-        ).join('\n')
-      }
-
-      if (first === 'on' || first === 'off') {
-        const id = parts[1]
-        if (!id) return `Usage: /schedule ${first} <id>`
-        const success = await runtime.toggleTask(id, first === 'on')
-        return success ? `Task ${id} ${first === 'on' ? 'enabled' : 'disabled'}.` : `Task ${id} not found.`
-      }
-
-      if (first === 'rm') {
-        const id = parts[1]
-        if (!id) return 'Usage: /schedule rm <id>'
-        const success = runtime.deleteTask(id)
-        return success ? `Task ${id} deleted.` : `Task ${id} not found.`
-      }
-
-      if (first === 'run') {
-        const id = parts[1]
-        if (!id) return 'Usage: /schedule run <id>'
-        const success = await runtime.runTaskNow(id)
-        return success ? `Task ${id} executed.` : `Task ${id} not found.`
-      }
-
-      // 创建任务分支
-      const kind = first === 'once' ? 'once' as const : first === 'cron' ? 'recurring' as const : undefined
-      const scheduleStart = kind ? 1 : 0
-      const scheduleInput = parts[scheduleStart]
-      if (!scheduleInput) return 'Usage: /schedule <schedule> <prompt>'
-
-      const prompt = parts.slice(scheduleStart + 1).join(' ')
-      if (!prompt) return 'Usage: /schedule <schedule> <prompt>'
-
-      const parsed = await parseSchedule(scheduleInput)
-      if (!parsed) {
-        return `Invalid schedule: "${scheduleInput}". Use duration (5m/2h/1d) or cron expression.`
-      }
-
-      const task = await runtime.addTask(prompt, parsed.spec, { kind })
-      return `Task "${task.name}" (${task.id}) created. Schedule: ${formatSchedule(task.schedule)}`
+    handler: async (args: string, ctx: ExtensionCommandContext) => {
+      const result = await executeScheduleCommand(getRuntime(), args)
+      ctx.ui.notify(result, 'info')
     },
   })
+}
+
+/**
+ * Core logic for /schedule command. Extracted for testability (handler returns
+ * void per SDK contract; tests call this function directly to assert output).
+ */
+export async function executeScheduleCommand(
+  runtime: SchedulerRuntime | null,
+  args: string,
+): Promise<string> {
+  if (!runtime) return 'Scheduler not initialized: session not started.'
+
+  const trimmed = args.trim()
+  if (!trimmed) {
+    // TODO: 打开 TUI 管理器（W5 实现）
+    return 'TUI manager not yet implemented. Use /schedule list to see tasks.'
+  }
+
+  const parts = tokenizeQuoted(trimmed)
+  const first = parts[0]!.toLowerCase()
+
+  // 子命令路由
+  if (first === 'list') {
+    const tasks = runtime.listTasks()
+    if (tasks.length === 0) return 'No scheduled tasks.'
+    return tasks.map(t =>
+      `${t.enabled ? '●' : '○'} ${t.id} ${t.name} · ${formatSchedule(t.schedule)} · ${formatRelativeTime(t.nextRunAt)}`
+    ).join('\n')
+  }
+
+  if (first === 'on' || first === 'off') {
+    const id = parts[1]
+    if (!id) return `Usage: /schedule ${first} <id>`
+    const success = await runtime.toggleTask(id, first === 'on')
+    return success ? `Task ${id} ${first === 'on' ? 'enabled' : 'disabled'}.` : `Task ${id} not found.`
+  }
+
+  if (first === 'rm') {
+    const id = parts[1]
+    if (!id) return 'Usage: /schedule rm <id>'
+    const success = runtime.deleteTask(id)
+    return success ? `Task ${id} deleted.` : `Task ${id} not found.`
+  }
+
+  if (first === 'run') {
+    const id = parts[1]
+    if (!id) return 'Usage: /schedule run <id>'
+    const success = await runtime.runTaskNow(id)
+    return success ? `Task ${id} executed.` : `Task ${id} not found.`
+  }
+
+  // 创建任务分支
+  const kind = first === 'once' ? 'once' as const : first === 'cron' ? 'recurring' as const : undefined
+  const scheduleStart = kind ? 1 : 0
+  const scheduleInput = parts[scheduleStart]
+  if (!scheduleInput) return 'Usage: /schedule <schedule> <prompt>'
+
+  const prompt = parts.slice(scheduleStart + 1).join(' ')
+  if (!prompt) return 'Usage: /schedule <schedule> <prompt>'
+
+  const parsed = await parseSchedule(scheduleInput)
+  if (!parsed) {
+    return `Invalid schedule: "${scheduleInput}". Use duration (5m/2h/1d) or cron expression.`
+  }
+
+  const task = await runtime.addTask(prompt, parsed.spec, { kind })
+  return `Task "${task.name}" (${task.id}) created. Schedule: ${formatSchedule(task.schedule)}`
 }

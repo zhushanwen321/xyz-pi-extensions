@@ -1,5 +1,5 @@
 // src/submit-view.ts
-import { truncateToWidth } from "@mariozechner/pi-tui";
+import { truncateToWidth } from "@earendil-works/pi-tui";
 
 import { formatAnswer } from "./answer-format";
 import {

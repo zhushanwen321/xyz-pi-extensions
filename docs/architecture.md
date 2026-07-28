@@ -28,7 +28,6 @@ xyz-pi-extensions 是 Pi coding agent 的扩展工具箱 monorepo。本文档是
 | Subagent + Workflow | `subagent-workflow` | 统一 subagent 执行（进程隔离 spawn）+ workflow 编排（chain/parallel/scatter-gather/map-reduce），ADR-030 |
 | 目标驱动循环 | `goal` | 持久化目标 + 7 态状态机 + 预算管理 |
 | 任务清单 | `todo` | 轻量三态待办 |
-| 编码工作流 | `coding-workflow` | L1/L2/L3 三档编码工作流，含 ~20 个 harness skills + 机器强制测试门 |
 | 上下文压缩 | `context-engineering` | 渐进式压缩（L0 / L1 / L2 / Microcompact / Budget） |
 | 其他 | `vision` / `evolve-daily` / `statusline` / `structured-output` / `model-switch` / `plan` / `ask-user` / `unified-hooks` / `pending-notifications` | 各自独立功能 |
 

@@ -10,7 +10,7 @@
  * 不 persist（与旧 index.ts 行为对齐——turn_end 只内存变更 + widget）。
  */
 
-import type { ExtensionAPI, ExtensionContext } from "@mariozechner/pi-coding-agent";
+import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 
 import { updateWidget } from "../../projection/widget";
 import { applyEvent } from "../../service";

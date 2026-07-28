@@ -17,7 +17,7 @@ Pi coding agent 的扩展工具箱：为 AI coding agent 工作流中的特定�
 
 ## 功能边界
 
-14 个 extension，覆盖目标驱动（goal/todo）、编码工作流（coding-workflow）、上下文（vision/context-engineering）、基础设施（unified-hooks/subagent-workflow）等。完整清单与成熟度见 AGENTS.md「当前包清单」。
+13 个 extension，覆盖目标驱动（goal/todo）、上下文（vision/context-engineering）、基础设施（unified-hooks/subagent-workflow）等。完整清单与成熟度见 AGENTS.md「当前包清单」。
 
 ## 非目标（Non-goals）
 

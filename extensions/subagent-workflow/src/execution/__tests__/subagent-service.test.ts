@@ -558,7 +558,10 @@ describe("SubagentService", () => {
       // worktree create 抛错在 kickOffBackground 之前（execute 同步 catch），返回 background 形状
       expect(handle.mode).toBe("background");
 
-      // register emit：background mode → id 是 UUID 格式
+      // createRecordForMode 生成的 subagentId 带 sa- 前缀（sa-<uuid>）
+      expect(handle.subagentId).toMatch(/^sa-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/);
+
+      // register emit：background mode → id 是 sa-<uuid> 格式
       expect(pi.events.emit).toHaveBeenCalledWith(
         "pending:register",
         expect.objectContaining({

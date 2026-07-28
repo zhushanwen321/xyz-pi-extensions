@@ -110,7 +110,7 @@
 // 标准 package.json
 {
   "peerDependencies": {
-    "@mariozechner/pi-coding-agent": "*",
+    "@earendil-works/pi-coding-agent": "*",
     "@earendil-works/pi-tui": "*",
     "@earendil-works/pi-ai": "*",
     "@sinclair/typebox": "*"
@@ -122,7 +122,7 @@
 }
 ```
 
-**[规范]** `@mariozechner/pi-coding-agent` 是核心依赖，**不能设为 optional**。
+**[规范]** `@earendil-works/pi-coding-agent` 是核心依赖，**不能设为 optional**。
 
 **[指南]** TUI 和 AI 包按需声明，设为 optional 可降低纯工具扩展的依赖要求。
 
@@ -133,7 +133,7 @@
 ### 2.1 工厂函数签名
 
 ```typescript
-import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
+import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 
 export default function (pi: ExtensionAPI): void {
   // 注册 tools、commands、event handlers
@@ -209,7 +209,7 @@ export default function (pi: ExtensionAPI) {
 ```typescript
 // types.ts
 import type { Static } from "typebox";
-import { Type } from "@mariozechner/pi-coding-agent"; // StringEnum 等
+import { Type } from "@earendil-works/pi-ai"; // StringEnum 等
 
 // ---- 常量 ----
 export const WIDGET_KEY = "my-extension-widget";
@@ -598,7 +598,7 @@ Pi 的 extension loader 使用 [jiti](https://github.com/unjs/jiti) 加载 TypeS
 
 ```
 扩展源文件 import X
-  ├── X 命中了 alias 列表？→ 重定向到 Pi 捆绑的版本（@mariozechner/*、@earendil-works/*、typebox）
+  ├── X 命中了 alias 列表？→ 重定向到 Pi 捆绑的版本（@earendil-works/*、typebox）
   └── X 未命中 alias？→ jiti 走标准 Node.js 模块解析（node_modules 查找）
 ```
 
@@ -619,7 +619,7 @@ Pi 的 extension loader 使用 [jiti](https://github.com/unjs/jiti) 加载 TypeS
 
 | 依赖类型 | 适用场景 | 示例 |
 |---------|---------|------|
-| `peerDependencies` | Pi SDK 包，运行时提供 | `@mariozechner/pi-coding-agent` |
+| `peerDependencies` | Pi SDK 包，运行时提供 | `@earendil-works/pi-coding-agent` |
 | `peerDependenciesMeta.optional` | 条件依赖 | `@earendil-works/pi-tui`（纯 headless） |
 | `dependencies` | 业务逻辑依赖 | `zod`、`diff`、`openai` |
 | `devDependencies` | 测试/类型 | `vitest`、`@types/node`、`typescript` |
@@ -1141,7 +1141,7 @@ describe("state", () => {
 
 - [ ] `package.json` 含 `type: "module"` 和 `pi.extensions`
 - [ ] `package.json` 不含 `private: true`（除非确定不发布到 npm）
-- [ ] `peerDependencies` 引用 `@mariozechner/pi-coding-agent`
+- [ ] `peerDependencies` 引用 `@earendil-works/pi-coding-agent`
 - [ ] `files` 包含入口 `.ts`，含 `index.ts` + `src/**/*.ts`
 - [ ] 入口 `export default function(pi: ExtensionAPI)`
 - [ ] 状态在工厂闭包内，非模块级

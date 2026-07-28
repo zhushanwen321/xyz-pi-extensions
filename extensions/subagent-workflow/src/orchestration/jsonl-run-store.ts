@@ -6,7 +6,7 @@
  * 职责：持久化 WorkflowRun 聚合根到 JSONL 文件 + 跨 session 重水合。
  *
  * 层归属：Infra（D-12）。implements Engine 层的 RunStore port。
- * 依赖 @mariozechner/pi-coding-agent 的 ExtensionAPI/ExtensionContext（Infra 允许 Pi SDK）。
+ * 依赖 @earendil-works/pi-coding-agent 的 ExtensionAPI/ExtensionContext（Infra 允许 Pi SDK）。
  *
  * 设计：
  * - JsonlRunStore implements RunStore（而非散落的 persist/reconstruct 自由函数）。
@@ -26,7 +26,7 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
 
-import type { ExtensionAPI, ExtensionContext } from "@mariozechner/pi-coding-agent";
+import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 
 import { AgentCall } from "./models/agent-call.ts";
 import { Budget } from "./models/budget.ts";

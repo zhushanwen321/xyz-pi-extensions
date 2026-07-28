@@ -95,15 +95,19 @@ const SHORT_ID_BG_SEGMENTS = 3;
 /**
  * 从完整 record id 提取短编号用于列表展示.
  *
- * id 格式（subagent-service.ts:422 生成）:
- *   - sync:       `run-${seq}`                  (如 run-1) → 原样（2 段）
- *   - background: `bg-${tag}-${seq}-${ts}`      (如 bg-f6f731-10-1719500000000)
- *                 → 取前 3 段得 bg-f6f731-10（丢弃冗长时间戳）
- *
- * 按段数分支：sync（2 段）原样返回；background（≥3 段）取前 3 段（bg/tag/seq）。
- * seq 进程内递增唯一,作为「编号」足够区分;完整 id(含时间戳)在右列预览给出供精确引用.
+ * id 格式:
+ *   - subagent:   `sa-<uuid>`                   (如 sa-550e8400-e29b-41d4-a716-446655440000)
+ *                 → sa- 前缀 + UUID 前 3 段（sa-550e8400-e29b-41d4）
+ *   - workflow:   `wf-<ts>-<rand>`               (如 wf-1719500000000-a1b2c3，3 段)
+ *                 → 3 段 ≤ 2 不成立，取前 3 段 = 原样
+ *   - sync:       `run-${seq}`                   (如 run-1，2 段) → 原样返回
+ *   - 旧纯 UUID:  `<uuid>`                       (5 段) → 取前 3 段（向后兼容）
  */
 export function shortId(id: string): string {
+  // sa- 前缀的 subagent ID：保留前缀 + UUID 前 3 段（与纯 UUID 的 3 段信息量等价）
+  if (id.startsWith("sa-")) {
+    return "sa-" + id.slice(3).split("-").slice(0, SHORT_ID_BG_SEGMENTS).join("-");
+  }
   const segments = id.split("-");
   if (segments.length <= SHORT_ID_SYNC_SEGMENTS) return id;
   return segments.slice(0, SHORT_ID_BG_SEGMENTS).join("-");

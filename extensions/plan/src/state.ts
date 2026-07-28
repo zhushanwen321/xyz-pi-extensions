@@ -1,4 +1,4 @@
-import type { CustomEntry, ExtensionAPI, ExtensionContext, SessionEntry } from "@mariozechner/pi-coding-agent";
+import type { CustomEntry, ExtensionAPI, ExtensionContext, SessionEntry } from "@earendil-works/pi-coding-agent";
 
 export type PlanPhase = "idle" | "brainstorming" | "writing" | "complete";
 

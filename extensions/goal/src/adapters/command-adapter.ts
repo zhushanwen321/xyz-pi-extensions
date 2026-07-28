@@ -14,7 +14,7 @@
  * adapters 层可 import Pi 类型（桥接 Pi 和 service）。
  */
 
-import type { CustomEntry, ExtensionAPI, ExtensionContext } from "@mariozechner/pi-coding-agent";
+import type { CustomEntry, ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 
 import { parseGoalArgs } from "../commands";
 import {

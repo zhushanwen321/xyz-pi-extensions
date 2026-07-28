@@ -6,7 +6,7 @@
  * prompting the AI to add timeout or use async mode.
  */
 
-import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
+import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 
 /**
  * Commands that indicate network activity.

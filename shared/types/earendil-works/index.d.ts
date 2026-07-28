@@ -6,7 +6,7 @@
  * CI (which lacks node_modules) can still catch type-level bugs — most notably
  * the ExtensionHandler two-parameter signature `(event, ctx)`.
  */
-declare module "@mariozechner/pi-coding-agent" {
+declare module "@earendil-works/pi-coding-agent" {
 	// Re-export everything as `any` — CI only verifies syntax/structure
 	// NOTE: ExtensionAPI / SessionStartEvent / ExtensionHandler are precise below
 	//       so CI catches the ExtensionHandler `(event, ctx)` two-param signature.
@@ -223,7 +223,7 @@ declare module "@mariozechner/pi-coding-agent" {
 	};
 }
 
-declare module "@mariozechner/pi-tui" {
+declare module "@earendil-works/pi-tui" {
 	export class Text {
 		constructor(text?: string, paddingX?: number, paddingY?: number, customBgFn?: (text: string) => string);
 		setText(text: string): void;
@@ -272,7 +272,7 @@ declare module "@mariozechner/pi-tui" {
 	}
 	export function matchesKey(key: any, binding: any): boolean;
 	export function parseKey(data: string): string | undefined;
-	export function truncateToWidth(text: string, maxWidth: number, ellipsis?: string, pad?: boolean): string; // signature mirrored from @mariozechner/pi-tui@>=0.78
+	export function truncateToWidth(text: string, maxWidth: number, ellipsis?: string, pad?: boolean): string; // signature mirrored from @earendil-works/pi-tui@>=0.78
 	export function wrapTextWithAnsi(text: string, width: number): string[];
 	export function visibleWidth(str: string): number;
 	export const Key: {
@@ -327,25 +327,25 @@ declare module "@mariozechner/pi-tui" {
 	export function fuzzyFilter<T>(items: T[], query: string, getText: (item: T) => string): T[];
 }
 
-declare module "@mariozechner/pi-ai" {
+declare module "@earendil-works/pi-ai" {
 	export function StringEnum<T extends readonly string[]>(values: T, options?: Record<string, unknown>): T[number];
 	export type Message = any;
 	export type AssistantMessage = any;
 }
 
 declare module "@earendil-works/pi-coding-agent" {
-	export * from "@mariozechner/pi-coding-agent";
+	export * from "@earendil-works/pi-coding-agent";
 	// Additional exports used by subagent/extension
 	export type Message = any;
 	export type AgentToolResult<T = any> = { content: Array<{ type: "text"; text: string } | { type: "image"; data: string; mimeType: string }>; details: T };
 	export function parseFrontmatter<T = Record<string, unknown>>(text: string): { frontmatter: T; body: string };
 }
 declare module "@earendil-works/pi-tui" {
-	export * from "@mariozechner/pi-tui";
+	export * from "@earendil-works/pi-tui";
 	export class MarkdownTheme {}
 }
 declare module "@earendil-works/pi-ai" {
-	export * from "@mariozechner/pi-ai";
+	export * from "@earendil-works/pi-ai";
 	export type Message = any;
 }
 

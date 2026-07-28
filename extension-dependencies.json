@@ -61,22 +61,6 @@
       "dependsOn": []
     },
     {
-      "name": "@zhushanwen/pi-coding-workflow",
-      "directory": "extensions/coding-workflow",
-      "dependsOn": [
-        {
-          "package": "@zhushanwen/pi-subagent-workflow",
-          "type": "runtime",
-          "reason": "ReviewGate / TestFixLoopGate 通过 pi.__workflowRun 启动 workflow 脚本；硬依赖，缺失时 gate.run() 直接抛错（无 fallback）"
-        },
-        {
-          "package": "@zhushanwen/pi-goal",
-          "type": "optional",
-          "reason": "Phase 2/3 通过 __goalInit 启动 goal，缺失时降级跳过"
-        }
-      ]
-    },
-    {
       "name": "@zhushanwen/pi-context-engineering",
       "directory": "extensions/context-engineering",
       "dependsOn": []

@@ -12,7 +12,6 @@ xyz-pi-extensions/
 │   ├── goal/                → @zhushanwen/pi-goal
 │   ├── todo/                → @zhushanwen/pi-todo
 │   ├── vision/             → @zhushanwen/pi-vision
-│   ├── coding-workflow/     → @zhushanwen/pi-coding-workflow (含 ~20 个 harness skills + L1/L2/L3 三档编码工作流：共享阶段 coding-init/coding-execute/coding-retrospect/coding-closeout + coding-visualizer 渲染工具 + lite-shared/mid-shared/full-shared 躯体；L1 lite-plan；L2 mid-plan/mid-detail-plan；L3 full-clarity/full-architecture/full-issues/full-nfr/full-code-arch/full-execution-plan；含 test-orchestrator tool 机器强制 E2E 测试门 + lib/gates 机器门控 ReviewGate/TestFixLoopGate)
 │   ├── context-engineering/ → @zhushanwen/pi-context-engineering
 │   ├── evolve-daily/        → @zhushanwen/pi-evolve-daily (含 evolve skills + tracker 框架)
 │   ├── statusline/          → @zhushanwen/pi-statusline
@@ -44,7 +43,7 @@ xyz-pi-extensions/
 - Skills 跟着 owner 走：extension-bundled skills 通过 `resources_discover` 自动注册
 - 独立 skills 放 `skills/`，它们是 Markdown 资源不是包
 - types 是 private 包，仅通过 `workspace:*` 供其他包引用
-- coding-workflow 内置 model.ts 用于 resolveModelByComplexity，subagent + workflow 编排由 pi-subagent-workflow（npm）提供（合并自 pi-subagents + pi-workflow，ADR-030）
+- subagent + workflow 编排由 pi-subagent-workflow（npm）提供（合并自 pi-subagents + pi-workflow，ADR-030）
 - Harness 是逻辑概念，不存在叫 "harness" 的物理目录
 
 **目录归属原则**：
@@ -116,13 +115,13 @@ Schema：`docs/third-party-extensions/extensions.schema.json`
 ## 技术栈
 
 - TypeScript（Pi 运行时执行，不独立编译）
-- Pi Extension API（`@mariozechner/pi-coding-agent`）
+- Pi Extension API（`@earendil-works/pi-coding-agent` — **唯一正确 namespace，旧 `@mariozechner/pi-*` 已废弃，见底部「禁止旧 namespace」章节**）
 - typebox（参数 schema 定义）
 - pi-tui（终端 UI 组件：Text, Container, Spacer, Markdown 等）
 - pi-ai（StringEnum 等工具）
 - pnpm workspaces + changesets（monorepo 管理和版本发布）
 
-**依赖说明**：扩展没有自己的 `node_modules`（开发时由 pnpm workspace 管理）。运行时 `@mariozechner/*` 和 `typebox` 依赖由 Pi 运行时提供。本地开发时 `tsc --noEmit` 通过 `paths` 映射到全局安装的 Pi 包获取类型。
+**依赖说明**：扩展没有自己的 `node_modules`（开发时由 pnpm workspace 管理）。运行时 `@earendil-works/*` 和 `typebox` 依赖由 Pi 运行时提供。本地开发时 `tsc --noEmit` 通过 `paths` 映射到全局安装的 Pi 包获取类型。
 
 ## 架构
 
@@ -572,7 +571,7 @@ GUI 组件（`TaskListWidget` 等）是 xyz-agent 的工作，扩展侧不需要
 
 凡调用 `pi.on(...)`、`pi.registerTool(...)`、`pi.registerCommand(...)`、读 `ctx.*` 的代码：
 
-- **ExtensionHandler 签名是 `(event, ctx) => ...`（两个参数）**。`modelRegistry`/`cwd`/`ui`/`sessionManager` 在第二个参数 `ExtensionContext` 上，不在 event 上。核对时打开真实 SDK 的 `types.d.ts`，不能只看 `shared/types/mariozechner/index.d.ts` 的 stub
+- **ExtensionHandler 签名是 `(event, ctx) => ...`（两个参数）**。`modelRegistry`/`cwd`/`ui`/`sessionManager` 在第二个参数 `ExtensionContext` 上，不在 event 上。核对时打开真实 SDK 的 `types.d.ts`，不能只看 `shared/types/earendil-works/index.d.ts` 的 stub
 - 新增/修改 SDK 调用必须有契约测试覆盖（模板：`extensions/subagent-workflow/src/execution/__tests__/sdk-contract.test.ts`）
 - `registerTool` 的 schema 必填字段在所有执行模式下都必须真的必填；条件必填用 Optional + 运行时校验，避免 schema 与描述矛盾
 
@@ -604,7 +603,7 @@ pre-commit hook 会运行 `tsc --noEmit`，任何类型错误都会阻止提交�
 - `tsc --noEmit` 报告的错误必须全部修复，无论是否本次修改引入
 - 禁止 `SKIP_LINT=1 git commit` 跳过 hook，除非是紧急 hotfix 且后续立即修复
 - 禁止 `--no-verify` 提交，除非是紧急 hotfix 且后续立即修复
-- 修复时从 `shared/types/mariozechner/index.d.ts` 的 stub 开始检查——缺失的导出声明会导致下游包报错
+- 修复时从 `shared/types/earendil-works/index.d.ts` 的 stub 开始检查——缺失的导出声明会导致下游包报错
 - 回调参数缺少类型注解（TS7006 `implicitly has an 'any' type`）是代码质量问题，必须补全类型
 - 如果修复量过大（>50 个错误），使用 subagent 并行处理，不要手动一个一个修
 
@@ -662,9 +661,9 @@ bash .githooks/check-structure --quick
 
 检查项包括：扩展入口文件存在、CLAUDE.md 同步、文件行数上限、入口模式、模块级变量、package.json files 字段完整性。
 
-### 类型 Stub 维护（`shared/types/`）
+### 类型 Stub 维护（`shared/types/earendil-works/`）
 
-`shared/types/mariozechner/index.d.ts` 是 CI 环境的类型桩（ambient module declarations）。本地开发时 `tsconfig.json` 的 `paths` 优先解析到真实 Pi SDK 类型。
+`shared/types/earendil-works/index.d.ts` 是 CI 环境的类型桩（ambient module declarations）。本地开发时 `tsconfig.json` 的 `paths` 优先解析到真实 Pi SDK 类型。
 
 **当 Pi SDK 更新或新增导入时，必须同步更新此 stub 文件。** 新增的 `export` 声明缺失会导致本地 typecheck 全量报错。检查方式：
 
@@ -744,7 +743,7 @@ pnpm --filter @zhushanwen/pi-statusline test:watch
 | 包位置 | 需要 alias | 示例 |
 |--------|------------|------|
 | `extensions/*` | `@zhushanwen/pi-quota-providers` → `../../shared/quota-providers/src/index.ts` | statusline |
-| `shared/*` | `@mariozechner/pi-coding-agent` → workspace root `shared/types/mariozechner/index` | quota-providers |
+| `shared/*` | `@earendil-works/pi-coding-agent` → workspace root `shared/types/earendil-works/index` | quota-providers |
 
 所有 vitest.config.ts 的 `include` 统一为 `["src/__tests__/**/*.test.ts"]`。
 
@@ -791,7 +790,6 @@ ln -s /path/to/xyz-pi-extensions/skills/<name> ~/.agents/skills/<name>
 | `extensions/goal/` | `@zhushanwen/pi-goal` | 持久化目标驱动循环，7 态状态机 | — |
 | `extensions/todo/` | `@zhushanwen/pi-todo` | 轻量三态任务清单 | — |
 | `extensions/vision/` | `@zhushanwen/pi-vision` | 图片分析（vision model + memory session） | — |
-| `extensions/coding-workflow/` | `@zhushanwen/pi-coding-workflow` | L1/L2/L3 三档编码工作流 + 机器强制测试门 | 共享 5 (coding-init/execute/retrospect/closeout + coding-visualizer) + L1 lite-plan + L2 mid-plan/mid-detail-plan + L3 full-* 6 + 躯体 lite/mid/full-shared；含 test-orchestrator tool（4 action 机器重算 E2E 测试状态机）+ lib/gates（ReviewGate/TestFixLoopGate 机器门控） |
 | `extensions/context-engineering/` | `@zhushanwen/pi-context-engineering` | 渐进式上下文压缩 | — |
 | `extensions/evolve-daily/` | `@zhushanwen/pi-evolve-daily` | 每日数据收集 + Tracker 框架 | evolve, evolve-apply, evolve-report |
 | `extensions/statusline/` | `@zhushanwen/pi-statusline` | Pi 状态栏 | — |
@@ -836,3 +834,31 @@ ln -s /path/to/xyz-pi-extensions/skills/<name> ~/.agents/skills/<name>
 **校验**：`npx ajv-cli validate -s extension-dependencies.schema.json -d extension-dependencies.json`
 
 详见：[ADR-019](./docs/adr/019-structured-output-extension.md)
+
+### 禁止使用已废弃的 Pi SDK namespace [MANDATORY]
+
+**唯一正确的 namespace**：`@earendil-works/pi-*`（`pi-coding-agent`、`pi-tui`、`pi-ai`、`pi-agent-core` 四个包）。
+
+**禁止使用**：`@mariozechner/pi-*` 已被 Pi 团队重命名并被 npmjs 标记为 deprecated。仓库内任何位置（`.ts`、`.json`、`.d.ts`、vitest.config.ts、tsconfig.json）出现这个旧 namespace：
+
+- 会让 `pnpm install` 报 5 个 deprecation warning（4 个 `@mariozechner/pi-*` + 1 个 transitive `@mariozechner/pi-agent-core`），污染后续所有终端输出
+- 让本地 monorepo 可能拉取 npm 上未迁移的旧版本（`@zhushanwen/pi-subagent-workflow` 已发的 0.4.0、ASk-user 依赖它时会拉旧版）
+- 3 个月后回看代码，「为什么会有两个 namespace」的认知成本高
+
+**强制约束**（pre-commit gate 已实现）：
+
+- `.githooks/validate-no-mariozechner-pi` 脚本以 `git diff --cached` 的 `.ts`/`.json`/`.d.ts` 文件为输入扫描旧 namespace
+- 违规阻断 commit，无法跳过（紧急 hotfix：`SKIP_NAMESPACE_CHECK=1 git commit -m "..."`，但必须在 PR 描述中说明并提 issue 跟踪）
+- `pre-commit` 在 `0` (pi manifest) 之前作为 `─ -0.` 阶段调用，任何 staged 文件含旧 namespace 都会阻断
+- `0b. package.json 深度检查` 也独立验证 `peerDependencies` 必须用 `@earendil-works/pi-coding-agent` 且不能含旧 namespace
+
+**类型 stub 路径已迁移**：CI 类型桩从 `shared/types/mariozechner/index.d.ts` 迁移到 `shared/types/earendil-works/index.d.ts`。**禁止重新创建 `shared/types/mariozechner/` 目录**（pre-commit 也检查这一点）。
+
+**手动运行检测**：
+
+```bash
+bash .githooks/validate-no-mariozechner-pi           # 全仓库扫描
+bash .githooks/validate-no-mariozechner-pi <files>   # 指定文件检查
+```
+
+**历史背景**：2026-07-28 完成一次性迁移（changeset `.changeset/migrate-pi-namespace-to-earendil-works.md`），125 文件改动、1 rename（`shared/types/mariozechner/` → `shared/types/earendil-works/`）。当时已经预先做了 dual-alias（tsconfig 同时映射两个 namespace 到同一文件），所以**未来如果 Pi 又重命名**，正确做法是：同步更新 tsconfig + vitest alias + stub + package.json，再迁移 import，最后更新本章节。

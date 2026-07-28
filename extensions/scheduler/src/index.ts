@@ -1,4 +1,4 @@
-import type { ExtensionAPI, ExtensionContext } from '@mariozechner/pi-coding-agent'
+import type { ExtensionAPI, ExtensionContext } from '@earendil-works/pi-coding-agent'
 
 import { registerScheduleCommand } from './commands.js'
 import { SchedulerRuntime } from './runtime.js'
@@ -80,6 +80,7 @@ export default function schedulerExtension(pi: ExtensionAPI): void {
       } catch (err) {
         return {
           content: [{ type: 'text' as const, text: `Error: ${err instanceof Error ? err.message : String(err)}` }],
+          details: {},
           isError: true,
         }
       }
@@ -105,6 +106,7 @@ export default function schedulerExtension(pi: ExtensionAPI): void {
       } catch (err) {
         return {
           content: [{ type: 'text' as const, text: `Error: ${err instanceof Error ? err.message : String(err)}` }],
+          details: {},
           isError: true,
         }
       }

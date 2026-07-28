@@ -11,8 +11,8 @@ import type {
   ExtensionContext,
   SessionEntry,
   Theme,
-} from "@mariozechner/pi-coding-agent";
-import { Text } from "@mariozechner/pi-tui";
+} from "@earendil-works/pi-coding-agent";
+import { Text } from "@earendil-works/pi-tui";
 import type { Static } from "typebox";
 
 import { isValidSkillName } from "./skill-registry";

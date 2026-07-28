@@ -14,7 +14,7 @@
 // 读取——若在 factory 顶层捕获 runtime! 非空断言，注册时 runtime 为 null，
 // execute 调用会 NPE。此套件验证 session_start 前 execute 优雅返回 isError 而非 crash。
 
-import type { ExtensionAPI, ExtensionContext } from '@mariozechner/pi-coding-agent'
+import type { ExtensionAPI, ExtensionContext } from '@earendil-works/pi-coding-agent'
 import { describe, expect, it, vi } from 'vitest'
 
 // Mock store 模块：避免 runtime 触发真实 FS 写入（session_start 会创建 SchedulerRuntime，
@@ -114,6 +114,7 @@ describe('pi-scheduler SDK contract', () => {
     const result = await tools[0]!.execute('call-1', { prompt: 'x', schedule: '5m' }, undefined, undefined, fakeCtx)
     expect(result).toEqual({
       content: [{ type: 'text', text: 'Error: Scheduler not initialized: session not started' }],
+      details: {},
       isError: true,
     })
   })

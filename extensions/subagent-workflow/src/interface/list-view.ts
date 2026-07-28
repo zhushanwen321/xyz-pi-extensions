@@ -33,7 +33,7 @@
 //   9. 动画 setInterval(250ms) 安全：行数恒定（pad 到满屏），diff 只重画 spinner/elapsed
 
 import { matchesKey } from "@earendil-works/pi-tui";
-import type { ExtensionContext } from "@mariozechner/pi-coding-agent";
+import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 
 import type { SubagentService } from "../execution/subagent-service.ts";
 import type { SubagentRecord } from "../execution/types.ts";

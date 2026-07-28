@@ -6,7 +6,7 @@
  *
  * 用最小 fake pi + fake ctx 实例化 goalExtension 工厂，再调 pi.__goalInit。
  */
-import type { ExtensionAPI, ExtensionContext } from "@mariozechner/pi-coding-agent";
+import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { describe, expect, it } from "vitest";
 
 import goalExtension from "../index";

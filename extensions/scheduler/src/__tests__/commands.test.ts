@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
-import { registerScheduleCommand } from '../commands.js'
+import { executeScheduleCommand, registerScheduleCommand } from '../commands.js'
 import { SchedulerRuntime } from '../runtime.js'
 
 // Mock store 避免 FS 副作用（runtime constructor 调 createStore）。
@@ -42,12 +42,12 @@ describe('/schedule command', () => {
   // ── 子命令路由：list ──
 
   it('list returns empty message when no tasks', async () => {
-    expect(await commandOpts.handler('list')).toBe('No scheduled tasks.')
+    expect(await executeScheduleCommand(runtime, 'list')).toBe('No scheduled tasks.')
   })
 
   it('list returns formatted task lines', async () => {
     await runtime.addTask('check build', { mode: 'interval', intervalMs: 60000 })
-    const result = await commandOpts.handler('list')
+    const result = await executeScheduleCommand(runtime, 'list')
     expect(result).toContain('check build')
     expect(result).toContain('every 1m')
   })
@@ -55,7 +55,7 @@ describe('/schedule command', () => {
   it('list marks disabled tasks with ○', async () => {
     const task = await runtime.addTask('paused task', { mode: 'interval', intervalMs: 60000 })
     await runtime.toggleTask(task.id, false)
-    const result = await commandOpts.handler('list')
+    const result = await executeScheduleCommand(runtime, 'list')
     expect(result).toContain('○')
     expect(result).toContain('paused task')
   })
@@ -64,7 +64,7 @@ describe('/schedule command', () => {
 
   it('off toggles task enabled to false', async () => {
     const task = await runtime.addTask('test', { mode: 'interval', intervalMs: 60000 })
-    const result = await commandOpts.handler(`off ${task.id}`)
+    const result = await executeScheduleCommand(runtime, `off ${task.id}`)
     expect(result).toContain('disabled')
     expect(runtime.getTask(task.id)?.enabled).toBe(false)
   })
@@ -72,75 +72,75 @@ describe('/schedule command', () => {
   it('on toggles task enabled to true', async () => {
     const task = await runtime.addTask('test', { mode: 'interval', intervalMs: 60000 })
     await runtime.toggleTask(task.id, false)
-    const result = await commandOpts.handler(`on ${task.id}`)
+    const result = await executeScheduleCommand(runtime, `on ${task.id}`)
     expect(result).toContain('enabled')
     expect(runtime.getTask(task.id)?.enabled).toBe(true)
   })
 
   it('off with missing id returns usage', async () => {
-    expect(await commandOpts.handler('off')).toBe('Usage: /schedule off <id>')
+    expect(await executeScheduleCommand(runtime, 'off')).toBe('Usage: /schedule off <id>')
   })
 
   it('on with missing id returns usage', async () => {
-    expect(await commandOpts.handler('on')).toBe('Usage: /schedule on <id>')
+    expect(await executeScheduleCommand(runtime, 'on')).toBe('Usage: /schedule on <id>')
   })
 
   it('off with unknown id returns not found', async () => {
-    expect(await commandOpts.handler('off deadbeef')).toBe('Task deadbeef not found.')
+    expect(await executeScheduleCommand(runtime, 'off deadbeef')).toBe('Task deadbeef not found.')
   })
 
   // ── 子命令路由：rm ──
 
   it('rm deletes task', async () => {
     const task = await runtime.addTask('test', { mode: 'interval', intervalMs: 60000 })
-    const result = await commandOpts.handler(`rm ${task.id}`)
+    const result = await executeScheduleCommand(runtime, `rm ${task.id}`)
     expect(result).toContain('deleted')
     expect(runtime.getTask(task.id)).toBeUndefined()
   })
 
   it('rm with missing id returns usage', async () => {
-    expect(await commandOpts.handler('rm')).toBe('Usage: /schedule rm <id>')
+    expect(await executeScheduleCommand(runtime, 'rm')).toBe('Usage: /schedule rm <id>')
   })
 
   it('rm with unknown id returns not found', async () => {
-    expect(await commandOpts.handler('rm deadbeef')).toBe('Task deadbeef not found.')
+    expect(await executeScheduleCommand(runtime, 'rm deadbeef')).toBe('Task deadbeef not found.')
   })
 
   // ── 子命令路由：run ──
 
   it('run executes task', async () => {
     const task = await runtime.addTask('test', { mode: 'interval', intervalMs: 60000 })
-    const result = await commandOpts.handler(`run ${task.id}`)
+    const result = await executeScheduleCommand(runtime, `run ${task.id}`)
     expect(result).toContain('executed')
     // dispatchTask 更新 task 对象（同一引用），runCount 自增到 1。
     expect(runtime.getTask(task.id)?.runCount).toBe(1)
   })
 
   it('run with missing id returns usage', async () => {
-    expect(await commandOpts.handler('run')).toBe('Usage: /schedule run <id>')
+    expect(await executeScheduleCommand(runtime, 'run')).toBe('Usage: /schedule run <id>')
   })
 
   it('run with unknown id returns not found', async () => {
-    expect(await commandOpts.handler('run deadbeef')).toBe('Task deadbeef not found.')
+    expect(await executeScheduleCommand(runtime, 'run deadbeef')).toBe('Task deadbeef not found.')
   })
 
   // ── 创建任务分支 ──
 
   it('creates interval task from /schedule 5m check build', async () => {
-    const result = await commandOpts.handler('5m check build')
+    const result = await executeScheduleCommand(runtime, '5m check build')
     expect(result).toContain('check build')
     expect(result).toContain('every 5m')
     expect(runtime.listTasks()).toHaveLength(1)
   })
 
   it('created interval task is recurring by default', async () => {
-    await commandOpts.handler('5m check build')
+    await executeScheduleCommand(runtime, '5m check build')
     const task = runtime.listTasks()[0]!
     expect(task.kind).toBe('recurring')
   })
 
   it('creates once task from /schedule once 10s remind', async () => {
-    const result = await commandOpts.handler('once 10s remind me')
+    const result = await executeScheduleCommand(runtime, 'once 10s remind me')
     expect(result).toContain('remind me')
     // once 任务 dispatch 后会被删除，但创建时尚未 dispatch
     expect(runtime.listTasks()).toHaveLength(1)
@@ -150,14 +150,14 @@ describe('/schedule command', () => {
 
   // Quote-aware tokenizer 修复后，cron 'expr' 能正确提取整个表达式。
   it('creates cron task from quoted expression', async () => {
-    const result = await commandOpts.handler("cron '*/10 * * * *' prompt")
+    const result = await executeScheduleCommand(runtime, "cron '*/10 * * * *' prompt")
     expect(result).toContain('created')
     expect(result).toContain('*/10 * * * *')
     expect(runtime.listTasks()).toHaveLength(1)
   })
 
   it('creates cron task from double-quoted expression', async () => {
-    const result = await commandOpts.handler('cron "0 9 * * 1-5" standup reminder')
+    const result = await executeScheduleCommand(runtime, 'cron "0 9 * * 1-5" standup reminder')
     expect(result).toContain('created')
     expect(result).toContain('0 9 * * 1-5')
     expect(runtime.listTasks()).toHaveLength(1)
@@ -166,7 +166,7 @@ describe('/schedule command', () => {
   // Unquoted multi-token cron still fails -- tokenizer cannot distinguish cron fields from prompt.
   // Users should quote the cron expression or use the schedule tool (JSON params are unambiguous).
   it('cron branch fails on unquoted multi-token expression (use quotes)', async () => {
-    const result = await commandOpts.handler('cron */10 * * * * prompt')
+    const result = await executeScheduleCommand(runtime, 'cron */10 * * * * prompt')
     expect(result).toMatch(/^Invalid schedule:/)
     expect(result).toContain('*/10')
   })
@@ -174,28 +174,22 @@ describe('/schedule command', () => {
   // ── 错误分支 ──
 
   it('invalid schedule returns error message', async () => {
-    const result = await commandOpts.handler('invalid-duration-str')
+    const result = await executeScheduleCommand(runtime, 'invalid-duration-str')
     expect(result).toMatch(/invalid|usage/i)
   })
 
   it('schedule with no prompt returns usage', async () => {
-    const result = await commandOpts.handler('5m')
+    const result = await executeScheduleCommand(runtime, '5m')
     expect(result).toBe('Usage: /schedule <schedule> <prompt>')
   })
 
   it('no args returns TUI not-implemented message', async () => {
-    const result = await commandOpts.handler('')
+    const result = await executeScheduleCommand(runtime, '')
     expect(result).toContain('not yet implemented')
   })
 
   it('returns error when runtime is null', async () => {
-    const mockPi = {
-      registerCommand: (_name: string, opts: CommandOpts) => {
-        commandOpts = opts
-      },
-    }
-    registerScheduleCommand(mockPi as never, () => null)
-    expect(await commandOpts.handler('list')).toBe('Scheduler not initialized: session not started.')
+    expect(await executeScheduleCommand(null, 'list')).toBe('Scheduler not initialized: session not started.')
   })
 
   // ── getArgumentCompletions ──

@@ -18,7 +18,7 @@
  * 检查之后——终态 goal 仍走终态 notify（不被 ESC 影响），非 active 状态直接返回。
  */
 
-import type { ExtensionAPI, ExtensionContext } from "@mariozechner/pi-coding-agent";
+import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 
 import { checkBudgetOnTurnEnd } from "../../engine/budget";
 import { isActiveStatus, isTerminalStatus } from "../../engine/goal";

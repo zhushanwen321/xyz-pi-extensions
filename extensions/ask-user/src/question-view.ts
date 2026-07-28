@@ -1,5 +1,5 @@
 // src/question-view.ts
-import { truncateToWidth, visibleWidth, wrapTextWithAnsi } from "@mariozechner/pi-tui";
+import { truncateToWidth, visibleWidth, wrapTextWithAnsi } from "@earendil-works/pi-tui";
 
 import {
 	isHighSurrogate,

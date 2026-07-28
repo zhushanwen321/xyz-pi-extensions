@@ -6,8 +6,8 @@
  * 已注册 tool，再以不同 ctx.mode 调 execute。每个用例新建 state（隔离），
  * 无模块级状态需重置。
  */
-import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
-import type { Theme } from "@mariozechner/pi-coding-agent";
+import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import type { Theme } from "@earendil-works/pi-coding-agent";
 import { describe, expect, it } from "vitest";
 
 import { createTodoSessionState, type TodoSessionState } from "../state";

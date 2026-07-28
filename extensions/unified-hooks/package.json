@@ -1,6 +1,6 @@
 {
   "name": "@zhushanwen/pi-unified-hooks",
-  "version": "0.1.2",
+  "version": "0.1.3",
   "description": "Unified hooks extension - collect scattered hooks in one place for easy maintenance",
   "main": "index.ts",
   "type": "module",
@@ -22,7 +22,7 @@
   "license": "MIT",
   "peerDependencies": {
     "typebox": "*",
-    "@mariozechner/pi-coding-agent": "*"
+    "@earendil-works/pi-coding-agent": "*"
   },
   "devDependencies": {
     "vitest": "^4.1.8"
