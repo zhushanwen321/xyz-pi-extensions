@@ -20,11 +20,6 @@ interface RecordedCall {
 	options: unknown;
 }
 
-interface RecordedHandler {
-	event: string;
-	handler: (event?: unknown, ctx?: unknown) => unknown;
-}
-
 function createMockPi(): {
 	pi: MockPi;
 	registerCommandCalls: RecordedCall[];
@@ -123,27 +118,52 @@ describe("WT8: 扩展入口注册", () => {
 	});
 });
 
-describe("WT9: W1 占位 tool_call（所有工具调用放行，不读 config）", () => {
-	it("tool_call handler 存在且不 throw", () => {
+describe("WT9: tool_call handler（W5 三层管道接入）", () => {
+	it("tool_call handler 存在且返回 Promise（不 throw）", () => {
 		const { pi, eventHandlers } = createMockPi();
 		permissionExtension(pi);
 
 		const toolCallHandlers = eventHandlers.get("tool_call")!;
 		expect(toolCallHandlers.length).toBe(1);
 
-		// 调用 handler 应该不 throw
-		expect(() => toolCallHandlers[0]({ toolName: "bash", command: "rm -rf /" }, {})).not.toThrow();
+		// 调用 handler 应该不 throw，且返回 Promise（W5 handler 是 async）
+		const result = toolCallHandlers[0](
+			{ toolName: "bash", input: { command: "rm -rf /" } },
+			{ mode: "yolo", cwd: "/tmp", ui: { notify() {}, select() { return Promise.resolve(undefined); }, custom() { return Promise.resolve(undefined); } } },
+		);
+		expect(result).toBeInstanceOf(Promise);
 	});
 
-	it("占位 handler 对任意工具调用放行（不返回拦截值）", () => {
+	it("yolo 模式（默认 config）对任意工具调用放行（resolve undefined）", async () => {
 		const { pi, eventHandlers } = createMockPi();
 		permissionExtension(pi);
 
-		const handler = eventHandlers.get("tool_call")![0];
+		const handler = eventHandlers.get("tool_call")![0] as (
+			event: unknown,
+			ctx: unknown,
+		) => Promise<unknown>;
 
-		// 无论什么工具调用，W1 占位都不拦截（返回 undefined = 放行）
-		expect(handler({ toolName: "bash", command: "git push --force" }, {})).toBeUndefined();
-		expect(handler({ toolName: "write", path: "/etc/passwd" }, {})).toBeUndefined();
-		expect(handler({ toolName: "read", path: "~/.ssh/id_rsa" }, {})).toBeUndefined();
+		// 默认 config mode=yolo → 快速路径放行（resolve undefined）
+		const mockCtx = {
+			mode: "yolo" as const,
+			cwd: "/tmp",
+			ui: {
+				notify() {},
+				select() {
+					return Promise.resolve(undefined);
+				},
+				custom() {
+					return Promise.resolve(undefined);
+				},
+			},
+		};
+
+		// yolo 快速路径：不跑管道，直接 resolve undefined
+		await expect(
+			handler({ toolName: "bash", input: { command: "git push --force" } }, mockCtx),
+		).resolves.toBeUndefined();
+		await expect(
+			handler({ toolName: "write", input: { path: "/etc/passwd" } }, mockCtx),
+		).resolves.toBeUndefined();
 	});
 });

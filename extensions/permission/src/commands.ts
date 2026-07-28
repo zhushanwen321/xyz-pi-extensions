@@ -21,7 +21,6 @@ import {
 	type PermissionConfig,
 	type PermissionMode,
 } from "./types.js";
-import { saveConfig } from "./config.js";
 
 /** 命令处理器返回的文本消息（由 ctx.ui.notify 显示） */
 export function handlePermissionCommand(

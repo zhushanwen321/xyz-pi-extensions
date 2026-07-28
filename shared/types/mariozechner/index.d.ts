@@ -346,6 +346,14 @@ declare module "@mariozechner/pi-ai" {
 		signal?: AbortSignal;
 		[key: string]: any;
 	}
+	// G2 (W5 design-review): production classifier 需要 getApiProvider 解析 provider
+	// 以调用 streamSimple。ApiProvider 携带 streamSimple（与 classifier ClassifierDeps 对齐）。
+	export interface ApiProvider {
+		api: string;
+		stream: unknown;
+		streamSimple: (model: Model<Api>, context: Context, options?: SimpleStreamOptions) => AssistantMessageEventStream;
+	}
+	export function getApiProvider(api: string): ApiProvider | undefined;
 }
 
 declare module "@earendil-works/pi-coding-agent" {

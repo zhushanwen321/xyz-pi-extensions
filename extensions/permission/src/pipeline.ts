@@ -1,0 +1,471 @@
+/**
+ * checkPermission 纯函数主入口 + 四档模式分支 + 层 2/3 编排（W5 集成层）。
+ *
+ * 架构（自上而下）：
+ *  - checkPermission：纯函数，按 mode 分发。deps 全注入（测试可 mock，不触碰 fs/network）。
+ *  - runLayer2：bash 走 matchRulesForArgv（遍历 AST 拆出的 argv[]）；非 bash 走
+ *    matchNonBashTool（G1：W3 matcher 对 toolName!=='bash' 直接 ask，但 W5 需要让
+ *    Read/Write/Edit 也评估用户规则，故本模块自带 helper，复用 wildcardToRegExp）。
+ *  - runLayer3WithRacing：AI Classifier + 用户审批竞速（移植 classifier-racing.ts）。
+ *    G3：用户审批的 ctx.ui.custom 工厂在调之前先检查 signal.aborted，避免 AI 先于
+ *    UI 触发 abort 时 comp 尚未创建导致 cancel 落空。
+ *  - applyAutoApproveOverrides：W4 WT7 偏差补丁（low+allow+autoApproveLowRisk=false → ask；
+ *    high+allow+autoDenyHighRisk=true → deny），独立纯函数便于单测。
+ *
+ * fail-closed 原则：任何异常路径 → ask（交人工，不静默放行）。
+ * checkPermission 永不 throw（caller index.ts 的 tool_call handler 依赖此契约）。
+ */
+
+import { wildcardToRegExp } from "./rules/wildcard.js";
+import type {
+	BashAnalysis,
+	ClassifierConfig,
+	ClassifierResult,
+	PermissionAction,
+	PermissionDecision,
+	PermissionMode,
+	Rule,
+	RuleMatchResult,
+	ToolInvocationContext,
+	UserDecision,
+} from "./types.js";
+
+// ──────────────────────── 依赖注入接口 ────────────────────────
+
+/**
+ * checkPermission 的外部依赖（DI 便于测试 mock）。
+ *
+ * - analyzeBashStructure：W2 AST 分析（层 1）。
+ * - matchRulesForArgv：W3 规则匹配（层 2，bash happy path）。
+ * - getDefaultRules：W3 内置危险规则（12 条 builtin-danger）。
+ * - classifier.classifyRisk：W4 AI 风险分类（层 3）。
+ * - requestUserApproval：W5 用户审批 UI（TUI/RPC/headless 三分支）。
+ *
+ * 生产装配见 production.ts；测试 mock 见 pipeline.test.ts。
+ */
+export interface CheckPermissionDeps {
+	analyzeBashStructure: (command: string) => Promise<BashAnalysis>;
+	matchRulesForArgv: (argv: string[], rules: readonly Rule[]) => RuleMatchResult;
+	getDefaultRules: () => Rule[];
+	classifier: {
+		classifyRisk: (
+			ctx: ToolInvocationContext,
+			config: ClassifierConfig,
+			signal?: AbortSignal,
+		) => Promise<ClassifierResult>;
+	};
+	requestUserApproval: (
+		req: ApprovalRequest,
+		ctx: ToolInvocationContext,
+		signal: AbortSignal | undefined,
+	) => Promise<UserDecision>;
+}
+
+/**
+ * 用户审批 UI 需要的数据（runLayer3WithRacing / approve / strict 传给 requestUserApproval）。
+ *
+ * reason 是人类可读的「为什么要审批」（含工具名 + 命令 + 触发原因），由 buildApprovalRequest 构造。
+ * preClassification 仅 auto 模式 AI 先返回时携带（让用户看到 AI 的判断，辅助决策）。
+ */
+export interface ApprovalRequest {
+	toolName: string;
+	command?: string;
+	reason: string;
+	preClassification?: ClassifierResult;
+}
+
+// ──────────────────────── buildApprovalRequest ────────────────────────
+
+/**
+ * 构造审批 UI 需要的数据（纯函数）。
+ *
+ * @param toolName 工具名（bash/read/write/...）
+ * @param command 命令字符串（bash 用，其他工具 undefined）
+ * @param trigger 触发审批的原因（如 "AST detected dangerous structure: subshell"）
+ * @param preClassification AI 先返回的分类（仅 auto 模式 racing AI 赢时携带）
+ */
+export function buildApprovalRequest(
+	toolName: string,
+	command: string | undefined,
+	trigger: string,
+	preClassification?: ClassifierResult,
+): ApprovalRequest {
+	const cmdPart = command !== undefined && command.length > 0 ? `: ${command}` : "";
+	const reason = `[${toolName}${cmdPart}] ${trigger}`;
+	return { toolName, command, reason, ...(preClassification !== undefined ? { preClassification } : {}) };
+}
+
+// ──────────────────────── runLayer2（含 G1 非 bash helper） ────────────────────────
+
+/**
+ * G1 修正：非 bash 工具规则匹配 helper。
+ *
+ * W3 matcher.ts 的 matchRules 对 toolName!=='bash' 直接返回 ask（W3 只管 bash），
+ * 但 W5 需要让 Read/Write/Edit 也评估用户规则（用户可能写 `read ~/.ssh/*` 的 deny 规则）。
+ * 故本模块自带 helper，不依赖 matchRules 的非 bash 路径。
+ *
+ * 语义（last-match-wins，与 matchRulesForArgv 一致）：
+ *  - pattern 字段用 wildcardToRegExp 编译（用户规则是 OpenCode wildcard）。
+ *  - 匹配目标 = toolName（tool 字段也按 wildcard 匹配，支持 'read'/'write'/'*'）。
+ *    非 bash 工具没有 argv，pattern 对 toolName 匹配（如 rule.tool='read' pattern='*'）。
+ *  - builtin-danger 规则的 pattern 是 RegExp 源串（含 \b），这里用 new RegExp(pattern,'i')。
+ *  - 无匹配 → ask（与 G1 一致，deny 到下游）。
+ *
+ * ~20 行，复用 wildcardToRegExp（不重新实现 wildcard 语义）。
+ */
+export function matchNonBashTool(toolName: string, rules: readonly Rule[]): RuleMatchResult {
+	if (toolName.length === 0) {
+		return { action: "ask", matchedRule: undefined };
+	}
+	let winner: RuleMatchResult = { action: "ask", matchedRule: undefined };
+	for (const rule of rules) {
+		// tool 字段匹配（wildcard，支持 '*' / 精确 'read'）
+		const toolRe = wildcardToRegExp(rule.tool);
+		if (!toolRe.test(toolName)) continue;
+		// pattern 字段：builtin-danger 是 RegExp 源串，其余是 wildcard。
+		// 非 bash 工具的 pattern 通常 '*'（匹配任意），但保留对具体值的匹配能力。
+		const patternRe =
+			rule.source === "builtin-danger" ? new RegExp(rule.pattern, "i") : wildcardToRegExp(rule.pattern);
+		// 非 bash 工具无 argv，pattern 对 toolName 匹配（'*' 总是命中）。
+		if (patternRe.test(toolName)) {
+			winner = { action: rule.action, matchedRule: rule };
+		}
+	}
+	return winner;
+}
+
+/**
+ * 层 2 规则匹配编排（纯逻辑版，用注入的 matchArgv 回调；测试可直接调）。
+ *
+ * bash：argvList 多条命令，聚合：
+ *   - 任一 argv deny → deny（最严格，一条危险即全拒）
+ *   - 全部 allow → allow
+ *   - 否则（含 ask / 混合）→ ask
+ * 非 bash：matchNonBashTool（G1）。
+ *
+ * @param matchArgv 单 argv 匹配函数（生产用 matchRulesForArgv，测试可 mock）
+ * @returns 层 2 决策（action + matchedRule）
+ */
+export function runLayer2(
+	toolName: string,
+	argvList: string[][],
+	rules: readonly Rule[],
+	matchArgv: (argv: string[], rules: readonly Rule[]) => RuleMatchResult,
+): RuleMatchResult {
+	if (toolName !== "bash") {
+		return matchNonBashTool(toolName, rules);
+	}
+	if (argvList.length === 0) {
+		// bash 但 AST 没拆出命令（parseError 或空）→ ask（交下游 AI/人工判断）
+		return { action: "ask", matchedRule: undefined };
+	}
+	let sawAsk = false;
+	let lastAllow: RuleMatchResult | undefined;
+	for (const argv of argvList) {
+		if (argv.length === 0) {
+			sawAsk = true;
+			continue;
+		}
+		const r = matchArgv(argv, rules);
+		if (r.action === "deny") return r;
+		if (r.action === "ask") sawAsk = true;
+		if (r.action === "allow") lastAllow = r;
+	}
+	if (sawAsk) return { action: "ask", matchedRule: undefined };
+	return lastAllow ?? { action: "ask", matchedRule: undefined };
+}
+
+// ──────────────────────── applyAutoApproveOverrides（W4 WT7 偏差补丁） ────────────────────────
+
+/**
+ * W4 WT7 偏差补丁：根据 ClassifierConfig 调整 AI 分类结果。
+ *
+ * 规则（独立纯函数，便于单测）：
+ *  - risk='low' + outcome='allow' + autoApproveLowRisk=false → ask（不让 AI 自动放行低风险）
+ *  - risk='high' + outcome='allow' + autoDenyHighRisk=true → deny（高风险即使 AI 说放行也拒）
+ *  - 其余透传（含 outcome='deny'/'ask' 不改，避免与 autoApprove/autoDeny 语义冲突）
+ *
+ * 不修改原对象（返回新对象），保持 ClassifierResult 不可变语义。
+ */
+export function applyAutoApproveOverrides(
+	result: ClassifierResult,
+	config: ClassifierConfig,
+): ClassifierResult {
+	// 高风险 + allow + autoDenyHighRisk → 强制 deny
+	if (result.risk_level === "high" && result.outcome === "allow" && config.autoDenyHighRisk) {
+		return {
+			...result,
+			outcome: "deny",
+			reasoning: `auto-denied (high risk, autoDenyHighRisk=true); original: ${result.reasoning}`,
+		};
+	}
+	// 低风险 + allow + autoApproveLowRisk=false → 强制 ask（交人工）
+	if (result.risk_level === "low" && result.outcome === "allow" && !config.autoApproveLowRisk) {
+		return {
+			...result,
+			outcome: "ask",
+			reasoning: `auto-ask (low risk but autoApproveLowRisk=false); original: ${result.reasoning}`,
+		};
+	}
+	return result;
+}
+
+// ──────────────────────── runLayer3WithRacing（G3 abort 时序） ────────────────────────
+
+/**
+ * 层 3：AI Classifier + 用户审批竞速（移植 pi-permission-system classifier-racing.ts）。
+ *
+ * 竞速语义：
+ *  - 启动 AI 分类（aiPromise）+ 用户审批（userPromise）。
+ *  - 用户先返回 → controller.abort() 取消 AI（已无用的 AI 计算尽早终止）。
+ *  - AI 先返回：
+ *      - AI outcome='allow' → resolveUser({approved:false}) 关闭用户对话框，返回 allow。
+ *      - AI outcome='deny'  → resolveUser({approved:false}) 关闭用户对话框，返回 deny。
+ *      - AI outcome='ask'   → 不 resolveUser，等用户最终决策（AI 不确定时转人工）。
+ *
+ * G3 修正：requestUserApproval（TUI 分支）在调 ctx.ui.custom 前先检查 signal.aborted，
+ * 避免 AI 先于 UI factory 执行时 controller.abort() 触发但 comp 尚未创建导致 cancel 落空。
+ * 此处再叠一层：AI 赢且 outcome 是 allow/deny 时，先 abort 再 resolveUser，
+ * 保证 UI factory 看到 aborted 状态短路。
+ *
+ * @param deps 注入依赖（classifier + requestUserApproval）
+ * @param ctx 工具调用上下文
+ * @param config classifier 配置
+ * @param outerSignal 外层 signal（session abort 时传播）
+ * @returns PermissionDecision（source='ai' 或 'user'）
+ */
+export async function runLayer3WithRacing(
+	deps: CheckPermissionDeps,
+	ctx: ToolInvocationContext,
+	config: ClassifierConfig,
+	outerSignal: AbortSignal | undefined,
+): Promise<PermissionDecision> {
+	const controller = new AbortController();
+	// 外层 abort 传播到内层
+	if (outerSignal) {
+		if (outerSignal.aborted) controller.abort();
+		else outerSignal.addEventListener("abort", () => controller.abort(), { once: true });
+	}
+
+	const aiPromise = deps.classifier.classifyRisk(ctx, config, controller.signal);
+
+	// 用户审批 promise：可被 resolveUser 外部 resolve（AI 赢时关闭对话框）
+	let resolveUser: (d: UserDecision) => void = () => {
+		/* 占位，下方立即覆写 */
+	};
+	const userPromise = new Promise<UserDecision>((resolve) => {
+		resolveUser = resolve;
+	});
+
+	const req = buildApprovalRequest(
+		ctx.toolName,
+		ctx.command,
+		"awaiting approval (auto mode: AI classifier racing with user prompt)",
+	);
+
+	// 启动用户审批（真实对话框）。用户先返回 → abort AI。
+	const realUserPromise = deps.requestUserApproval(req, ctx, controller.signal).then((d) => {
+		controller.abort(); // 用户已决策，取消 AI
+		resolveUser(d); // 透传给 userPromise（race 用）
+		return d;
+	});
+
+	// race：AI vs 用户。AI outcome='ask' 时仍可能先 settle，但语义是「转人工」，
+	// 此时不能 resolveUser 关闭对话框——需等用户。故 race 后据 AI outcome 分支。
+	const aiSettled = await Promise.race([
+		aiPromise.then((r) => ({ kind: "ai" as const, result: r })),
+		userPromise.then((d) => ({ kind: "user" as const, decision: d })),
+		realUserPromise.then((d) => ({ kind: "user" as const, decision: d })),
+	]);
+
+	if (aiSettled.kind === "user") {
+		// 用户赢了（或 AI ask 后用户最终决策）
+		const d = aiSettled.decision;
+		const action: PermissionAction = d.approved ? "allow" : "deny";
+		return {
+			action,
+			reason: d.reason ?? (d.approved ? "approved by user" : "denied by user"),
+			source: "user",
+		};
+	}
+
+	// AI 赢
+	const overridden = applyAutoApproveOverrides(aiSettled.result, config);
+	if (overridden.outcome === "allow") {
+		// AI 放行 → 关闭用户对话框（若已弹出），返回 allow
+		controller.abort();
+		resolveUser({ approved: false, reason: "AI classifier allowed; dialog dismissed" });
+		return {
+			action: "allow",
+			reason: overridden.reasoning,
+			source: "ai",
+			riskLevel: overridden.risk_level,
+			confidence: overridden.confidence,
+		};
+	}
+	if (overridden.outcome === "deny") {
+		controller.abort();
+		resolveUser({ approved: false, reason: "AI classifier denied; dialog dismissed" });
+		return {
+			action: "deny",
+			reason: overridden.reasoning,
+			source: "ai",
+			riskLevel: overridden.risk_level,
+			confidence: overridden.confidence,
+		};
+	}
+	// AI ask → 转 human（等用户最终决策，不关闭对话框）
+	const userFinal = await realUserPromise;
+	const action: PermissionAction = userFinal.approved ? "allow" : "deny";
+	return {
+		action,
+		reason: userFinal.reason ?? (userFinal.approved ? "approved by user (after AI ask)" : "denied by user (after AI ask)"),
+		source: "user",
+	};
+}
+
+// ──────────────────────── checkPermission（纯函数主入口） ────────────────────────
+
+/**
+ * 权限检查主入口（纯函数，deps 注入）。
+ *
+ * 四档模式分支：
+ *  - yolo：完全放行（return allow，source='mode'）。不跑任何层。
+ *  - auto：AST → 规则（allow 通过 / deny 拒绝 / ask → 层 3 Racing AI+用户）。
+ *  - approve：AST → 规则（allow 通过 / deny+ask → 人工审批，无 AI）。
+ *  - strict：全部人工审批（不跑 AST/规则/AI）。
+ *
+ * config.enabled=false 等同 yolo（保留配置但不拦截）。
+ * 永不 throw（fail-closed：异常 → ask）。
+ *
+ * @param toolName 工具名
+ * @param input 工具输入（bash={command}, 其他={path,...}）。command 用 AST/规则，其余字段透传给 UI。
+ * @param mode 当前权限模式
+ * @param config classifier 配置（auto 模式用）
+ * @param userRules 用户规则（与 getDefaultRules 拼接）
+ * @param deps 注入依赖
+ * @param ctxBase 工具调用上下文基线（cwd/agentName）
+ * @param signal 外层 abort signal
+ */
+export async function checkPermission(
+	toolName: string,
+	input: Record<string, unknown>,
+	mode: PermissionMode,
+	config: ClassifierConfig,
+	userRules: Rule[],
+	deps: CheckPermissionDeps,
+	ctxBase: { cwd: string; agentName?: string; signal?: AbortSignal },
+): Promise<PermissionDecision> {
+	// yolo / disabled → 完全放行
+	if (mode === "yolo") {
+		return { action: "allow", reason: "yolo mode: all tools allowed", source: "mode" };
+	}
+
+	const command = extractCommand(toolName, input);
+	const ctx: ToolInvocationContext = {
+		toolName,
+		...(command !== undefined ? { command } : {}),
+		path: typeof input.path === "string" ? input.path : undefined,
+		cwd: ctxBase.cwd,
+		...(ctxBase.agentName !== undefined ? { agentName: ctxBase.agentName } : {}),
+	};
+
+	// strict → 全部人工审批（不跑 AST/规则/AI）
+	if (mode === "strict") {
+		return await askUser(deps, ctx, "strict mode: all tools require approval", ctxBase.signal);
+	}
+
+	// auto / approve：层 1 AST + 层 2 规则
+	let argvList: string[][] = [];
+	if (toolName === "bash" && command !== undefined) {
+		try {
+			const analysis = await deps.analyzeBashStructure(command);
+			argvList = analysis.commands;
+			// AST 检测到危险结构（非 clean）→ 直接 ask（auto→AI，approve→人工）
+			if (!analysis.clean) {
+				const trigger = `AST detected dangerous structure: ${analysis.dangerousStructures.join(", ") || "unknown"}`;
+				if (mode === "approve") {
+					return await askUser(deps, ctx, trigger, ctxBase.signal);
+				}
+				// auto：进层 3（AI 评估危险命令）
+				return await runLayer3WithRacing(deps, ctx, config, ctxBase.signal);
+			}
+		} catch {
+			// AST 异常 → fail-closed ask（auto→AI，approve→人工）
+			if (mode === "approve") {
+				return await askUser(deps, ctx, "AST analysis failed (fail-closed)", ctxBase.signal);
+			}
+			return await runLayer3WithRacing(deps, ctx, config, ctxBase.signal);
+		}
+	}
+
+	// 层 2 规则（auto + approve 共用）
+	const rules = [...deps.getDefaultRules(), ...userRules];
+	const layer2 = runLayer2ForArgvList(toolName, argvList, rules, deps);
+
+	if (layer2.action === "allow") {
+		return {
+			action: "allow",
+			reason: layer2.matchedRule
+				? `allowed by rule ${layer2.matchedRule.id}`
+				: "allowed by rules (no deny matched)",
+			source: "rule",
+			...(layer2.matchedRule ? { matchedRule: layer2.matchedRule } : {}),
+		};
+	}
+	if (layer2.action === "deny") {
+		return {
+			action: "deny",
+			reason: layer2.matchedRule
+				? `denied by rule ${layer2.matchedRule.id}`
+				: "denied by rules",
+			source: "rule",
+			...(layer2.matchedRule ? { matchedRule: layer2.matchedRule } : {}),
+		};
+	}
+
+	// layer2.action === 'ask' → 下游
+	if (mode === "approve") {
+		// approve：ask → 人工审批（无 AI）
+		return await askUser(deps, ctx, "no matching allow rule (approve mode)", ctxBase.signal);
+	}
+
+	// auto：ask → 层 3 Racing（AI + 用户）
+	return await runLayer3WithRacing(deps, ctx, config, ctxBase.signal);
+}
+
+/**
+ * 层 2 规则匹配（用注入的 deps.matchRulesForArgv）。
+ * 薄封装 runLayer2，把注入的 matcher 传入纯逻辑版。
+ */
+function runLayer2ForArgvList(
+	toolName: string,
+	argvList: string[][],
+	rules: readonly Rule[],
+	deps: CheckPermissionDeps,
+): RuleMatchResult {
+	return runLayer2(toolName, argvList, rules, deps.matchRulesForArgv);
+}
+
+/** approve/strict 模式的人工审批封装（无 AI）。 */
+async function askUser(
+	deps: CheckPermissionDeps,
+	ctx: ToolInvocationContext,
+	trigger: string,
+	signal: AbortSignal | undefined,
+): Promise<PermissionDecision> {
+	const req = buildApprovalRequest(ctx.toolName, ctx.command, trigger);
+	const decision = await deps.requestUserApproval(req, ctx, signal);
+	return {
+		action: decision.approved ? "allow" : "deny",
+		reason: decision.reason ?? (decision.approved ? "approved by user" : "denied by user"),
+		source: "user",
+	};
+}
+
+/** 从 input 提取 bash command（仅 bash 工具）。 */
+function extractCommand(toolName: string, input: Record<string, unknown>): string | undefined {
+	if (toolName !== "bash") return undefined;
+	const cmd = input.command;
+	return typeof cmd === "string" ? cmd : undefined;
+}

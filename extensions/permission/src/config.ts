@@ -15,7 +15,6 @@ import {
 	isValidPermissionMode,
 	type ClassifierConfig,
 	type PermissionConfig,
-	type PermissionMode,
 	type Rule,
 } from "./types.js";
 

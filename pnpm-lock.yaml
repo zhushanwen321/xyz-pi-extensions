@@ -174,12 +174,12 @@ importers:
 
   extensions/permission:
     dependencies:
-      '@earendil-works/pi-ai':
-        specifier: '*'
-        version: 0.78.0(ws@8.21.0)(zod@4.4.3)
       '@mariozechner/pi-coding-agent':
         specifier: '*'
         version: 0.73.1(ws@8.21.0)(zod@4.4.3)
+      '@mariozechner/pi-tui':
+        specifier: '*'
+        version: 0.73.1
       tree-sitter-bash:
         specifier: ^0.25.1
         version: 0.25.1
@@ -187,6 +187,12 @@ importers:
         specifier: ^0.26.11
         version: 0.26.11
     devDependencies:
+      '@earendil-works/pi-ai':
+        specifier: '*'
+        version: 0.78.0(ws@8.21.0)(zod@4.4.3)
+      '@earendil-works/pi-tui':
+        specifier: '*'
+        version: 0.78.0
       vitest:
         specifier: ^4.1.8
         version: 4.1.8(@types/node@24.12.4)(@vitest/coverage-v8@4.1.8)(vite@8.0.16(@types/node@24.12.4)(jiti@2.7.0)(yaml@2.9.0))
