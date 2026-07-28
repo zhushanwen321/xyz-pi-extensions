@@ -342,3 +342,51 @@ describe("REC11: Wave 2 — custom form 焦点指示（M4）", () => {
 		}
 	});
 });
+
+// ──────────────────────── Wave 3: 搜索过滤一致性（M5） ────────────────────────
+
+describe("REC12: Wave 3 — 搜索过滤一致性（M5）", () => {
+	it("输入前缀匹配的字符，列表过滤显示对应命令", () => {
+		const { comp } = createComp();
+		// 进 command-select：add → allow-family
+		comp.handleInput("\r"); // [+ Add rule]
+		comp.handleInput("\r"); // allow-family（第一条模板，预选）
+		// 现在在 command-select，焦点默认在搜索框
+		// 输入 'gi'（git value 的前缀，startsWith 匹配）
+		comp.handleInput("g");
+		comp.handleInput("i");
+		const text = comp.render(80).join("\n");
+		// git 应在过滤后列表中
+		expect(text).toMatch(/git/i);
+		// 非前缀匹配的命令不应出现（如 npm，'gi' 不是其前缀）
+		expect(text).not.toMatch(/npm/i);
+	});
+
+	it("输入非前缀字符，实时列表不显示不匹配项（startsWith 一致性）", () => {
+		const { comp } = createComp();
+		comp.handleInput("\r"); // [+ Add rule]
+		comp.handleInput("\r"); // allow-family
+		// 输入 'install'（不是任何命令 value/label 的前缀；npm install 的 value 是 'npm'）
+		for (const ch of "install") comp.handleInput(ch);
+		const text = comp.render(80).join("\n");
+		// npm 不应出现（startsWith 不匹配）
+		expect(text).not.toMatch(/npm/i);
+		// 实时列表（SelectList.setFilter）无匹配 → 显示 noMatch 文案
+		// 注：__other__ 仅在 Enter 选择路径（_filterCommands）保留，不在实时显示保留
+		// （SelectList.setFilter 是 pi-tui 内置 value.startsWith，不感知 __other__）
+		expect(text).toContain("No matching commands");
+	});
+
+	it("__other__ 在 Enter 选择路径始终保留（_filterCommands 语义）", () => {
+		const { comp } = createComp();
+		comp.handleInput("\r");
+		comp.handleInput("\r");
+		// 输入任意字符（无命令 value 以 zzz 开头）
+		for (const ch of "zzz") comp.handleInput(ch);
+		// 实时显示已被 setFilter 清空（No matching commands），但 _filterCommands
+		// 保留 __other__ → Enter 触发 onSubmit → filtered 含 __other__ → 进入手动输入
+		comp.handleInput("\r");
+		const text = comp.render(80).join("\n");
+		expect(text).toContain("Enter command name"); // startCommandInput 界面
+	});
+});

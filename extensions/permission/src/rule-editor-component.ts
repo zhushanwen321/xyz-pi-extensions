@@ -369,8 +369,6 @@ export class RuleEditorComponent extends Container {
 		this.fillEditMode = true;
 		this.fillEditRuleId = ruleId;
 		this.fillSelections = {
-			cmd: extractCmd(rule.pattern),
-			subcmd: extractSubcmd(rule.pattern),
 			pattern: rule.pattern,
 			action: rule.action,
 			tool: rule.tool,
@@ -425,7 +423,7 @@ export class RuleEditorComponent extends Container {
 		// 搜索输入变化时过滤列表
 		searchInput.onSubmit = (val: string): void => {
 			// Enter 在搜索框中 = 选择第一个匹配项或进入手动输入
-			const filtered = this.filterCommandItems(allItems, val.trim());
+			const filtered = this._filterCommands(allItems, val.trim());
 			if (filtered.length === 0 || (filtered.length === 1 && filtered[0]?.value === "__other__")) {
 				// 无匹配 → 进入手动输入
 				this.startCommandInput();
@@ -505,13 +503,13 @@ export class RuleEditorComponent extends Container {
 		return items;
 	}
 
-	/** 过滤命令列表（Enter 时检查匹配用） */
-	private filterCommandItems(items: SelectItem[], query: string): SelectItem[] {
+	/** 过滤命令列表（Enter 时检查匹配用）。startsWith 与 SelectList.setFilter 一致（M5）。 */
+	private _filterCommands(items: SelectItem[], query: string): SelectItem[] {
 		if (query.length === 0) return items;
 		const lower = query.toLowerCase();
 		return items.filter((item) => {
 			if (item.value === "__other__") return true; // 始终保留 Other
-			return item.value.toLowerCase().includes(lower) || item.label.toLowerCase().includes(lower);
+			return item.value.toLowerCase().startsWith(lower) || item.label.toLowerCase().startsWith(lower);
 		});
 	}
 
@@ -537,7 +535,7 @@ export class RuleEditorComponent extends Container {
 			this._commandList = list;
 
 			searchInput.onSubmit = (val: string): void => {
-				const filtered = this.filterCommandItems(allItems, val.trim());
+				const filtered = this._filterCommands(allItems, val.trim());
 				if (filtered.length === 0 || (filtered.length === 1 && filtered[0]?.value === "__other__")) {
 					this.startCommandInput("deny-cmd");
 					return;
@@ -618,7 +616,7 @@ export class RuleEditorComponent extends Container {
 		this._commandList = list;
 
 		searchInput.onSubmit = (val: string): void => {
-			const filtered = this.filterCommandItems(allItems, val.trim());
+			const filtered = this._filterCommands(allItems, val.trim());
 			if (filtered.length === 0 || (filtered.length === 1 && filtered[0]?.value === "__other__")) {
 				this.startCommandInput("allow-subcmd-cmd");
 				return;
@@ -873,17 +871,6 @@ export class RuleEditorComponent extends Container {
 
 	// ──────────────────────── 辅助 ────────────────────────
 
-	/** 构建 PRESET_COMMANDS + Other 的 SelectItem[]。 */
-	private buildPresetCommandItems(): SelectItem[] {
-		const items: SelectItem[] = PRESET_COMMANDS.map((cmd) => ({
-			value: cmd.cmd,
-			label: cmd.label,
-			description: cmd.category,
-		}));
-		items.push({ value: "__other__", label: "[Other]", description: "Enter a custom command name" });
-		return items;
-	}
-
 	/** 同步 Custom form 焦点标志（Input.focused + rerender）。 */
 	private syncCustomFocus(): void {
 		for (let i = 0; i < this.customChildren.length; i++) {
@@ -893,18 +880,4 @@ export class RuleEditorComponent extends Container {
 			}
 		}
 	}
-}
-
-// ──────────────────────── pattern 解析辅助 ────────────────────────
-
-/** 从 wildcard pattern 提取 cmd（第一个 token）。 */
-function extractCmd(pattern: string): string | undefined {
-	const match = /^([^ *?]+)(?:\s|$)/.exec(pattern);
-	return match !== null ? match[1] : undefined;
-}
-
-/** 从 wildcard pattern 提取 subcmd（第二个 token，如有）。 */
-function extractSubcmd(pattern: string): string | undefined {
-	const match = /^[^ *?]+ ([^ *?]+)(?:\s|$)/.exec(pattern);
-	return match !== null ? match[1] : undefined;
 }
