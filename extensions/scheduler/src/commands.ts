@@ -3,6 +3,39 @@ import { parseSchedule } from './parsing.js'
 import type { SchedulerRuntime } from './runtime.js'
 
 /**
+ * Shell-style quote-aware tokenizer.
+ * Supports single/double quoted tokens (e.g. cron expressions with spaces).
+ * Quoted content is kept as a single token; quote chars are stripped from output.
+ */
+function tokenizeQuoted(input: string): string[] {
+  const tokens: string[] = []
+  let current = ''
+  let inQuote: '"' | "'" | null = null
+
+  for (let i = 0; i < input.length; i++) {
+    const ch = input[i]!
+    if (inQuote) {
+      if (ch === inQuote) {
+        inQuote = null
+      } else {
+        current += ch
+      }
+    } else if (ch === '"' || ch === "'") {
+      inQuote = ch
+    } else if (ch === ' ' || ch === '\t') {
+      if (current) {
+        tokens.push(current)
+        current = ''
+      }
+    } else {
+      current += ch
+    }
+  }
+  if (current) tokens.push(current)
+  return tokens
+}
+
+/**
  * 注册 /schedule command。
  * 消歧规则：第一个参数匹配子命令关键词则走对应分支，否则尝试 parseSchedule 创建任务。
  *
@@ -50,7 +83,7 @@ export function registerScheduleCommand(
         return 'TUI manager not yet implemented. Use /schedule list to see tasks.'
       }
 
-      const parts = trimmed.split(/\s+/)
+      const parts = tokenizeQuoted(trimmed)
       const first = parts[0]!.toLowerCase()
 
       // 子命令路由

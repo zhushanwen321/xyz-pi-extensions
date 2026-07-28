@@ -148,21 +148,27 @@ describe('/schedule command', () => {
     expect(task.kind).toBe('once')
   })
 
-  // BUG（commands.ts:88-89）：cron 分支取 scheduleInput = parts[1]，但 cron 表达式含空格
-  // 会被 split(/\s+/) 切碎。无论加不加引号都只取到第一个 token（如 "'*/10" 或 "*/10"），
-  // parseSchedule 因不含空格走 duration 分支必然失败。
-  // 当前真实行为：返回 'Invalid schedule: "..."'。这里断言真实行为（不发明新行为）。
-  // 修复方向：command 层做 shell-style quote 解析，或 cron 表达式改走 tool 创建。
-  it('cron branch fails on quoted expression (quote-split bug)', async () => {
+  // Quote-aware tokenizer 修复后，cron 'expr' 能正确提取整个表达式。
+  it('creates cron task from quoted expression', async () => {
     const result = await commandOpts.handler("cron '*/10 * * * *' prompt")
-    expect(result).toMatch(/^Invalid schedule:/)
-    expect(result).toContain("'*/10") // 引号被 split 破坏的证据
+    expect(result).toContain('created')
+    expect(result).toContain('*/10 * * * *')
+    expect(runtime.listTasks()).toHaveLength(1)
   })
 
-  it('cron branch also fails on unquoted multi-token expression', async () => {
+  it('creates cron task from double-quoted expression', async () => {
+    const result = await commandOpts.handler('cron "0 9 * * 1-5" standup reminder')
+    expect(result).toContain('created')
+    expect(result).toContain('0 9 * * 1-5')
+    expect(runtime.listTasks()).toHaveLength(1)
+  })
+
+  // Unquoted multi-token cron still fails -- tokenizer cannot distinguish cron fields from prompt.
+  // Users should quote the cron expression or use the schedule tool (JSON params are unambiguous).
+  it('cron branch fails on unquoted multi-token expression (use quotes)', async () => {
     const result = await commandOpts.handler('cron */10 * * * * prompt')
     expect(result).toMatch(/^Invalid schedule:/)
-    expect(result).toContain('*/10') // 只取到第一个 token
+    expect(result).toContain('*/10')
   })
 
   // ── 错误分支 ──

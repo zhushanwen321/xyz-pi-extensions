@@ -785,12 +785,12 @@ pi.on('session_shutdown', () => {
 **决策**：string[] 重载不提供 theme。若需着色，需切到 SDK 第二重载（Component factory），复杂度高，defer。
 **影响**：overdue 任务无红色高亮，仅文本标记。
 
-### D5: command cron 表达式解析（§5.1 / §5.2）— bug，未修复
+### D5: command cron 表达式解析（§5.1 / §5.2）— 已修复
 
 **spec 描述**：`/schedule cron '<expr>' <prompt>` 创建 cron 任务，引号包裹的 cron 表达式作为单一 schedule 参数。
-**实现现状**：commands.ts:53 用 `trimmed.split(/\s+/)` 切分整行，不做 shell-style quote 解析。`scheduleInput = parts[scheduleStart]`（commands.ts:89）只取第二个 token，cron 表达式含空格会被切碎：
-- `cron '*/10 * * * *' prompt` → `scheduleInput = "'*/10"` → parseSchedule 走 duration 分支失败 → `Invalid schedule: "'*/10"`
-- `cron */10 * * * * prompt`（不带引号）→ `scheduleInput = "*/10"` → 同样失败
-**决策**：W5 未修复，当前 cron 任务只能通过 `schedule` tool 创建（tool 走 JSON 参数，无 tokenization 问题）。command 层的 cron 分支事实上不可用。
-**影响**：`/schedule cron ...` 始终报 Invalid schedule。`getArgumentCompletions` 的 `cron '` 补全建议会引导用户走入这条死路径。测试 `commands.test.ts` 以 `.todo`-style 断言记录此真实行为（断言返回 Invalid，而非创建成功）。
-**修复方向**：command 层引入 quote-aware tokenizer（如解析配对单引号/双引号），或将 cron 创建完全交给 tool、command 移除 cron 分支。
+**原始 bug**：commands.ts:53 用 `trimmed.split(/\s+/)` 切分整行，不做 shell-style quote 解析。`scheduleInput = parts[scheduleStart]` 只取第二个 token，cron 表达式含空格会被切碎。
+**修复**：引入 `tokenizeQuoted()` 函数，支持单引号/双引号包裹含空格的 token。handler 改用 `tokenizeQuoted(trimmed)` 替代 `trimmed.split(/\s+/)`。
+- `cron '*/10 * * * *' prompt` → `['cron', '*/10 * * * *', 'prompt']` → 创建成功
+- `cron "0 9 * * 1-5" standup` → `['cron', '0 9 * * 1-5', 'standup']` → 创建成功
+- `cron */10 * * * * prompt`（不带引号）→ 仍然失败（无法区分 cron 字段和 prompt），用户需加引号或使用 schedule tool
+**已知限制**：未加引号的多 token cron 表达式仍不可用，需用户显式引号包裹或使用 schedule tool（JSON 参数无歧义）。
