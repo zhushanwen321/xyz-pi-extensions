@@ -233,3 +233,112 @@ describe("REC9: cancel", () => {
 		expect(done).toHaveBeenCalledOnce();
 	});
 });
+
+// ──────────────────────── Wave 2: edit 提交保留改动（M1 + M2） ────────────────────────
+
+describe("REC10: Wave 2 — edit 提交保留改动（M1）", () => {
+	it("edit 规则改 action 后 ops 含 edit 且字段正确", () => {
+		const initialRule = makeRule({ id: "user-1", pattern: "npm *", action: "allow" });
+		const { comp } = createComp([initialRule]);
+		// list stage 第一条是规则，Enter 进 edit（custom form，edit 模式）
+		comp.handleInput("\r");
+		// 焦点在 pattern（index 0），Tab 到 action（index 1）
+		comp.handleInput("\t"); // → action
+		comp.handleInput("\x1b[B"); // Down → deny（移动指针）
+		comp.handleInput("\r"); // Enter → actionList.onSelect → fillSelections.action = "deny"
+		// Tab 经 tool / description 到 submit
+		comp.handleInput("\t"); // → tool (index 2)
+		comp.handleInput("\t"); // → description (index 3)
+		comp.handleInput("\t"); // → submit (index 4)
+		comp.handleInput("\r"); // submit → commitFill
+		// 回到 list stage，ops 应含 1 个 edit
+		expect(comp.ops).toHaveLength(1);
+		expect(comp.ops[0]!.kind).toBe("edit");
+		const editOp = comp.ops[0]!;
+		if (editOp.kind === "edit") {
+			expect(editOp.id).toBe("user-1");
+			expect(editOp.rule.id).toBe("user-1");
+			expect(editOp.rule.pattern).toBe("npm *"); // 未改 pattern
+			expect(editOp.rule.action).toBe("deny"); // 改成 deny
+			expect(editOp.rule.tool).toBe("bash");
+		}
+	});
+
+	it("edit 提交后 pattern 通过 _syncCustomFormValues 保留（即使没按 Enter 确认 Input）", () => {
+		// 验证 M2：Input.onSubmit 仅在 Enter 时触发；Tab 切走不触发。
+		// commitFill 入口的 _syncCustomFormValues 兜底读 getValue，确保预填值不丢。
+		const initialRule = makeRule({ id: "user-1", pattern: "npm *", action: "allow" });
+		const { comp } = createComp([initialRule]);
+		comp.handleInput("\r"); // 进 edit
+		// 焦点在 pattern，直接 Tab 到 submit（不按 Enter 确认 pattern）
+		comp.handleInput("\t"); // → action
+		comp.handleInput("\t"); // → tool
+		comp.handleInput("\t"); // → description
+		comp.handleInput("\t"); // → submit
+		comp.handleInput("\r"); // submit → commitFill（入口调 _syncCustomFormValues）
+		expect(comp.ops).toHaveLength(1);
+		const editOp = comp.ops[0]!;
+		if (editOp.kind === "edit") {
+			expect(editOp.rule.pattern).toBe("npm *"); // _syncCustomFormValues 读到预填值
+			expect(editOp.rule.action).toBe("allow"); // 原 action 保留
+		}
+	});
+
+	it("edit 模式 commitFill 绕过 fillTemplate.build（M1：不再被 fillTemplate===null 吞掉）", () => {
+		// 直接验证：edit 进入 custom form 后 fillTemplate 始终为 null，
+		// 旧逻辑会 switchToListStage() 提前返回，ops 为空。
+		// 新逻辑：edit 分支前置，直接构造 Rule。
+		const initialRule = makeRule({ id: "user-1", pattern: "git *", action: "ask" });
+		const { comp } = createComp([initialRule]);
+		comp.handleInput("\r"); // 进 edit
+		// 焦点一路 Tab 到 submit，不改任何字段
+		for (let i = 0; i < 4; i++) comp.handleInput("\t"); // pattern→action→tool→desc→submit
+		comp.handleInput("\r"); // submit
+		expect(comp.ops).toHaveLength(1);
+		const editOp = comp.ops[0]!;
+		if (editOp.kind === "edit") {
+			expect(editOp.rule.pattern).toBe("git *");
+			expect(editOp.rule.action).toBe("ask");
+		}
+	});
+});
+
+// ──────────────────────── Wave 2: custom form 焦点指示（M4） ────────────────────────
+
+describe("REC11: Wave 2 — custom form 焦点指示（M4）", () => {
+	it("初始焦点在 Pattern，render 含 ▶ Pattern 标记且不含 ▶ Action", () => {
+		const { comp } = createComp();
+		// 进 custom form：add → 选 custom 模板（index 4）
+		comp.handleInput("\r"); // [+ Add rule]
+		for (let i = 0; i < 4; i++) comp.handleInput("\x1b[B"); // Down x4 到 custom
+		comp.handleInput("\r"); // Enter custom
+		const text = comp.render(80).join("\n");
+		expect(text).toContain("▶ Pattern");
+		expect(text).not.toContain("▶ Action");
+	});
+
+	it("Tab 后焦点到 Action，render 含 ▶ Action 标记且 ▶ Pattern 消失", () => {
+		const { comp } = createComp();
+		comp.handleInput("\r");
+		for (let i = 0; i < 4; i++) comp.handleInput("\x1b[B");
+		comp.handleInput("\r");
+		comp.handleInput("\t"); // Tab → Action
+		const text = comp.render(80).join("\n");
+		expect(text).toContain("▶ Action");
+		expect(text).not.toContain("▶ Pattern");
+	});
+
+	it("连续 Tab 循环焦点：Pattern → Action → Tool → Description → 回 Pattern 区域无重复 ▶", () => {
+		const { comp } = createComp();
+		comp.handleInput("\r");
+		for (let i = 0; i < 4; i++) comp.handleInput("\x1b[B");
+		comp.handleInput("\r");
+		// 焦点 0=Pattern → 1=Action → 2=Tool → 3=Description
+		const labels = ["▶ Pattern", "▶ Action", "▶ Tool", "▶ Description (optional)"];
+		for (const expected of labels) {
+			const text = comp.render(80).join("\n");
+			expect(text).toContain(expected);
+			comp.handleInput("\t");
+		}
+	});
+});

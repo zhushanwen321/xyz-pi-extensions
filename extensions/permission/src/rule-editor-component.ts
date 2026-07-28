@@ -128,7 +128,13 @@ export class RuleEditorComponent extends Container {
 
 	override render(width: number): string[] {
 		const innerWidth = Math.max(0, width - RuleEditorComponent.BORDER_OVERHEAD);
-		const inner = super.render(innerWidth);
+		let inner = super.render(innerWidth);
+
+		// custom form 焦点指示（M4）：当前焦点字段的标签加 ▶ 前缀
+		if (this.stage === "fill" && this.fillKind === "custom") {
+			inner = this._injectFocusIndicator(inner);
+		}
+
 		const lines: string[] = [];
 		lines.push(`\u250C${"\u2500".repeat(innerWidth)}\u2510`);
 		for (const line of inner) {
@@ -139,14 +145,50 @@ export class RuleEditorComponent extends Container {
 		return lines;
 	}
 
+	/**
+	 * 在 custom form 渲染输出中给当前焦点字段的标签行加 ▶ 前缀（M4）。
+	 *
+	 * TextLines.render 输出原始未 padding 的标签行，故可精确匹配。
+	 * 字段标签（与 startFillCustom 里 addChild 的 TextLines 一致）：
+	 *   customFocusIndex 0 → "Pattern (wildcard, e.g. 'npm *')"
+	 *   customFocusIndex 1 → "Action"
+	 *   customFocusIndex 2 → "Tool"
+	 *   customFocusIndex 3 → "Description (optional)"
+	 *   index 4 (Submit) / 5 (Delete) 为 SelectList，无文字标签，不处理。
+	 */
+	private _injectFocusIndicator(lines: string[]): string[] {
+		const fieldLabels = [
+			"Pattern (wildcard, e.g. 'npm *')", // index 0
+			"Action", // index 1
+			"Tool", // index 2
+			"Description (optional)", // index 3
+		];
+		const focusedLabel = fieldLabels[this.customFocusIndex];
+		if (focusedLabel === undefined) return lines; // Submit/Delete 焦点：不加标记
+
+		return lines.map((line) => {
+			// 精确匹配当前焦点标签 → 加 ▶ 前缀
+			if (line === focusedLabel) {
+				return `\u25B6 ${line}`;
+			}
+			// 焦点已转移：去掉其他标签行残留的 ▶ 前缀（避免重复渲染累积）
+			if (line.startsWith("\u25B6 ") && fieldLabels.includes(line.slice(2))) {
+				return line.slice(2);
+			}
+			return line;
+		});
+	}
+
 	// ──────────────────────── handleInput override（Container 无 handleInput，必须新增） ────────────────────────
 
 	handleInput(data: string): void {
 		// Custom form：Tab 焦点路由（WR8）
 		if (this.stage === "fill" && this.fillKind === "custom") {
 			if (matchesKey(data, "tab")) {
-				// Edit 模式有 6 个字段，New 模式有 5 个
-				const maxIndex = this.fillEditMode ? 6 : 5;
+				// ES2 修复：以 customChildren.length 为模，避免硬编码与实际 children 数量不一致。
+				// New 模式 5 项（pattern/action/tool/desc/submit），Edit 模式 6 项（+delete）。
+				const maxIndex = this.customChildren.length;
+				if (maxIndex === 0) return; // 防御：无子组件时不循环
 				this.customFocusIndex = (this.customFocusIndex + 1) % maxIndex;
 				this.syncCustomFocus();
 				this.invalidate();
@@ -723,7 +765,7 @@ export class RuleEditorComponent extends Container {
 		this.clear();
 		this._resetStageRefs();
 		const input = new Input();
-		if ("focused" in input) (input as unknown as { focused: boolean }).focused = true;
+		input.focused = true;
 		input.onSubmit = (val: string): void => {
 			const cmd = val.trim();
 			if (cmd.length > 0) {
@@ -752,7 +794,7 @@ export class RuleEditorComponent extends Container {
 		this.clear();
 		this._resetStageRefs();
 		const input = new Input();
-		if ("focused" in input) (input as unknown as { focused: boolean }).focused = true;
+		input.focused = true;
 		input.onSubmit = (val: string): void => {
 			const subcmd = val.trim();
 			if (subcmd.length > 0) {
@@ -772,27 +814,61 @@ export class RuleEditorComponent extends Container {
 
 	/** 提交当前 fill 结果：build rule + 赋 id + push op。 */
 	private commitFill(): void {
-		if (this.fillTemplate === null) {
+		this._syncCustomFormValues(); // 兜底刷新 Input 值（M2 修复）
+
+		// edit 模式：直接构造 Rule，绕过 fillTemplate.build（M1 修复）。
+		// enterFillEditMode 走 custom form 但从不设置 fillTemplate，故 fillTemplate 为 null，
+		// 旧逻辑会在 fillTemplate === null 时提前 switchToListStage()，导致 edit 永不落盘。
+		if (this.fillEditMode && this.fillEditRuleId !== null) {
+			const pattern = (this.fillSelections.pattern && this.fillSelections.pattern.trim()) || "*";
+			const rule: Rule = {
+				id: this.fillEditRuleId,
+				pattern,
+				action: this.fillSelections.action ?? "ask",
+				tool: this.fillSelections.tool ?? "bash",
+				source: "user",
+				description: this.fillSelections.description,
+			};
+			this.ops.push({ kind: "edit", id: this.fillEditRuleId, rule });
 			this.switchToListStage();
 			return;
 		}
 
+		// new 模式：走 fillTemplate.build
+		if (this.fillTemplate === null) {
+			this.switchToListStage();
+			return;
+		}
 		const built = this.fillTemplate.build(this.fillSelections);
 		const ruleId = this.sessionIdCounter(); // G13：立即赋值
 		const rule: Rule = {
 			id: ruleId,
 			...built,
 		};
-
-		if (this.fillEditMode && this.fillEditRuleId !== null) {
-			// edit 模式：用原 id
-			rule.id = this.fillEditRuleId;
-			this.ops.push({ kind: "edit", id: this.fillEditRuleId, rule });
-		} else {
-			this.ops.push({ kind: "add", rule });
-		}
-
+		this.ops.push({ kind: "add", rule });
 		this.switchToListStage();
+	}
+
+	/**
+	 * 兜底同步 custom form 的 Input 值到 fillSelections（M2 修复）。
+	 *
+	 * pi-tui Input.onSubmit 仅在 Enter 时触发，用户按 Tab 切换焦点不会触发 onSubmit。
+	 * 本方法在 commitFill 入口调用，确保 Tab 后 Submit 的数据不丢失。
+	 *
+	 * customChildren index 约定（见 startFillCustom）：
+	 *   [0]=patternInput, [1]=actionList, [2]=toolList, [3]=descInput, [4]=submitList[, 5]=deleteList
+	 * SelectList（action/tool）的 onSelect 已实时更新 fillSelections，无需在此同步。
+	 */
+	private _syncCustomFormValues(): void {
+		const patternInput = this.customChildren[0];
+		if (patternInput instanceof Input) {
+			this.fillSelections.pattern = patternInput.getValue();
+		}
+		const descInput = this.customChildren[3];
+		if (descInput instanceof Input) {
+			const desc = descInput.getValue();
+			this.fillSelections.description = desc || undefined;
+		}
 	}
 
 	// ──────────────────────── 辅助 ────────────────────────
