@@ -1,5 +1,11 @@
 # @zhushanwen/pi-scheduler
 
+## 0.0.5
+
+### Patch Changes
+
+- Publish as public package via .npmrc access=public.
+
 ## 0.0.4
 
 ### Patch Changes
