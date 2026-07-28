@@ -1,5 +1,11 @@
 # @zhushanwen/pi-scheduler
 
+## 0.0.4
+
+### Patch Changes
+
+- Publish with --access public for first-time scoped package.
+
 ## 0.0.2
 
 ### Patch Changes
