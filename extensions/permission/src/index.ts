@@ -91,7 +91,7 @@ export default function permissionExtension(pi: ExtensionAPI): void {
 
 	// ──────────────────────── /permission 命令 ────────────────────────
 	pi.registerCommand("permission", {
-		description: "View or switch permission mode (yolo/auto/approve/strict). Usage: /permission [mode|status|model]",
+		description: "View or switch permission mode. Usage: /permission [mode|status|rule|model]",
 		handler: async (args: string, ctx: ExtensionCommandContext): Promise<void> => {
 			// 命令执行前重载配置（确保最新，用户可能手动改过文件）
 			refreshConfig();
@@ -102,14 +102,19 @@ export default function permissionExtension(pi: ExtensionAPI): void {
 					{
 						mode: ctx.mode,
 						ui: {
-							notify: (msg: string, type?: string) => ctx.ui.notify(msg, type),
-							select: (title: string, options: string[], opts?: unknown) =>
+							notify: (msg: string, type?: "info" | "warning" | "error") => ctx.ui.notify(msg, type),
+							select: (title: string, options: string[], opts?: Parameters<typeof ctx.ui.select>[2]) =>
 								ctx.ui.select(title, options, opts),
 							custom: <T,>(
 								factory: (tui: unknown, theme: unknown, kb: unknown, done: (result: T) => void) => unknown,
 								options?: { overlay?: boolean },
 							) =>
 								ctx.ui.custom<T>(factory as Parameters<typeof ctx.ui.custom<T>>[0], options),
+							// 连接 ctx.ui.input（rule-editor custom 模板文本输入用）。
+							// approval.ts 已声明可选 input（SDK 提供，mock 可能缺失）。
+							...(typeof ctx.ui.input === "function"
+								? { input: (title: string, placeholder?: string, opts?: Parameters<typeof ctx.ui.input>[2]) => ctx.ui.input(title, placeholder, opts) }
+								: {}),
 						},
 					},
 					config,
@@ -134,14 +139,18 @@ export default function permissionExtension(pi: ExtensionAPI): void {
 					{
 						mode: ctx.mode,
 						ui: {
-							notify: (msg: string, type?: string) => ctx.ui.notify(msg, type),
-							select: (title: string, options: string[], opts?: unknown) =>
+							notify: (msg: string, type?: "info" | "warning" | "error") => ctx.ui.notify(msg, type),
+							select: (title: string, options: string[], opts?: Parameters<typeof ctx.ui.select>[2]) =>
 								ctx.ui.select(title, options, opts),
 							custom: <T,>(
 								factory: (tui: unknown, theme: unknown, kb: unknown, done: (result: T) => void) => unknown,
 								options?: { overlay?: boolean },
 							) =>
 								ctx.ui.custom<T>(factory as Parameters<typeof ctx.ui.custom<T>>[0], options),
+							// 连接 ctx.ui.input（与 rule handler 一致；model picker 当前不用，但保持 ctx 对称）。
+							...(typeof ctx.ui.input === "function"
+								? { input: (title: string, placeholder?: string, opts?: Parameters<typeof ctx.ui.input>[2]) => ctx.ui.input(title, placeholder, opts) }
+								: {}),
 						},
 					},
 					config,
@@ -225,8 +234,8 @@ async function processToolCall(
 	const approvalCtx = {
 		mode: ctx.mode,
 		ui: {
-			notify: (msg: string, type?: string) => ctx.ui.notify(msg, type),
-			select: (title: string, options: string[], opts?: unknown) => ctx.ui.select(title, options, opts),
+			notify: (msg: string, type?: "info" | "warning" | "error") => ctx.ui.notify(msg, type),
+			select: (title: string, options: string[], opts?: Parameters<typeof ctx.ui.select>[2]) => ctx.ui.select(title, options, opts),
 			custom: <T,>(
 				factory: (tui: unknown, theme: unknown, kb: unknown, done: (result: T) => void) => unknown,
 				options?: { overlay?: boolean },
@@ -234,9 +243,9 @@ async function processToolCall(
 				ctx.ui.custom<T>(factory as Parameters<typeof ctx.ui.custom<T>>[0], options),
 			// W6 T9 G3：Reject-with-Reason。ctx.ui.input 存在则透传（采集真实拒绝理由）。
 			// approval.ts 的 collectRejectReason 会用 typeof 判断是否可用，不可用则 fallback。
-			...(typeof ctx.ui.input === "function"
-				? { input: (title: string, placeholder?: string, opts?: unknown) => ctx.ui.input(title, placeholder, opts) }
-				: {}),
+				...(typeof ctx.ui.input === "function"
+					? { input: (title: string, placeholder?: string, opts?: Parameters<typeof ctx.ui.input>[2]) => ctx.ui.input(title, placeholder, opts) }
+					: {}),
 		},
 	};
 	const deps: CheckPermissionDeps = createPipelineDeps(approvalCtx);

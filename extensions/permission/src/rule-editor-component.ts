@@ -11,7 +11,7 @@
  * WR8：focusIndex 模 5（Custom form 5 项 Tab 循环）。
  */
 
-import { type Component, Container, Input, type SelectItem, SelectList, type SelectListTheme } from "@mariozechner/pi-tui";
+import { type Component, Container, Input, type SelectItem, SelectList, type SelectListTheme, truncateToWidth } from "@mariozechner/pi-tui";
 import { matchesKey } from "@mariozechner/pi-tui";
 
 import {
@@ -114,6 +114,24 @@ export class RuleEditorComponent extends Container {
 		this.done = done;
 		this.theme = theme;
 		this.switchToListStage();
+	}
+
+	// ──────────────────────── 边框渲染 ────────────────────────
+
+	/** box 边框左右各占用 1 列（│ × 2） */
+	private static readonly BORDER_OVERHEAD = 2;
+
+	override render(width: number): string[] {
+		const innerWidth = Math.max(0, width - RuleEditorComponent.BORDER_OVERHEAD);
+		const inner = super.render(innerWidth);
+		const lines: string[] = [];
+		lines.push(`\u250C${"\u2500".repeat(innerWidth)}\u2510`);
+		for (const line of inner) {
+			const padded = truncateToWidth(line, innerWidth, "", true);
+			lines.push(`\u2502${padded}\u2502`);
+		}
+		lines.push(`\u2514${"\u2500".repeat(innerWidth)}\u2518`);
+		return lines;
 	}
 
 	// ──────────────────────── handleInput override（Container 无 handleInput，必须新增） ────────────────────────

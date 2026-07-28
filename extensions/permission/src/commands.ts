@@ -50,7 +50,7 @@ export function handlePermissionCommand(
 	}
 
 	// 未知参数
-	return `[pi-permission] Unknown mode '${trimmed}'. Available: ${PERMISSION_MODES.join(", ")}. Usage: /permission [${PERMISSION_MODES.join("|")}|status]`;
+	return `[pi-permission] Unknown mode '${trimmed}'. Available: ${PERMISSION_MODES.join(", ")}. Usage: /permission [mode|status|rule|model]`;
 }
 
 // ──────────────────────── 消息格式化 ────────────────────────
@@ -146,7 +146,7 @@ export async function handlePermissionModelCommand(
 	if (models.size === 0) {
 		ctx.ui.notify(
 			"[pi-permission] No available models. Configure ~/.pi/agent/models.json first.",
-			"warn",
+			"warning",
 		);
 		return;
 	}

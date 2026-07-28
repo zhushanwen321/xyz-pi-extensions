@@ -29,7 +29,7 @@ function makeRule(overrides: Partial<Rule> = {}): Rule {
 }
 
 function makeCtx(overrides: Partial<RuleEditorContext> = {}): RuleEditorContext {
-	return {
+	const ctx: RuleEditorContext = {
 		mode: overrides.mode ?? "rpc",
 		ui: {
 			notify: overrides.ui?.notify ?? vi.fn(),
@@ -37,6 +37,11 @@ function makeCtx(overrides: Partial<RuleEditorContext> = {}): RuleEditorContext 
 			custom: overrides.ui?.custom ?? vi.fn(() => Promise.resolve(undefined)),
 		},
 	};
+	// 透传可选 input（M7：rule-editor custom 模板用真实文本输入）
+	if (overrides.ui?.input !== undefined) {
+		ctx.ui.input = overrides.ui.input;
+	}
+	return ctx;
 }
 
 function makeCounter(): () => string {
@@ -52,7 +57,7 @@ describe("RE1: headless 模式降级", () => {
 		const ctx = makeCtx({ mode: "json", ui: { notify, select: vi.fn(), custom: vi.fn() } });
 		const result = await editRulesViaOverlay(ctx, [], makeCounter());
 		expect(result).toBeUndefined();
-		expect(notify).toHaveBeenCalledWith(expect.stringContaining("not available in headless"), "warn");
+		expect(notify).toHaveBeenCalledWith(expect.stringContaining("not available in headless"), "warning");
 	});
 
 	it("print mode → notify + undefined", async () => {
@@ -172,5 +177,67 @@ describe("RE7: G16 多循环反映前序 ops", () => {
 		// 第四次 select（index 3）是第二次 list，options 应包含新规则
 		const secondListArgs = selectMock.mock.calls[3] as [string, string[]];
 		expect(secondListArgs[1]).toContain("[ask] docker *");
+	});
+});
+
+// ──────────────────────── RPC: custom 模板用真实 ctx.ui.input（M7） ────────────────────────
+
+describe("RE8: RPC custom 模板用真实 ctx.ui.input（M7）", () => {
+	it("ctx.ui.input 可用 → custom 模板 pattern/description 走真实 input（不 fallback select）", async () => {
+		const selectMock = vi.fn()
+			.mockResolvedValueOnce("[+ Add rule]") // list
+			.mockResolvedValueOnce("Custom (advanced)") // template
+			.mockResolvedValueOnce("allow") // action select
+			.mockResolvedValueOnce("[Done]"); // list（第二次循环）
+		const inputMock = vi.fn()
+			.mockResolvedValueOnce("foo *") // pattern input
+			.mockResolvedValueOnce("my rule"); // description input
+		const ctx = makeCtx({
+			mode: "rpc",
+			ui: {
+				notify: vi.fn(),
+				select: selectMock,
+				custom: vi.fn(),
+				input: inputMock,
+			},
+		});
+		const result = await editRulesViaOverlay(ctx, [], makeCounter());
+		expect(result).toBeDefined();
+		expect(result).toHaveLength(1);
+		expect(result![0]!.kind).toBe("add");
+		// custom 模板的 pattern 来自真实 input
+		expect(result![0]!.rule.pattern).toBe("foo *");
+		// input 被调 2 次（pattern + description），且首参是提示文案
+		expect(inputMock).toHaveBeenCalledTimes(2);
+		expect(inputMock.mock.calls[0]![0]).toContain("Pattern");
+		expect(inputMock.mock.calls[1]![0]).toContain("Description");
+		// select 不应被当作 fallback input（pattern/description 走 input，非 select）
+		// select 仅用于：list / template / action / 第二次 list，无一含 Pattern/Description
+		for (const call of selectMock.mock.calls) {
+			const title = call[0] as string;
+			expect(title).not.toContain("Pattern");
+			expect(title).not.toContain("Description");
+		}
+	});
+
+	it("ctx.ui.input 缺失 → fallback 用 select 占位（保底，不崩）", async () => {
+		// input 降级为单选项 select：返回占位符文本（= 用户"选了"占位符）
+		const selectMock = vi.fn()
+			.mockResolvedValueOnce("[+ Add rule]") // list
+			.mockResolvedValueOnce("Custom (advanced)") // template
+			// pattern fallback select 返回占位符 "npm *"
+			.mockResolvedValueOnce("npm *")
+			.mockResolvedValueOnce("allow") // action select
+			// description fallback select 返回占位符 ""（空）→ 模板 description=undefined
+			.mockResolvedValueOnce("")
+			.mockResolvedValueOnce("[Done]"); // list（第二次循环）
+		const ctx = makeCtx({
+			mode: "rpc",
+			ui: { notify: vi.fn(), select: selectMock, custom: vi.fn() },
+		});
+		const result = await editRulesViaOverlay(ctx, [], makeCounter());
+		expect(result).toBeDefined();
+		expect(result).toHaveLength(1);
+		expect(result![0]!.rule.pattern).toBe("npm *");
 	});
 });

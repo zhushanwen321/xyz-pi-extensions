@@ -165,11 +165,14 @@ describe("/permission <mode> → 切换模式", () => {
 // ──────────────────────── invalid mode ────────────────────────
 
 describe("/permission <invalid> → 错误提示", () => {
-	it("未知 mode → 错误信息 + 可用模式列表", () => {
+	it("未知 mode → 错误信息 + 可用模式列表 + Usage 含 rule/model", () => {
 		const msg = handlePermissionCommand("invalid-mode", makeConfig(), successSave());
 		expect(msg).toContain("Unknown mode");
 		expect(msg).toContain("invalid-mode");
 		expect(msg).toContain("yolo, auto, approve, strict");
+		// M6：Usage 提示应列出所有子命令（含 rule/model）
+		expect(msg).toContain("rule");
+		expect(msg).toContain("model");
 	});
 
 	it("拼错的 mode（yoloo）→ 错误提示", () => {
@@ -248,7 +251,7 @@ describe("/permission model（W7）", () => {
 		expect(ctx.ui.notify).toHaveBeenCalledOnce();
 		const [msg, level] = (ctx.ui.notify as ReturnType<typeof vi.fn>).mock.calls[0]!;
 		expect(msg).toContain("No available models");
-		expect(level).toBe("warn");
+		expect(level).toBe("warning");
 		expect(save).not.toHaveBeenCalled();
 	});
 

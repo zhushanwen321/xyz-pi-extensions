@@ -22,12 +22,14 @@ export type RuleEditorResult = RuleOp[] | undefined;
 export interface RuleEditorContext {
 	mode: "tui" | "rpc" | "json" | "print";
 	ui: {
-		notify(msg: string, type?: string): void;
-		select(title: string, options: string[], opts?: unknown): Promise<string | undefined>;
+		notify(msg: string, type?: "info" | "warning" | "error"): void;
+		select(title: string, options: string[], opts?: { signal?: AbortSignal; timeout?: number }): Promise<string | undefined>;
 		custom<T = void>(
 			factory: (tui: unknown, theme: unknown, kb: unknown, done: (result: T) => void) => unknown,
 			options?: { overlay?: boolean },
 		): Promise<T>;
+		/** 可选文本输入（custom 模板 / Reject-with-Reason 用）。SDK 提供，mock 可能缺失。 */
+		input?(title: string, placeholder?: string, opts?: { signal?: AbortSignal; timeout?: number }): Promise<string | undefined>;
 	};
 }
 
@@ -62,7 +64,7 @@ export async function editRulesViaOverlay(
 		case "json":
 		case "print":
 		default:
-			ctx.ui.notify("[pi-permission] Rule editor not available in headless mode. Edit ~/.pi/agent/permission-config.json directly.", "warn");
+			ctx.ui.notify("[pi-permission] Rule editor not available in headless mode. Edit ~/.pi/agent/permission-config.json directly.", "warning");
 			return undefined;
 	}
 }
@@ -102,7 +104,12 @@ export async function editViaRpc(
 	rpcDeps?: RuleEditorRpcDeps,
 ): Promise<RuleEditorResult> {
 	const select = rpcDeps?.select ?? ctx.ui.select;
-	const input = rpcDeps?.input ?? ((title: string, ph?: string) => ctx.ui.select(title, [ph ?? ""]).then((v) => v === undefined ? undefined : v));
+	// ctx.ui.input 可用 → 用真实文本输入（custom 模板需要自由文本）；
+	// 不可用 → fallback 把 input 降级为单选项 select（占位符文本，仅保底）。
+	const input = rpcDeps?.input
+		?? (typeof ctx.ui.input === "function"
+			? (title: string, ph?: string) => ctx.ui.input!(title, ph)
+			: (title: string, ph?: string) => ctx.ui.select(title, [ph ?? ""]).then((v) => v === undefined ? undefined : v));
 
 	const ops: RuleOp[] = [];
 

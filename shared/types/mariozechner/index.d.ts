@@ -15,6 +15,11 @@ declare module "@mariozechner/pi-coding-agent" {
 	/** Pi run mode. Use "tui" to guard terminal-only UI such as custom components. */
 	export type ExtensionMode = "tui" | "rpc" | "json" | "print";
 
+	export interface ExtensionUIDialogOptions {
+		signal?: AbortSignal;
+		timeout?: number;
+	}
+
 	export interface ExtensionContext {
 		cwd: string;
 		sessionManager: ReadonlySessionManager;
@@ -29,10 +34,10 @@ declare module "@mariozechner/pi-coding-agent" {
 		/** Whether dialog-capable UI is available (true in TUI and RPC modes) */
 		hasUI: boolean;
 		ui: {
-			notify(msg: string, type?: string): void;
-			confirm(title: string, message: string, opts?: unknown): Promise<boolean>;
-			select(title: string, options: string[], opts?: unknown): Promise<string | undefined>;
-			input(title: string, placeholder?: string, opts?: unknown): Promise<string | undefined>;
+			notify(msg: string, type?: "info" | "warning" | "error"): void;
+			confirm(title: string, message: string, opts?: ExtensionUIDialogOptions): Promise<boolean>;
+			select(title: string, options: string[], opts?: ExtensionUIDialogOptions): Promise<string | undefined>;
+			input(title: string, placeholder?: string, opts?: ExtensionUIDialogOptions): Promise<string | undefined>;
 			// verified against Pi SDK d.ts (pi-coding-agent v0.80.3, types.d.ts:134) — signature matches exactly
 			editor(title: string, prefill?: string): Promise<string | undefined>;
 			setStatus(key: string, text: string | undefined): void;
@@ -368,6 +373,10 @@ declare module "@earendil-works/pi-tui" {
 	export class MarkdownTheme {}
 }
 declare module "@earendil-works/pi-ai" {
+	export * from "@mariozechner/pi-ai";
+	export type Message = any;
+}
+declare module "@earendil-works/pi-ai/compat" {
 	export * from "@mariozechner/pi-ai";
 	export type Message = any;
 }

@@ -19,7 +19,7 @@
  *  - _resolved 守卫防二次 done（switchToModelStage 等异步路径可能重复触发）。
  */
 
-import { type Component, Container, type SelectItem, SelectList, type SelectListTheme } from "@mariozechner/pi-tui";
+import { type Component, Container, type SelectItem, SelectList, type SelectListTheme, truncateToWidth } from "@mariozechner/pi-tui";
 
 import type { ResolvedModelEntry } from "./classifier/model-resolver.js";
 
@@ -124,6 +124,25 @@ export class ProviderModelSelectorComponent extends Container {
 	 */
 	handleInput(data: string): void {
 		this.currentList?.handleInput(data);
+	}
+
+	/** box 边框左右各占用 1 列（│ × 2） */
+	private static readonly BORDER_OVERHEAD = 2;
+
+	/**
+	 * 重写 render：用 box 边框包裹 Container 子组件的输出。
+	 */
+	override render(width: number): string[] {
+		const innerWidth = Math.max(0, width - ProviderModelSelectorComponent.BORDER_OVERHEAD);
+		const inner = super.render(innerWidth);
+		const lines: string[] = [];
+		lines.push(`\u250C${"\u2500".repeat(innerWidth)}\u2510`);
+		for (const line of inner) {
+			const padded = truncateToWidth(line, innerWidth, "", true);
+			lines.push(`\u2502${padded}\u2502`);
+		}
+		lines.push(`\u2514${"\u2500".repeat(innerWidth)}\u2518`);
+		return lines;
 	}
 
 	/** 退出（外部 abort 用）。复用 _resolved 守卫防二次 done。 */
@@ -260,8 +279,8 @@ export class ProviderModelSelectorComponent extends Container {
 export interface ModelPickerContext {
 	mode: "tui" | "rpc" | "json" | "print";
 	ui: {
-		notify(msg: string, type?: string): void;
-		select(title: string, options: string[], opts?: unknown): Promise<string | undefined>;
+		notify(msg: string, type?: "info" | "warning" | "error"): void;
+		select(title: string, options: string[], opts?: { signal?: AbortSignal; timeout?: number }): Promise<string | undefined>;
 		custom<T = void>(
 			factory: (tui: unknown, theme: unknown, kb: unknown, done: (result: T) => void) => unknown,
 			options?: { overlay?: boolean },
