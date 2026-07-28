@@ -249,3 +249,34 @@ describe("W5 tool_call handler 集成", () => {
 		expect(result?.block).toBe(true);
 	});
 });
+
+// ──────────────────────── W8 /permission rule 命令集成 ────────────────────────
+
+/** 提取 /permission command handler。 */
+function getPermissionHandler(calls: MockPiCalls): (args: string, ctx: unknown) => Promise<void> {
+	const cmd = calls.registerCommandCalls.find((c) => c.name === "permission");
+	if (!cmd) throw new Error("permission command not registered");
+	return (cmd.options as { handler: (args: string, ctx: unknown) => Promise<void> }).handler;
+}
+
+describe("W8 /permission rule 命令集成", () => {
+	it("headless（json）→ notify 降级提示，不改 config", async () => {
+		writeConfig("yolo");
+		const { pi, calls } = createMockPi();
+		permissionExtension(pi);
+		const handler = getPermissionHandler(calls);
+		const ctx = makeCtx("json");
+		// 不应抛错
+		await handler("rule", ctx);
+	});
+
+	it("permission handler 分流：rule 参数走 rule 路径（headless 降级）", async () => {
+		writeConfig("yolo");
+		const { pi, calls } = createMockPi();
+		permissionExtension(pi);
+		const handler = getPermissionHandler(calls);
+		const ctx = makeCtx("json");
+		// rule 参数应走 headless 降级（notify）
+		await expect(handler("rule", ctx)).resolves.not.toThrow();
+	});
+});

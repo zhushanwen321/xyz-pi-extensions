@@ -15,6 +15,8 @@
 
 import type { ResolvedModelEntry } from "./classifier/model-resolver.js";
 import { type ModelPickerContext,pickModelViaOverlay } from "./model-picker.js";
+import { type RuleEditorContext,type RuleEditorResult } from "./rule-editor.js";
+import { applyOps } from "./rule-templates.js";
 import {
 	isValidPermissionMode,
 	MODE_DESCRIPTIONS,
@@ -172,4 +174,61 @@ export async function handlePermissionModelCommand(
 		return;
 	}
 	ctx.ui.notify(`[pi-permission] AI classifier model set to: ${selected}`, "info");
+}
+
+// ──────────────────────── /permission rule（W8） ────────────────────────
+
+/** handlePermissionRuleCommand 的依赖（DI 便于测试 mock）。 */
+export interface PermissionRuleCommandDeps {
+	/** 保存新配置，返回 {success, error?}。 */
+	save: (config: PermissionConfig) => { success: boolean; error?: string };
+	/** 规则编辑 overlay（注入便于测试 mock）。 */
+	editRulesViaOverlay: (
+		ctx: RuleEditorContext,
+		initialRules: readonly import("./types.js").Rule[],
+		sessionIdCounter: () => string,
+		rpcDeps?: import("./rule-editor.js").RuleEditorRpcDeps,
+	) => Promise<RuleEditorResult>;
+}
+
+/**
+ * /permission rule 命令：overlay CRUD 编辑 userRules。
+ *
+ * 流程：
+ *  1. editRulesViaOverlay：TUI/RPC/headless 三模式分发。
+ *  2. ops 非空 → applyOps + saveConfig + notify。
+ *  3. 空 → notify no changes。
+ */
+export async function handlePermissionRuleCommand(
+	ctx: RuleEditorContext,
+	config: PermissionConfig,
+	sessionIdCounter: () => string,
+	deps: PermissionRuleCommandDeps,
+): Promise<void> {
+	// 1. editRulesViaOverlay
+	const ops = await deps.editRulesViaOverlay(ctx, config.userRules, sessionIdCounter);
+
+	if (ops === undefined || ops.length === 0) {
+		ctx.ui.notify("[pi-permission] No changes applied.", "info");
+		return;
+	}
+
+	// 2. applyOps + save
+	const newUserRules = applyOps([...config.userRules], ops);
+	const newConfig: PermissionConfig = {
+		mode: config.mode,
+		enabled: config.enabled,
+		classifier: { ...config.classifier },
+		userRules: newUserRules,
+	};
+	const result = deps.save(newConfig);
+	if (!result.success) {
+		ctx.ui.notify(
+			`[pi-permission] Failed to save rules: ${result.error ?? "unknown error"}`,
+			"error",
+		);
+		return;
+	}
+
+	ctx.ui.notify(`[pi-permission] ${ops.length} change(s) applied.`, "info");
 }

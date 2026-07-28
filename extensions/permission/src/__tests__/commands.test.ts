@@ -14,9 +14,11 @@
 import { describe, expect, it, vi } from "vitest";
 
 import type { ResolvedModelEntry } from "../classifier/model-resolver.js";
-import { handlePermissionCommand, handlePermissionModelCommand, type PermissionModelCommandDeps } from "../commands.js";
+import { handlePermissionCommand, handlePermissionModelCommand, handlePermissionRuleCommand, type PermissionModelCommandDeps, type PermissionRuleCommandDeps } from "../commands.js";
 import type { ModelPickerContext } from "../model-picker.js";
-import { DEFAULT_CONFIG, type PermissionConfig } from "../types.js";
+import type { RuleEditorContext } from "../rule-editor.js";
+import type { RuleOp } from "../rule-templates.js";
+import { DEFAULT_CONFIG, type PermissionConfig, type Rule } from "../types.js";
 
 // ──────────────────────── mock helpers ────────────────────────
 
@@ -347,5 +349,136 @@ describe("/permission model（W7）", () => {
 		expect(saved.classifier.timeout).toBe(30); // 保留
 		expect(saved.classifier.model).toBe("auto"); // 改
 		expect(saved.userRules).toHaveLength(1); // 保留
+	});
+});
+
+// ──────────────────────── /permission rule（W8 T9） ────────────────────────
+
+/** 构造 RuleEditorContext mock。 */
+function makeRuleEditorCtx(overrides: Partial<RuleEditorContext> = {}): RuleEditorContext {
+	return {
+		mode: overrides.mode ?? "rpc",
+		ui: {
+			notify: overrides.ui?.notify ?? vi.fn(),
+			select: overrides.ui?.select ?? vi.fn(() => Promise.resolve(undefined)),
+			custom: overrides.ui?.custom ?? vi.fn(() => Promise.resolve(undefined)),
+		},
+	};
+}
+
+/** 构造 PermissionRuleCommandDeps mock。 */
+function makeRuleDeps(overrides: Partial<PermissionRuleCommandDeps> = {}): PermissionRuleCommandDeps {
+	return {
+		save: overrides.save ?? vi.fn(() => ({ success: true })),
+		editRulesViaOverlay: overrides.editRulesViaOverlay ?? vi.fn(() => Promise.resolve(undefined)),
+	};
+}
+
+function makeRule(overrides: Partial<Rule> = {}): Rule {
+	return {
+		id: "user-1",
+		tool: "bash",
+		pattern: "npm *",
+		action: "allow",
+		source: "user",
+		...overrides,
+	};
+}
+
+function makeCounter(): () => string {
+	let n = 1;
+	return (): string => `user-${n++}`;
+}
+
+describe("/permission rule（W8）", () => {
+	it("editRulesViaOverlay 返回 undefined → notify no changes，不调 save", async () => {
+		const notify = vi.fn();
+		const save = vi.fn(() => ({ success: true }));
+		const ctx = makeRuleEditorCtx({ ui: { notify, select: vi.fn(), custom: vi.fn() } });
+		const deps = makeRuleDeps({
+			save,
+			editRulesViaOverlay: vi.fn(() => Promise.resolve(undefined)),
+		});
+		await handlePermissionRuleCommand(ctx, makeConfig(), makeCounter(), deps);
+		expect(notify).toHaveBeenCalledWith(expect.stringContaining("No changes"), "info");
+		expect(save).not.toHaveBeenCalled();
+	});
+
+	it("editRulesViaOverlay 返回空 ops → notify no changes", async () => {
+		const notify = vi.fn();
+		const save = vi.fn(() => ({ success: true }));
+		const ctx = makeRuleEditorCtx({ ui: { notify, select: vi.fn(), custom: vi.fn() } });
+		const deps = makeRuleDeps({
+			save,
+			editRulesViaOverlay: vi.fn(() => Promise.resolve([])),
+		});
+		await handlePermissionRuleCommand(ctx, makeConfig(), makeCounter(), deps);
+		expect(notify).toHaveBeenCalledWith(expect.stringContaining("No changes"), "info");
+		expect(save).not.toHaveBeenCalled();
+	});
+
+	it("ops 非空 → applyOps + save + notify N changes", async () => {
+		const notify = vi.fn();
+		const save = vi.fn(() => ({ success: true }));
+		const ops: RuleOp[] = [{ kind: "add", rule: makeRule({ id: "user-1", pattern: "git *" }) }];
+		const ctx = makeRuleEditorCtx({ ui: { notify, select: vi.fn(), custom: vi.fn() } });
+		const deps = makeRuleDeps({
+			save,
+			editRulesViaOverlay: vi.fn(() => Promise.resolve(ops)),
+		});
+		const config = makeConfig({ userRules: [] });
+		await handlePermissionRuleCommand(ctx, config, makeCounter(), deps);
+		expect(save).toHaveBeenCalledOnce();
+		expect(notify).toHaveBeenCalledWith(expect.stringContaining("1 change(s)"), "info");
+		// save 收到的 config.userRules 含新规则
+		const savedConfig = save.mock.calls[0]![0] as PermissionConfig;
+		expect(savedConfig.userRules).toHaveLength(1);
+		expect(savedConfig.userRules[0]!.pattern).toBe("git *");
+	});
+
+	it("save 失败 → notify error", async () => {
+		const notify = vi.fn();
+		const save = vi.fn(() => ({ success: false, error: "disk full" }));
+		const ops: RuleOp[] = [{ kind: "add", rule: makeRule({ id: "user-1" }) }];
+		const ctx = makeRuleEditorCtx({ ui: { notify, select: vi.fn(), custom: vi.fn() } });
+		const deps = makeRuleDeps({
+			save,
+			editRulesViaOverlay: vi.fn(() => Promise.resolve(ops)),
+		});
+		await handlePermissionRuleCommand(ctx, makeConfig(), makeCounter(), deps);
+		expect(notify).toHaveBeenCalledWith(expect.stringContaining("disk full"), "error");
+	});
+
+	it("保存保留 mode/enabled/classifier（仅改 userRules）", async () => {
+		const save = vi.fn(() => ({ success: true }));
+		const ops: RuleOp[] = [{ kind: "add", rule: makeRule({ id: "user-1" }) }];
+		const ctx = makeRuleEditorCtx({ ui: { notify: vi.fn(), select: vi.fn(), custom: vi.fn() } });
+		const deps = makeRuleDeps({
+			save,
+			editRulesViaOverlay: vi.fn(() => Promise.resolve(ops)),
+		});
+		const config = makeConfig({
+			mode: "strict",
+			enabled: false,
+			classifier: { enabled: false, model: "custom", timeout: 10, autoApproveLowRisk: false, autoDenyHighRisk: false },
+		});
+		await handlePermissionRuleCommand(ctx, config, makeCounter(), deps);
+		const saved = save.mock.calls[0]![0] as PermissionConfig;
+		expect(saved.mode).toBe("strict");
+		expect(saved.enabled).toBe(false);
+		expect(saved.classifier.model).toBe("custom");
+	});
+
+	it("editRulesViaOverlay 收到正确的 initialRules 和 sessionIdCounter", async () => {
+		const editMock = vi.fn(() => Promise.resolve(undefined));
+		const ctx = makeRuleEditorCtx({ ui: { notify: vi.fn(), select: vi.fn(), custom: vi.fn() } });
+		const existingRules = [makeRule({ id: "user-5" })];
+		const counter = makeCounter();
+		const deps = makeRuleDeps({ editRulesViaOverlay: editMock });
+		await handlePermissionRuleCommand(ctx, makeConfig({ userRules: existingRules }), counter, deps);
+		expect(editMock).toHaveBeenCalledOnce();
+		const [_callCtx, callRules, callCounter] = editMock.mock.calls[0]!;
+		expect(callRules).toEqual(existingRules);
+		expect(typeof callCounter).toBe("function");
 	});
 });

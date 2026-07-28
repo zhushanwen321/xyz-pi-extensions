@@ -21,9 +21,11 @@ import type {
 } from "@mariozechner/pi-coding-agent";
 
 import { listAvailableModels } from "./classifier/model-resolver.js";
-import { handlePermissionCommand, handlePermissionModelCommand } from "./commands.js";
+import { handlePermissionCommand, handlePermissionModelCommand, handlePermissionRuleCommand } from "./commands.js";
 import { getConfigPath, loadAndWatchConfig, saveConfig } from "./config.js";
 import { setDefaultListAvailableModels } from "./model-picker.js";
+import { editRulesViaOverlay } from "./rule-editor.js";
+import { makeNextIdCounter } from "./rule-templates.js";
 import { checkPermission, type CheckPermissionDeps } from "./pipeline.js";
 import { createPipelineDeps } from "./production.js";
 import { registerPermissionFooter } from "./statusline.js";
@@ -94,6 +96,38 @@ export default function permissionExtension(pi: ExtensionAPI): void {
 			// 命令执行前重载配置（确保最新，用户可能手动改过文件）
 			refreshConfig();
 			const trimmed = (args ?? "").trim();
+			// W8：/permission rule → overlay CRUD 编辑 userRules（异步路径）
+			if (trimmed === "rule") {
+				await handlePermissionRuleCommand(
+					{
+						mode: ctx.mode,
+						ui: {
+							notify: (msg: string, type?: string) => ctx.ui.notify(msg, type),
+							select: (title: string, options: string[], opts?: unknown) =>
+								ctx.ui.select(title, options, opts),
+							custom: <T,>(
+								factory: (tui: unknown, theme: unknown, kb: unknown, done: (result: T) => void) => unknown,
+								options?: { overlay?: boolean },
+							) =>
+								ctx.ui.custom<T>(factory as Parameters<typeof ctx.ui.custom<T>>[0], options),
+						},
+					},
+					config,
+					makeNextIdCounter(config.userRules),
+					{
+						save: (newConfig) => {
+							const result = saveConfig(newConfig);
+							if (result.success) {
+								config = newConfig; // 更新闭包状态
+							}
+							return result;
+						},
+						editRulesViaOverlay: (ctx, initialRules, sessionIdCounter, rpcDeps) =>
+							editRulesViaOverlay(ctx, initialRules, sessionIdCounter, rpcDeps),
+					},
+				);
+				return;
+			}
 			// W7：/permission model → overlay 选择 classifier model（异步路径）
 			if (trimmed === "model") {
 				await handlePermissionModelCommand(
