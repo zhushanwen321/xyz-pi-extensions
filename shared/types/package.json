@@ -1,6 +1,6 @@
 {
   "name": "@zhushanwen/pi-types",
-  "version": "0.1.2",
+  "version": "0.1.3",
   "description": "Shared type definitions for Pi extensions (private, not published)",
   "private": true,
   "main": "earendil-works/index.ts",
