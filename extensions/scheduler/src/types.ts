@@ -26,6 +26,7 @@ export interface ScheduledTask {
   lastRunAt?: number
   lastStatus?: TaskStatus
   history: ExecutionRecord[]        // 最近 20 条
+  pending?: boolean                 // 标记到期待 dispatch
 }
 
 export interface ExecutionRecord {
