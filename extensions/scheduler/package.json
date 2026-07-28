@@ -1,0 +1,32 @@
+{
+  "name": "@zhushanwen/pi-scheduler",
+  "version": "0.0.1",
+  "type": "module",
+  "main": "index.ts",
+  "pi": {
+    "extensions": ["./index.ts"],
+    "skills": []
+  },
+  "keywords": ["pi-package"],
+  "scripts": {
+    "test": "vitest run",
+    "test:watch": "vitest"
+  },
+  "devDependencies": {
+    "vitest": "^4.1.8"
+  },
+  "files": [
+    "index.ts",
+    "src/**",
+    "__tests__/**"
+  ],
+  "peerDependencies": {
+    "@mariozechner/pi-coding-agent": "*",
+    "croner": "^9.0.0"
+  },
+  "peerDependenciesMeta": {
+    "croner": {
+      "optional": true
+    }
+  }
+}
