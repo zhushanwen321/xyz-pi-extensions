@@ -19,7 +19,7 @@
 
 import type { Component } from "@earendil-works/pi-tui";
 import { Container, Text } from "@earendil-works/pi-tui";
-import type { AgentToolResult, Theme } from "@mariozechner/pi-coding-agent";
+import type { AgentToolResult, Theme } from "@earendil-works/pi-coding-agent";
 
 import type {
   ListResponse,

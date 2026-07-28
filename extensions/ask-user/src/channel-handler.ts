@@ -15,7 +15,7 @@
 // handler 收到的 req.channelPayload = {questions: AskUserQuestion[], allowCancel}（proto 格式，
 // 由子进程 askUserInteract 编码、subagent-workflow parseChannel 解析 options[0] JSON 得到）。
 
-import type { ExtensionContext } from "@mariozechner/pi-coding-agent";
+import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import {
 	type AskUserAnswers,
 	askUserInteract,

@@ -22,7 +22,7 @@
   "license": "MIT",
   "peerDependencies": {
     "typebox": "*",
-    "@mariozechner/pi-coding-agent": "*"
+    "@earendil-works/pi-coding-agent": "*"
   },
   "devDependencies": {
     "vitest": "^4.1.8"

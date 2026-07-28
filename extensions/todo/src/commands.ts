@@ -6,7 +6,7 @@
  * 用户在 TUI 中不可见。
  */
 
-import type { ExtensionAPI, ExtensionCommandContext, Theme } from "@mariozechner/pi-coding-agent";
+import type { ExtensionAPI, ExtensionCommandContext, Theme } from "@earendil-works/pi-coding-agent";
 
 import type { TodoSessionState } from "./state";
 import { TodoListComponent } from "./component";

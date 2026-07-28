@@ -15,7 +15,7 @@
  * 不 mock handleCreate：走真实 createGoal 让 session.state 含完整字段（slug/objective/budget），
  * 避免 hand-rolled state 与生产路径不一致。pi/ctx 用最小 fake（对齐 index.test.ts makeFactoryFixture）。
  */
-import type { ExtensionAPI, ExtensionContext } from "@mariozechner/pi-coding-agent";
+import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { describe, expect, it } from "vitest";
 
 import { registerGoalControlTool, type GoalControlDetails } from "../adapters/goal-control-adapter";

@@ -16,7 +16,7 @@
 //     集中到单一修改点，未来 Pi 新增 mode 值时只改本文件。
 //   - 业务语义命名（"gui"/"headless"）比原始枚举值更清晰表达意图。
 
-import type { ExtensionMode } from "@mariozechner/pi-coding-agent";
+import type { ExtensionMode } from "@earendil-works/pi-coding-agent";
 
 /** 主进程运行模式分类。基于 ExtensionMode 聚合为业务语义。
  *  - "tui"：纯 Pi TUI，ctx.ui.custom 可用，用户在终端交互

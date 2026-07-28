@@ -12,13 +12,13 @@ export default defineConfig({
 	},
 	resolve: {
 		alias: {
-			"@mariozechner/pi-tui": path.resolve(
+			"@earendil-works/pi-tui": path.resolve(
 				__dirname,
 				"./node_modules/@earendil-works/pi-tui/dist/index.js",
 			),
-			"@mariozechner/pi-coding-agent": path.resolve(
+			"@earendil-works/pi-coding-agent": path.resolve(
 				__dirname,
-				"../../shared/types/mariozechner/index.ts",
+				"../../shared/types/earendil-works/index.ts",
 			),
 		},
 	},

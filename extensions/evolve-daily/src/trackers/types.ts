@@ -8,7 +8,7 @@
  * 纯数据层，无 Pi API 依赖。
  */
 
-import { StringEnum } from "@mariozechner/pi-ai";
+import { StringEnum } from "@earendil-works/pi-ai";
 import { Type } from "typebox";
 
 // ── 常量 ────────────────────────────────────────────

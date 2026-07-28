@@ -3,8 +3,8 @@
   "version": "0.1.2",
   "description": "Shared type definitions for Pi extensions (private, not published)",
   "private": true,
-  "main": "mariozechner/index.ts",
+  "main": "earendil-works/index.ts",
   "files": [
-    "mariozechner/"
+    "earendil-works/"
   ]
 }

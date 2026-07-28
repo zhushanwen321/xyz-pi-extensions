@@ -4,7 +4,7 @@
 
 import { AsyncLocalStorage } from "node:async_hooks";
 
-import type { ExtensionMode } from "@mariozechner/pi-coding-agent";
+import type { ExtensionMode } from "@earendil-works/pi-coding-agent";
 
 import type { AgentResult as WorkflowAgentResult } from "../orchestration/models/types.ts";
 // D-A10: workflow 侧 AgentResult 映射（executeAndAwait 出口）

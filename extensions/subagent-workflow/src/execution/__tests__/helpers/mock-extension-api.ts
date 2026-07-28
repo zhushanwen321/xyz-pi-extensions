@@ -13,7 +13,7 @@
  * Proxy 的 trap 对所有属性访问返回 override 值或 no-op 函数，运行时安全
  * （注册 handler 只调用被 override 的方法，其余方法测试不触及）。
  */
-import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
+import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 
 export function mockExtensionApi(
   overrides: Record<string, unknown> = {},

@@ -5,7 +5,7 @@
 // 解析：args[0] 直接作可选 <id>（聚焦该 record）。
 // RPC 模式（xyz-agent GUI）：解析 cancel action 直接执行，不打开 TUI。
 
-import type { ExtensionAPI, ExtensionCommandContext } from "@mariozechner/pi-coding-agent";
+import type { ExtensionAPI, ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
 
 import { getSubagentService } from "../execution/subagent-service.ts";
 import { parseSubagentRpcCommand } from "./command-actions.ts";

@@ -41,7 +41,7 @@ Hook 文件：`.githooks/pre-commit`
 | 检查项 | 要求 |
 |--------|------|
 | 包名格式 | 匹配 `@zhushanwen/pi-*` |
-| `peerDependencies` 含 `@mariozechner/pi-coding-agent` | 必须存在 |
+| `peerDependencies` 含 `@earendil-works/pi-coding-agent`（**且不含旧 `@mariozechner/pi-*`**） | 必须存在 |
 | `files` 包含入口 `.ts` | 入口文件必须在 `files` 字段中 |
 
 **Rationale**：包名不符约定会导致 npm publish 后不可发现。`files` 不包含入口导致 `npm pack` 后丢失代码。核心 peerDep 缺失导致运行时类型不匹配。

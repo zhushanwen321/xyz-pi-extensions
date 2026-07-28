@@ -12,7 +12,7 @@
  * - pauseRun/resumeRun/abortRun（lifecycle.ts）用 vi.mock 桩化，控制抛错/成功
  * - ExtensionCommandContext 用最小 duck-typed mock（仅 mode/hasUI/ui.notify）
  */
-import type { ExtensionAPI, ExtensionCommandContext } from "@mariozechner/pi-coding-agent";
+import type { ExtensionAPI, ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 // ── module mocks（必须在 import 被测模块之前声明）──────────────

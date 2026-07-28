@@ -17,13 +17,13 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 // ── mock modules（在 import 前声明）──
 
-vi.mock("@mariozechner/pi-coding-agent", () => ({
+vi.mock("@earendil-works/pi-coding-agent", () => ({
   getAgentDir: () => "/home/user/.pi/agent",
 }));
 vi.mock("@earendil-works/pi-coding-agent", () => ({
   getAgentDir: () => "/home/user/.pi/agent",
 }));
-vi.mock("@mariozechner/pi-ai", () => ({
+vi.mock("@earendil-works/pi-ai", () => ({
   StringEnum: (values: string[]) => ({ type: "string", enum: values }),
 }));
 vi.mock("@earendil-works/pi-ai", () => ({
@@ -118,7 +118,7 @@ vi.mock("../../interface/commands.ts", () => ({
 }));
 
 // ── import 被测工厂 ──
-import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
+import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 
 import subagentsExtension from "../../index.ts";
 import { Budget } from "../../orchestration/models/budget.ts";

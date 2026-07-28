@@ -175,7 +175,7 @@ extensions/* ──→ shared/* ──→ 外部 (vitest, typebox, ...)
 
 | 场景 | 声明方式 | 示例 |
 |------|---------|------|
-| Pi SDK 包 | `peerDependencies` | `@mariozechner/pi-coding-agent` |
+| Pi SDK 包 | `peerDependencies` | `@earendil-works/pi-coding-agent` |
 | 条件 Pi SDK 包 | `peerDependencies` + `peerDependenciesMeta.optional` | `@earendil-works/pi-tui` |
 | monorepo 内部包 | `dependencies` + `"workspace:*"` | `@zhushanwen/pi-quota-providers` |
 | 业务逻辑依赖 | `dependencies` | `zod`、`diff` |
@@ -206,7 +206,7 @@ import * as path from "node:path";
 import { Type } from "typebox";
 
 // 3. Pi SDK 包
-import type { ExtensionAPI, ExtensionContext } from "@mariozechner/pi-coding-agent";
+import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { Text } from "@earendil-works/pi-tui";
 
 // 4. monorepo 内部包

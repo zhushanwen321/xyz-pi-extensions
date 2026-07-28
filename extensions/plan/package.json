@@ -15,12 +15,12 @@
   ],
   "license": "MIT",
   "peerDependencies": {
-    "@mariozechner/pi-coding-agent": ">=0.73.0",
+    "@earendil-works/pi-coding-agent": ">=0.73.0",
     "@sinclair/typebox": "*",
-    "@mariozechner/pi-ai": "*"
+    "@earendil-works/pi-ai": "*"
   },
   "peerDependenciesMeta": {
-    "@mariozechner/pi-ai": {
+    "@earendil-works/pi-ai": {
       "optional": true
     }
   },

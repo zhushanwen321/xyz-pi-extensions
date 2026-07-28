@@ -39,13 +39,13 @@
     "vitest": "^4.1.8"
   },
   "peerDependencies": {
-    "@mariozechner/pi-coding-agent": "*",
-    "@mariozechner/pi-tui": "*",
+    "@earendil-works/pi-coding-agent": "*",
+    "@earendil-works/pi-tui": "*",
     "@sinclair/typebox": "*",
-    "@zhushanwen/pi-subagent-workflow": "*"
+    "@zhushanwen/pi-subagent-workflow": "workspace:*"
   },
   "peerDependenciesMeta": {
-    "@mariozechner/pi-tui": {
+    "@earendil-works/pi-tui": {
       "optional": true
     },
     "@zhushanwen/pi-subagent-workflow": {

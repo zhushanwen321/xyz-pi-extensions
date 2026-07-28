@@ -8,7 +8,7 @@
  * 参考：domain-models.md §D-12。
  */
 
-import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
+import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 
 import type { WorkflowRun } from "../orchestration/models/workflow-run.ts";
 import {

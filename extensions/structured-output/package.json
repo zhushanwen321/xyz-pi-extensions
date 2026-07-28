@@ -24,7 +24,7 @@
     "ajv": "^8.17.0"
   },
   "peerDependencies": {
-    "@mariozechner/pi-coding-agent": "*",
+    "@earendil-works/pi-coding-agent": "*",
     "@sinclair/typebox": "*"
   },
   "scripts": {

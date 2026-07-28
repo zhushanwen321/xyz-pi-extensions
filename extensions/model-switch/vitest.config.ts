@@ -12,9 +12,9 @@ export default defineConfig({
         __dirname,
         "../../shared/quota-providers/src/index.ts",
       ),
-      "@mariozechner/pi-coding-agent": path.resolve(
+      "@earendil-works/pi-coding-agent": path.resolve(
         __dirname,
-        "../../shared/types/mariozechner/index.ts",
+        "../../shared/types/earendil-works/index.ts",
       ),
     },
   },
