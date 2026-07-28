@@ -21,19 +21,23 @@
   },
   "files": [
     "index.ts",
-    "src/**",
-    "__tests__/**"
+    "src/**/*.ts",
+    "vitest.config.ts"
   ],
   "peerDependencies": {
     "@mariozechner/pi-coding-agent": "*",
+    "@sinclair/typebox": "*",
     "croner": "^9.0.0"
   },
   "peerDependenciesMeta": {
+    "@mariozechner/pi-coding-agent": {
+      "optional": true
+    },
+    "@sinclair/typebox": {
+      "optional": true
+    },
     "croner": {
       "optional": true
     }
-  },
-  "dependencies": {
-    "@sinclair/typebox": "^0.34.49"
   }
 }

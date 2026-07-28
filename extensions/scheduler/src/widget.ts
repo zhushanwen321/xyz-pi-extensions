@@ -2,8 +2,11 @@ import { formatRelativeTime, truncate } from './format.js'
 import type { ScheduledTask } from './types.js'
 
 /**
- * 渲染 TUI status bar widget。
- * 格式：⏰ 3 scheduled · check-build in 4m · 1 overdue
+ * 渲染 TUI status bar widget（string[]，配合 SDK setWidget 第一重载）。
+ * 格式：[scheduler] 3 scheduled · check-build in 4m · 1 overdue
+ *
+ * 不接受 theme 参数：string[] 重载本身不提供 theme，着色交给 Pi 默认渲染。
+ * overdue 用 [!] 纯文本标记（PR 已统一去 emoji）。
  */
 export function renderSchedulerWidget(tasks: ScheduledTask[]): string[] {
   if (tasks.length === 0) return []
@@ -24,8 +27,8 @@ export function renderSchedulerWidget(tasks: ScheduledTask[]): string[] {
   }
 
   if (overdue.length > 0) {
-    parts.push(`${overdue.length} overdue`)
+    parts.push(`[!] ${overdue.length} overdue`)
   }
 
-  return [`⏰ ${parts.join(' · ')}`]
+  return [`[scheduler] ${parts.join(' · ')}`]
 }

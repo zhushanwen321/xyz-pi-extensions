@@ -1,4 +1,4 @@
-import type { ParseScheduleResult,ScheduleSpec, TaskKind } from './types.js'
+import type { ParseScheduleResult,ScheduleSpec } from './types.js'
 
 // ── Duration 解析 ──
 
@@ -157,7 +157,6 @@ export async function computeNextCronRuns(
  */
 export async function parseSchedule(
   input: string,
-  _kind: TaskKind,
 ): Promise<ParseScheduleResult | undefined> {
   const trimmed = input.trim()
   if (!trimmed) return undefined

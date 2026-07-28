@@ -1,7 +1,7 @@
 import { describe, expect,it } from 'vitest'
 
-import type { ScheduledTask } from '../src/types.js'
-import { renderSchedulerWidget } from '../src/widget.js'
+import type { ScheduledTask } from '../types.js'
+import { renderSchedulerWidget } from '../widget.js'
 
 const makeTask = (overrides: Partial<ScheduledTask> = {}): ScheduledTask => ({
   id: 'abc12345',
@@ -42,9 +42,9 @@ describe('renderSchedulerWidget', () => {
     expect(result[0]).toContain('1 overdue')
   })
 
-  it('starts with clock emoji', () => {
+  it('starts with [scheduler] prefix', () => {
     const tasks = [makeTask()]
     const result = renderSchedulerWidget(tasks)
-    expect(result[0]).toMatch(/^⏰/)
+    expect(result[0]).toMatch(/^\[scheduler\]/)
   })
 })

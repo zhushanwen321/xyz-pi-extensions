@@ -6,7 +6,7 @@ import {
   normalizeCronExpression,
   parseDuration,
   parseSchedule,
-} from '../src/parsing.js'
+} from '../parsing.js'
 
 describe('parseDuration', () => {
   it('parses seconds', () => {
@@ -84,19 +84,31 @@ describe('normalizeCronExpression', () => {
 
 describe('parseSchedule', () => {
   it('parses duration to interval mode', async () => {
-    const result = await parseSchedule('5m', 'recurring')
+    const result = await parseSchedule('5m')
     expect(result).toEqual({
       spec: { mode: 'interval', intervalMs: 300_000 },
     })
   })
 
   it('returns undefined for invalid duration', async () => {
-    const result = await parseSchedule('invalid', 'recurring')
+    const result = await parseSchedule('invalid')
     expect(result).toBeUndefined()
   })
 
   it('returns undefined for empty input', async () => {
-    const result = await parseSchedule('', 'recurring')
+    const result = await parseSchedule('')
+    expect(result).toBeUndefined()
+  })
+
+  // cron 分支：含空格的输入走 cron 解析（computeNextCronRunAt 验证有效性）
+  it('parses valid cron expression to cron mode', async () => {
+    const result = await parseSchedule('0 9 * * 1-5')
+    expect(result).toBeDefined()
+    expect(result!.spec.mode).toBe('cron')
+  })
+
+  it('returns undefined for invalid cron with spaces', async () => {
+    const result = await parseSchedule('not a valid cron')
     expect(result).toBeUndefined()
   })
 })
@@ -117,5 +129,17 @@ describe('computeNextRuns', () => {
     const spec = { mode: 'interval' as const, intervalMs: 60_000 }
     const runs = await computeNextRuns(spec)
     expect(runs).toHaveLength(5)
+  })
+
+  // cron 分支：computeNextRuns 委托 computeNextCronRuns
+  it('computes cron runs (delegates to croner)', async () => {
+    const from = Date.now()
+    const spec = { mode: 'cron' as const, cronExpression: '*/10 * * * *' }
+    const runs = await computeNextRuns(spec, from, 3)
+    expect(runs).toHaveLength(3)
+    // cron runs 严格递增且都晚于 from
+    expect(runs[0]).toBeGreaterThan(from)
+    expect(runs[0]).toBeLessThan(runs[1]!)
+    expect(runs[1]).toBeLessThan(runs[2]!)
   })
 })

@@ -2,8 +2,8 @@ import * as fs from 'node:fs'
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
-import { createStore, getStorePath } from '../src/store.js'
-import type { SchedulerStore } from '../src/types.js'
+import { createStore, getStorePath } from '../store.js'
+import type { SchedulerStore } from '../types.js'
 
 // Mock fs 模块
 vi.mock('node:fs', () => ({

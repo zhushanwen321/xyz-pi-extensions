@@ -1,30 +1,28 @@
-import { autoName,generateTaskId } from './format.js'
+import type { ExtensionAPI, ExtensionContext } from '@mariozechner/pi-coding-agent'
+
+import { autoName, generateTaskId } from './format.js'
+import { computeNextCronRunAt, parseDuration } from './parsing.js'
 import { createStore } from './store.js'
-import type { AddOptions, ScheduledTask, SchedulerStore,ScheduleSpec } from './types.js'
+import type { AddOptions, ScheduledTask, SchedulerStore, ScheduleSpec } from './types.js'
 
 const MAX_TASKS = 50
 const RATE_LIMIT_PER_MINUTE = 6
 const TICK_INTERVAL_MS = 30_000
 const DEFAULT_EXPIRY_MS = 7 * 24 * 60 * 60 * 1000 // 7 days
 
-interface PiAPI {
-  sendMessage: (msg: { content: string; customType?: string; display?: boolean }, opts?: { deliverAs?: string; triggerTurn?: boolean }) => void
-}
-
-interface ContextAPI {
-  isIdle: () => boolean
-  hasPendingMessages: () => boolean
-}
-
 export class SchedulerRuntime {
   private tasks: Map<string, ScheduledTask> = new Map()
   private store: ReturnType<typeof createStore>
-  private pi: PiAPI
-  private ctx: ContextAPI
+  private pi: Pick<ExtensionAPI, 'sendMessage'>
+  private ctx: Pick<ExtensionContext, 'isIdle' | 'hasPendingMessages'>
   private tickTimer: ReturnType<typeof setInterval> | null = null
   private dispatchTimestamps: number[] = []
 
-  constructor(cwd: string, pi: PiAPI, ctx: ContextAPI) {
+  constructor(
+    cwd: string,
+    pi: Pick<ExtensionAPI, 'sendMessage'>,
+    ctx: Pick<ExtensionContext, 'isIdle' | 'hasPendingMessages'>,
+  ) {
     this.store = createStore(cwd)
     this.pi = pi
     this.ctx = ctx
@@ -32,7 +30,7 @@ export class SchedulerRuntime {
 
   // ── 任务 CRUD ──
 
-  addTask(prompt: string, schedule: ScheduleSpec, options: AddOptions = {}): ScheduledTask {
+  async addTask(prompt: string, schedule: ScheduleSpec, options: AddOptions = {}): Promise<ScheduledTask> {
     if (this.tasks.size >= MAX_TASKS) {
       throw new Error(`Task limit reached (${MAX_TASKS}). Delete a task first.`)
     }
@@ -46,7 +44,20 @@ export class SchedulerRuntime {
     if (options.expires === 'never') {
       expiresAt = undefined
     } else if (kind === 'recurring') {
-      expiresAt = now + DEFAULT_EXPIRY_MS
+      const expiryMs = options.expires ? (parseDuration(options.expires) ?? DEFAULT_EXPIRY_MS) : DEFAULT_EXPIRY_MS
+      expiresAt = now + expiryMs
+    }
+
+    // 计算 nextRunAt：interval 模式 now + intervalMs；cron 模式首跑时间
+    let nextRunAt: number
+    if (schedule.mode === 'interval') {
+      nextRunAt = now + schedule.intervalMs
+    } else {
+      const next = await computeNextCronRunAt(schedule.cronExpression, now)
+      if (next === undefined) {
+        throw new Error(`Invalid cron expression: ${schedule.cronExpression}`)
+      }
+      nextRunAt = next
     }
 
     const task: ScheduledTask = {
@@ -58,7 +69,7 @@ export class SchedulerRuntime {
       enabled: true,
       force: options.force ?? false,
       createdAt: now,
-      nextRunAt: now + (schedule.mode === 'interval' ? schedule.intervalMs : 0),
+      nextRunAt,
       expiresAt,
       runCount: 0,
       history: [],
@@ -77,10 +88,19 @@ export class SchedulerRuntime {
     return this.tasks.get(id)
   }
 
-  toggleTask(id: string, enabled: boolean): boolean {
+  async toggleTask(id: string, enabled: boolean): Promise<boolean> {
     const task = this.tasks.get(id)
     if (!task) return false
     task.enabled = enabled
+    // enable 时若 nextRunAt 已过期，重算，避免 enable 瞬间立即触发
+    if (enabled && task.nextRunAt < Date.now()) {
+      const schedule = task.schedule
+      if (schedule.mode === 'interval') {
+        task.nextRunAt = Date.now() + schedule.intervalMs
+      } else {
+        task.nextRunAt = (await computeNextCronRunAt(schedule.cronExpression, Date.now())) ?? Date.now()
+      }
+    }
     this.persist()
     return true
   }
@@ -94,15 +114,16 @@ export class SchedulerRuntime {
   async runTaskNow(id: string): Promise<boolean> {
     const task = this.tasks.get(id)
     if (!task) return false
-    this.dispatchTask(task)
-    return true
+    const dispatched = await this.dispatchTask(task)
+    this.persist()
+    return dispatched
   }
 
   // ── 调度 ──
 
   startScheduler(): void {
     if (this.tickTimer) return
-    this.tickTimer = setInterval(() => this.tickScheduler(), TICK_INTERVAL_MS)
+    this.tickTimer = setInterval(() => void this.tickScheduler(), TICK_INTERVAL_MS)
   }
 
   stopScheduler(): void {
@@ -136,7 +157,7 @@ export class SchedulerRuntime {
 
     for (const task of pending) {
       if (task.pending) {
-        this.dispatchTask(task)
+        await this.dispatchTask(task)
       }
     }
 
@@ -145,24 +166,37 @@ export class SchedulerRuntime {
 
   // ── dispatch ──
 
-  dispatchTask(task: ScheduledTask): void {
-    if (!task.enabled) return
+  /**
+   * dispatch 单个任务。返回 true 表示真的发送了 message，false 表示 no-op
+   * （task disabled / rate-limited / 非 force 且 busy）。
+   * sendMessage 抛错时记录 failed 状态但不 rethrow，让 tick 继续处理其他任务。
+   */
+  async dispatchTask(task: ScheduledTask): Promise<boolean> {
+    if (!task.enabled) return false
 
     // 检查 force 或 idle
     if (!task.force) {
       if (!this.ctx.isIdle() || this.ctx.hasPendingMessages()) {
-        return // 延迟到下次 tick
+        return false // 延迟到下次 tick
       }
     }
 
     // 检查速率限制
-    if (!this.hasDispatchCapacity(Date.now())) return
+    if (!this.hasDispatchCapacity(Date.now())) return false
 
     // 注入 message
-    this.pi.sendMessage(
-      { content: task.prompt, customType: 'pi-scheduler:dispatched', display: true },
-      { deliverAs: 'followUp', triggerTurn: true }
-    )
+    try {
+      this.pi.sendMessage(
+        { content: task.prompt, customType: 'pi-scheduler:dispatched', display: true },
+        { deliverAs: 'followUp', triggerTurn: true },
+      )
+    } catch {
+      task.lastStatus = 'failed'
+      task.pending = false
+      task.history.push({ at: Date.now(), status: 'failed' })
+      if (task.history.length > 20) task.history.shift()
+      return false
+    }
 
     // 更新状态
     task.runCount++
@@ -176,10 +210,16 @@ export class SchedulerRuntime {
     if (task.kind === 'once') {
       this.tasks.delete(task.id)
     } else {
-      task.nextRunAt = Date.now() + (task.schedule.mode === 'interval' ? task.schedule.intervalMs : 0)
+      const schedule = task.schedule
+      if (schedule.mode === 'interval') {
+        task.nextRunAt = Date.now() + schedule.intervalMs
+      } else {
+        task.nextRunAt = (await computeNextCronRunAt(schedule.cronExpression, Date.now())) ?? Date.now()
+      }
     }
 
     this.dispatchTimestamps.push(Date.now())
+    return true
   }
 
   private hasDispatchCapacity(now: number): boolean {
@@ -206,10 +246,6 @@ export class SchedulerRuntime {
   }
 
   // ── 工具方法 ──
-
-  getSortedTasks(): ScheduledTask[] {
-    return this.listTasks()
-  }
 
   getTaskCount(): number {
     return this.tasks.size

@@ -1,6 +1,6 @@
-import { describe, expect,it } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
-import { autoName,formatRelativeTime, formatSchedule, generateTaskId, truncate } from '../src/format.js'
+import { autoName,formatRelativeTime, formatSchedule, generateTaskId, truncate } from '../format.js'
 
 describe('formatSchedule', () => {
   it('formats interval spec', () => {
@@ -14,6 +14,16 @@ describe('formatSchedule', () => {
 })
 
 describe('formatRelativeTime', () => {
+  // 固定系统时间避免 clock-boundary flake：formatRelativeTime 内部读 Date.now()，
+  // 若与测试捕获的 now 间有毫秒级偏差，正好压在 2h/1d 边界上的断言会偶发失败。
+  beforeEach(() => {
+    vi.useFakeTimers()
+    vi.setSystemTime(new Date('2026-01-15T12:00:00.000Z'))
+  })
+  afterEach(() => {
+    vi.useRealTimers()
+  })
+
   it('formats future time', () => {
     const now = Date.now()
     expect(formatRelativeTime(now + 300_000)).toBe('in 5m')

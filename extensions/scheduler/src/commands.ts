@@ -32,7 +32,7 @@ export function registerScheduleCommand(
       }
       // on/off/rm/run 后补全任务 id
       if (['on', 'off', 'rm', 'run'].includes(parts[0]!) && runtime) {
-        return runtime.getSortedTasks().map(t => ({
+        return runtime.listTasks().map(t => ({
           label: t.id,
           value: t.id,
           description: `${t.name} · ${formatSchedule(t.schedule)}`
@@ -65,7 +65,7 @@ export function registerScheduleCommand(
       if (first === 'on' || first === 'off') {
         const id = parts[1]
         if (!id) return `Usage: /schedule ${first} <id>`
-        const success = runtime.toggleTask(id, first === 'on')
+        const success = await runtime.toggleTask(id, first === 'on')
         return success ? `Task ${id} ${first === 'on' ? 'enabled' : 'disabled'}.` : `Task ${id} not found.`
       }
 
@@ -92,12 +92,12 @@ export function registerScheduleCommand(
       const prompt = parts.slice(scheduleStart + 1).join(' ')
       if (!prompt) return 'Usage: /schedule <schedule> <prompt>'
 
-      const parsed = await parseSchedule(scheduleInput, kind ?? 'recurring')
+      const parsed = await parseSchedule(scheduleInput)
       if (!parsed) {
         return `Invalid schedule: "${scheduleInput}". Use duration (5m/2h/1d) or cron expression.`
       }
 
-      const task = runtime.addTask(prompt, parsed.spec, { kind })
+      const task = await runtime.addTask(prompt, parsed.spec, { kind })
       return `Task "${task.name}" (${task.id}) created. Schedule: ${formatSchedule(task.schedule)}`
     },
   })

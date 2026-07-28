@@ -1,7 +1,7 @@
 import { beforeEach,describe, expect, it, vi } from 'vitest'
 
-import { SchedulerRuntime } from '../src/runtime.js'
-import { createScheduleControlHandler,createScheduleHandler } from '../src/tool.js'
+import { SchedulerRuntime } from '../runtime.js'
+import { createScheduleControlHandler,createScheduleHandler } from '../tool.js'
 
 const mockPi = { sendMessage: vi.fn() }
 const mockCtx = { isIdle: () => true, hasPendingMessages: () => false }
@@ -39,7 +39,7 @@ describe('schedule_control tool', () => {
   })
 
   it('lists tasks', async () => {
-    runtime.addTask('test', { mode: 'interval', intervalMs: 60000 })
+    await runtime.addTask('test', { mode: 'interval', intervalMs: 60000 })
     const result = await handler({ action: 'list' })
     expect(result.content[0]!.text).toContain('test')
   })
@@ -50,7 +50,7 @@ describe('schedule_control tool', () => {
   })
 
   it('toggles task', async () => {
-    const task = runtime.addTask('test', { mode: 'interval', intervalMs: 60000 })
+    const task = await runtime.addTask('test', { mode: 'interval', intervalMs: 60000 })
     const result = await handler({ action: 'toggle', id: task.id, enabled: false })
     expect(result.content[0]!.text).toContain('disabled')
   })
@@ -61,13 +61,13 @@ describe('schedule_control tool', () => {
   })
 
   it('deletes task', async () => {
-    const task = runtime.addTask('test', { mode: 'interval', intervalMs: 60000 })
+    const task = await runtime.addTask('test', { mode: 'interval', intervalMs: 60000 })
     const result = await handler({ action: 'delete', id: task.id })
     expect(result.content[0]!.text).toContain('deleted')
   })
 
   it('runs task now', async () => {
-    const task = runtime.addTask('test', { mode: 'interval', intervalMs: 60000 })
+    const task = await runtime.addTask('test', { mode: 'interval', intervalMs: 60000 })
     const result = await handler({ action: 'run', id: task.id })
     expect(result.content[0]!.text).toContain('executed')
   })

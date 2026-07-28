@@ -747,3 +747,50 @@ pi.on('session_shutdown', () => {
 | 一致性 | — | `schedule` + `schedule_control` 命名与 `goal_control` 一致 |
 | 效率 | Fitts' Law | TUI 快捷键 1 步操作 vs oh-pi 的 3 步嵌套 |
 | 最小惊讶 | — | `/schedule 5m check build` 直接创建，无需 `add` |
+
+---
+
+## 实现偏差说明
+
+本节记录实现与 spec 描述（上文）的偏差。按 code-review skill §2 MANDATORY 要求记录。
+
+### D1: TUI Task Manager（§7.2）— deferred
+
+**spec 描述**：`/schedule` 无参数打开 TUI 任务管理器（单层列表 + 快捷键）。
+**实现现状**：commands.ts:49 返回 "TUI manager not yet implemented. Use /schedule list to see tasks."
+**决策**：W5 阶段未实现，defer 到下个迭代。当前用 `/schedule list` + `schedule_control` tool 替代核心交互。
+**影响**：用户无法在 TUI 内直接 toggle/delete，需通过 command 或 tool。
+
+### D2: xyz-agent GUI 集成（§8）— deferred
+
+**spec 描述**：三个 GUI 渲染通道——Tool Result `__gui__` 字段（card/stats-line/list-tree）、GUI Widget 双通道（guiSetWidget vs TUI setWidget）、Message Renderer（pi-scheduler:dispatched）。
+**实现现状**：
+- gui.ts 已删除（原为死代码，且依赖 AGENTS.md 已 DEPRECATED 的 `__gui__` 协议）
+- index.ts 只实现 TUI widget 通道（ctx.ui.setWidget string[] 重载），无 isGuiCapable/guiSetWidget 分支
+- 未调用 pi.registerMessageRenderer
+**决策**：W5 阶段聚焦调度引擎核心（parsing/store/runtime/tool/command），GUI 集成 defer 到 xyz-agent 侧需求明确后。AGENTS.md 已标 `_render`/`__gui__` 协议 DEPRECATED，新实现应等替代方案。
+**影响**：xyz-agent GUI 下无结构化卡片渲染，fallback 到 content 文本。
+
+### D3: agent_end 事件（§11）— deferred
+
+**spec 描述**：`pi.on('agent_end', ...)` 调 runtime.handleAgentEnd，用于回填 dispatch 后 agent 的真实执行结果（success/failed）。
+**实现现状**：index.ts 只注册 session_start / session_shutdown。runtime 无 handleAgentEnd 方法。dispatch 后无条件标 lastStatus='success'（sendMessage fire-and-forget，无法同步得知 agent 结果）。
+**决策**：defer。当前 success 仅表示"消息已注入 session"，不代表 agent 执行成功。后续若需精确状态追踪，需在 agent_end 回填。
+**影响**：history 中 status 全为 success，无法区分 agent 执行失败的任务。
+
+### D4: widget 主题着色（§7.1）— simplified
+
+**spec 描述**：renderSchedulerWidget(theme, tasks)，overdue 用 theme.fg('error',...) 红色，⏰ 用 theme.fg('accent',...)。
+**实现现状**：widget.ts 用 SDK setWidget 第一重载（string[]），无 theme 参数。overdue 标记用纯文本 `[!]`。
+**决策**：string[] 重载不提供 theme。若需着色，需切到 SDK 第二重载（Component factory），复杂度高，defer。
+**影响**：overdue 任务无红色高亮，仅文本标记。
+
+### D5: command cron 表达式解析（§5.1 / §5.2）— bug，未修复
+
+**spec 描述**：`/schedule cron '<expr>' <prompt>` 创建 cron 任务，引号包裹的 cron 表达式作为单一 schedule 参数。
+**实现现状**：commands.ts:53 用 `trimmed.split(/\s+/)` 切分整行，不做 shell-style quote 解析。`scheduleInput = parts[scheduleStart]`（commands.ts:89）只取第二个 token，cron 表达式含空格会被切碎：
+- `cron '*/10 * * * *' prompt` → `scheduleInput = "'*/10"` → parseSchedule 走 duration 分支失败 → `Invalid schedule: "'*/10"`
+- `cron */10 * * * * prompt`（不带引号）→ `scheduleInput = "*/10"` → 同样失败
+**决策**：W5 未修复，当前 cron 任务只能通过 `schedule` tool 创建（tool 走 JSON 参数，无 tokenization 问题）。command 层的 cron 分支事实上不可用。
+**影响**：`/schedule cron ...` 始终报 Invalid schedule。`getArgumentCompletions` 的 `cron '` 补全建议会引导用户走入这条死路径。测试 `commands.test.ts` 以 `.todo`-style 断言记录此真实行为（断言返回 Invalid，而非创建成功）。
+**修复方向**：command 层引入 quote-aware tokenizer（如解析配对单引号/双引号），或将 cron 创建完全交给 tool、command 移除 cron 分支。

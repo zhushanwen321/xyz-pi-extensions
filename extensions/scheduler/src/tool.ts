@@ -1,8 +1,10 @@
-import { Type } from '@sinclair/typebox'
+import { Static,Type } from '@sinclair/typebox'
 
 import { formatRelativeTime,formatSchedule } from './format.js'
 import { computeNextRuns,parseSchedule } from './parsing.js'
 import type { SchedulerRuntime } from './runtime.js'
+
+// TODO: add renderResult/renderCall to registerTool calls (standards.md §4.3)
 
 // ── schedule tool ──
 
@@ -15,6 +17,8 @@ export const ScheduleParams = Type.Object({
   force: Type.Optional(Type.Boolean({ description: 'Dispatch even when agent is busy. Default: false.' })),
 })
 
+export type ScheduleParamsT = Static<typeof ScheduleParams>
+
 export const scheduleGuidelines = [
   'This tool creates a scheduled task.',
   'Schedule accepts duration (5m, 2h, 1d) for interval-based or cron expression for time-based.',
@@ -24,15 +28,15 @@ export const scheduleGuidelines = [
 ]
 
 export function createScheduleHandler(runtime: SchedulerRuntime) {
-  return async (params: { prompt: string; schedule: string; kind?: 'once' | 'recurring'; name?: string; expires?: string; force?: boolean }) => {
+  return async (params: ScheduleParamsT) => {
     const { prompt, schedule: scheduleInput, kind, name, expires, force } = params
 
-    const parsed = await parseSchedule(scheduleInput, kind ?? 'recurring')
+    const parsed = await parseSchedule(scheduleInput)
     if (!parsed) {
       throw new Error(`Invalid schedule: "${scheduleInput}". Use duration (5m/2h/1d) or cron expression (*/10 * * * *).`)
     }
 
-    const task = runtime.addTask(prompt, parsed.spec, { kind, name, expires, force })
+    const task = await runtime.addTask(prompt, parsed.spec, { kind, name, expires, force })
 
     const nextRuns = await computeNextRuns(task.schedule, Date.now(), 5)
     const summary = [
@@ -61,6 +65,8 @@ export const ScheduleControlParams = Type.Object({
   enabled: Type.Optional(Type.Boolean({ description: 'Target enabled state. Required for toggle.' })),
 })
 
+export type ScheduleControlParamsT = Static<typeof ScheduleControlParams>
+
 export const controlGuidelines = [
   'Use action="list" to see all scheduled tasks.',
   'After listing, use the returned id for toggle/delete/run.',
@@ -69,7 +75,7 @@ export const controlGuidelines = [
 ]
 
 export function createScheduleControlHandler(runtime: SchedulerRuntime) {
-  return async (params: { action: string; id?: string; enabled?: boolean }) => {
+  return async (params: ScheduleControlParamsT) => {
     const { action, id, enabled } = params
 
     switch (action) {
@@ -90,7 +96,7 @@ export function createScheduleControlHandler(runtime: SchedulerRuntime) {
       case 'toggle': {
         if (!id) throw new Error('id is required for toggle.')
         if (enabled === undefined) throw new Error('enabled is required for toggle.')
-        const success = runtime.toggleTask(id, enabled)
+        const success = await runtime.toggleTask(id, enabled)
         if (!success) throw new Error(`Task ${id} not found.`)
         return {
           content: [{ type: 'text' as const, text: `Task ${id} ${enabled ? 'enabled' : 'disabled'}.` }],
