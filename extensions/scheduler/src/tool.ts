@@ -1,7 +1,7 @@
-import { Static,Type } from '@sinclair/typebox'
+import { Static, Type } from '@sinclair/typebox'
 
-import { formatRelativeTime,formatSchedule } from './format.js'
-import { computeNextRuns,parseSchedule } from './parsing.js'
+import { formatRelativeTime, formatSchedule } from './format.js'
+import { computeNextRuns, parseSchedule } from './parsing.js'
 import type { SchedulerRuntime } from './runtime.js'
 
 // TODO: add renderResult/renderCall to registerTool calls (standards.md §4.3)

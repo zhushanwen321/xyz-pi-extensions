@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { autoName,formatRelativeTime, formatSchedule, generateTaskId, truncate } from '../format.js'
+import { formatDuration } from '../parsing.js'
 
 describe('formatSchedule', () => {
   it('formats interval spec', () => {
@@ -42,6 +43,14 @@ describe('formatRelativeTime', () => {
     expect(formatRelativeTime(now + 2000)).toBe('now')
     expect(formatRelativeTime(now - 2000)).toBe('now')
   })
+
+  // 5 秒边界：源码 `< 5000` 严格小于。用显式 now 参数精确锁定，避免 fake-timer 漂移。
+  it('treats 4999ms as now and 5000ms as not-now (strict <)', () => {
+    const base = 1_700_000_000_000
+    expect(formatRelativeTime(base + 4999, base)).toBe('now')
+    expect(formatRelativeTime(base + 5000, base)).not.toBe('now')
+    expect(formatRelativeTime(base + 5000, base)).toBe('in 5s')
+  })
 })
 
 describe('truncate', () => {
@@ -59,6 +68,20 @@ describe('truncate', () => {
     expect(truncate('', 5)).toBe('')
     expect(truncate('hi', 2)).toBe('hi')
     expect(truncate('hi', 1)).toBe('h')
+  })
+
+  // maxLen<=3 分支：不加省略号，直接 slice
+  it('does not add ellipsis when maxLen <= 3', () => {
+    expect(truncate('hello', 3)).toBe('hel')
+    expect(truncate('hello', 0)).toBe('')
+  })
+})
+
+describe('formatDuration', () => {
+  // 秒兜底分支：>60s 但不能整除 m → 不被误判为 "1m"，走 Math.round(ms/1000)
+  it('falls back to seconds when not evenly divisible by larger units', () => {
+    expect(formatDuration(90_000)).toBe('90s')
+    expect(formatDuration(1500)).toBe('2s')
   })
 })
 

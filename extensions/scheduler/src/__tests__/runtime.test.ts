@@ -53,6 +53,15 @@ describe('SchedulerRuntime', () => {
       // 30s interval 的 nextRunAt 早于 60s 的，应排前
       expect(tasks[0]!.nextRunAt).toBeLessThan(tasks[1]!.nextRunAt)
     })
+
+    // 强化断言：30s 任务 nextRunAt 更小（更早），应是 listTasks()[0]
+    it('orders shorter-interval task first', async () => {
+      const t60 = await runtime.addTask('60s', { mode: 'interval', intervalMs: 60000 })
+      const t30 = await runtime.addTask('30s', { mode: 'interval', intervalMs: 30000 })
+      const tasks = runtime.listTasks()
+      expect(tasks[0]!.id).toBe(t30.id)
+      expect(tasks[0]!.nextRunAt).toBeLessThan(t60.nextRunAt)
+    })
   })
 
   describe('toggleTask', () => {
@@ -110,6 +119,16 @@ describe('SchedulerRuntime', () => {
       const task = await busyRuntime.addTask('test', { mode: 'interval', intervalMs: 60000 }, { force: true })
       busyRuntime.dispatchTask(task)
       expect(mockPi.sendMessage).toHaveBeenCalled()
+    })
+
+    // OR 组合补全：源码 `!isIdle() || hasPendingMessages()` 任一为真即跳过。
+    // idle=true 但有 pending message → dispatch 应被跳过。
+    it('skips when idle but has pending messages', async () => {
+      const pendingCtx = { isIdle: () => true, hasPendingMessages: () => true }
+      const pendingRuntime = new SchedulerRuntime('/test', mockPi as never, pendingCtx as never)
+      const task = await pendingRuntime.addTask('test', { mode: 'interval', intervalMs: 60000 })
+      pendingRuntime.dispatchTask(task)
+      expect(mockPi.sendMessage).not.toHaveBeenCalled()
     })
   })
 

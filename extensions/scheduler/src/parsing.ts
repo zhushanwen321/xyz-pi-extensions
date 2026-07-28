@@ -1,4 +1,4 @@
-import type { ParseScheduleResult,ScheduleSpec } from './types.js'
+import type { ParseScheduleResult, ScheduleSpec } from './types.js'
 
 // ── Duration 解析 ──
 
@@ -106,7 +106,7 @@ export async function computeNextCronRunAt(
     const normalized = normalizeCronExpression(expression)
     if (!normalized) return undefined
 
-    const job = new (croner as typeof import('croner')).Cron(normalized.expression, { startAt: from ? new Date(from) : undefined })
+    const job = new croner.Cron(normalized.expression, { startAt: from ? new Date(from) : undefined })
     const next = job.nextRun()
     return next ? next.getTime() : undefined
   } catch {
@@ -130,7 +130,7 @@ export async function computeNextCronRuns(
     const normalized = normalizeCronExpression(expression)
     if (!normalized) return []
 
-    const job = new (croner as typeof import('croner')).Cron(normalized.expression, { startAt: from ? new Date(from) : undefined })
+    const job = new croner.Cron(normalized.expression, { startAt: from ? new Date(from) : undefined })
     const runs: number[] = []
     let current = from ? new Date(from) : new Date()
 

@@ -41,6 +41,23 @@ describe('parseDuration', () => {
     expect(parseDuration('5x')).toBeUndefined()
     expect(parseDuration('abc5m')).toBeUndefined()
   })
+
+  it('accepts zero value', () => {
+    expect(parseDuration('0s')).toBe(0)
+  })
+
+  it('returns undefined for bare number without unit', () => {
+    expect(parseDuration('5')).toBeUndefined()
+  })
+
+  it('trims leading/trailing whitespace', () => {
+    expect(parseDuration('  5m  ')).toBe(300_000)
+  })
+
+  it('accepts uppercase units (case-insensitive)', () => {
+    expect(parseDuration('5M')).toBe(300_000)
+    expect(parseDuration('5H')).toBe(18_000_000)
+  })
 })
 
 describe('formatDuration', () => {

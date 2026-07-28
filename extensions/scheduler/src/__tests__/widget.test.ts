@@ -47,4 +47,17 @@ describe('renderSchedulerWidget', () => {
     const result = renderSchedulerWidget(tasks)
     expect(result[0]).toMatch(/^\[scheduler\]/)
   })
+
+  // disabled 任务被过滤：scheduled 计数与 overdue/upcoming 都只统计 enabled
+  it('excludes disabled tasks from counts', () => {
+    const tasks = [
+      makeTask({ id: 'enabled1', name: 'active', enabled: true }),
+      makeTask({ id: 'disabled1', name: 'inactive', enabled: false, nextRunAt: Date.now() - 1000 }),
+    ]
+    const result = renderSchedulerWidget(tasks)
+    expect(result[0]).toContain('1 scheduled')
+    expect(result[0]).not.toContain('1 overdue')
+    expect(result[0]).toContain('active')
+    expect(result[0]).not.toContain('inactive')
+  })
 })

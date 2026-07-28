@@ -14,10 +14,13 @@ export function formatSchedule(spec: ScheduleSpec): string {
  * 未来: "in 5m"
  * 过去: "5m ago"
  * 当前(+-5s): "now"
+ *
+ * now 可选参数：基准时间戳，默认 Date.now()。测试可传固定值快进/锁定，
+ * 生产调用方无需传（参数可选，行为不变）。
  */
-export function formatRelativeTime(timestamp: number): string {
-  const now = Date.now()
-  const diff = timestamp - now
+export function formatRelativeTime(timestamp: number, now?: number): string {
+  const currentTime = now ?? Date.now()
+  const diff = timestamp - currentTime
 
   // 5秒内视为"现在"
   if (Math.abs(diff) < 5000) return 'now'
