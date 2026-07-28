@@ -117,19 +117,16 @@ describe("REC4: fill stage 命令选择 + commitFill", () => {
 	it("选 npm → commitFill → 回 list stage，新规则出现", () => {
 		// eslint-disable-next-line @typescript-eslint/no-unused-vars
 		const { comp, done } = createComp();
-		// → add stage → 选 allow-family → fill stage
+		// → add stage → 选 allow-family → fill stage（command-select 带搜索）
 		comp.handleInput("\r"); // [+ Add rule]
 		comp.handleInput("\r"); // allow-family
-		// fill stage：第一条是 npm（PRESET_COMMANDS 第一条），Enter
+		// fill stage：搜索框默认获焦，Enter（空 query）→ 选中第一个匹配 npm → 进入 scope 列表
 		comp.handleInput("\r");
-		// 应该 settle 了（commitFill 后 switchToListStage，再 Enter [Done] 会 done）
-		// 但 commitFill 只 push ops 不 settle，需要看 done 是否被调
+		// scope 列表：第一条是 `${cmd} * (all subcommands)`（__all__），Enter → commitFill
+		comp.handleInput("\r");
 		// commitFill → switchToListStage，list 现在应有新规则
 		const text = comp.render(80).join("\n");
 		expect(text).toContain("npm *");
-		// 选 [Done]
-		// 新规则在列表中，[Done] 在最后，需要 down 到 [Done]
-		// 先测试 ops
 		expect(comp.ops).toHaveLength(1);
 		expect(comp.ops[0]!.kind).toBe("add");
 		expect(comp.ops[0]!.rule.pattern).toBe("npm *");

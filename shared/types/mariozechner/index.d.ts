@@ -317,6 +317,8 @@ declare module "@mariozechner/pi-tui" {
 	export class Input {
 		onSubmit?: (value: string) => void;
 		onEscape?: () => void;
+		/** Focusable interface — set by TUI/container when focus changes */
+		focused: boolean;
 		getValue(): string;
 		setValue(value: string): void;
 		handleInput(data: string): void;

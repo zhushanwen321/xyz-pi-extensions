@@ -102,6 +102,11 @@ export class RuleEditorComponent extends Container {
 	private customFocusIndex = 0;
 	private customChildren: Component[] = [];
 
+	/** 搜索状态（command-select 界面）。 */
+	private _searchInput: Input | null = null;
+	private _commandList: SelectList | null = null;
+	private _searchFocus = false; // true = 搜索框获焦，false = 列表获焦
+
 	constructor(
 		initialRules: readonly Rule[],
 		sessionIdCounter: () => string,
@@ -140,7 +145,9 @@ export class RuleEditorComponent extends Container {
 		// Custom form：Tab 焦点路由（WR8）
 		if (this.stage === "fill" && this.fillKind === "custom") {
 			if (matchesKey(data, "tab")) {
-				this.customFocusIndex = (this.customFocusIndex + 1) % 5;
+				// Edit 模式有 6 个字段，New 模式有 5 个
+				const maxIndex = this.fillEditMode ? 6 : 5;
+				this.customFocusIndex = (this.customFocusIndex + 1) % maxIndex;
 				this.syncCustomFocus();
 				this.invalidate();
 				return;
@@ -152,6 +159,39 @@ export class RuleEditorComponent extends Container {
 			}
 			return;
 		}
+
+		// command-select 界面：Tab 切换搜索框 ↔ 列表
+		if (this.stage === "fill" && this._searchInput !== null && this._commandList !== null) {
+			if (matchesKey(data, "tab")) {
+				this._searchFocus = !this._searchFocus;
+				this._searchInput.focused = this._searchFocus;
+				this.invalidate();
+				return;
+			}
+			// 根据焦点委托
+			if (this._searchFocus) {
+				// 搜索框获焦：输入字符时实时过滤列表
+				this._searchInput.handleInput(data);
+				// onSubmit（Enter）可能在 handleInput 内触发 stage 转换
+				// （_resetStageRefs 会清 _searchInput），此时本轮渲染已由转换处理，直接返回。
+				if (this._searchInput === null) return;
+				// 使用 SelectList.setFilter 过滤
+				const query = this._searchInput.getValue();
+				this._commandList.setFilter(query);
+				this.invalidate();
+				return;
+			}
+			// 列表获焦
+			this._commandList.handleInput(data);
+			return;
+		}
+
+		// 独立 Input 组件（startCommandInput / startSubcmdInput）
+		if (this.stage === "fill" && this.currentInput !== null) {
+			this.currentInput.handleInput(data);
+			return;
+		}
+
 		// 非 custom form：委托给当前 active 组件
 		this.currentList?.handleInput(data);
 	}
@@ -168,6 +208,25 @@ export class RuleEditorComponent extends Container {
 		this.done(this.ops);
 	}
 
+	/**
+	 * 集中清理子组件引用（C3 根因修复）。
+	 *
+	 * Container.clear() 只清 children 数组，不清组件引用字段。
+	 * 每个 switchTo* 或 startFill* 方法在 this.clear() 之后必须调用本方法，
+	 * 杜绝手动清理遗漏导致的输入路由死锁（C1）。
+	 *
+	 * 注意：不清业务状态字段（fillKind/fillEditMode/fillEditRuleId/fillSelections/
+	 * fillTemplate/denySubStage/customFocusIndex）——这些由各自的 enter*Mode 方法显式设置。
+	 */
+	private _resetStageRefs(): void {
+		this._searchInput = null;
+		this._commandList = null;
+		this._searchFocus = false;
+		this.currentInput = null;
+		this.currentList = null;
+		this.customChildren = [];
+	}
+
 	/** currentListRules = applyOps(initialRules, ops)（G2：实时反映 ops）。 */
 	currentListRules(): Rule[] {
 		return applyOps([...this.initialRules], this.ops);
@@ -178,7 +237,7 @@ export class RuleEditorComponent extends Container {
 	private switchToListStage(): void {
 		this.stage = "list";
 		this.clear();
-		this.currentInput = null;
+		this._resetStageRefs();
 		this.currentList = this.buildListStage();
 		this.addChild(new TextLines(["[pi-permission] Permission Rules", ""]));
 		this.addChild(this.currentList);
@@ -225,7 +284,7 @@ export class RuleEditorComponent extends Container {
 	private switchToAddStage(): void {
 		this.stage = "add";
 		this.clear();
-		this.currentInput = null;
+		this._resetStageRefs();
 		const items: SelectItem[] = ALL_TEMPLATES.map((t) => ({
 			value: t.id,
 			label: t.label,
@@ -249,6 +308,7 @@ export class RuleEditorComponent extends Container {
 	// ──────────────────────── fill stage ────────────────────────
 
 	private enterFillNewMode(template: RuleTemplate): void {
+		this._resetStageRefs();
 		this.fillTemplate = template;
 		this.fillEditMode = false;
 		this.fillEditRuleId = null;
@@ -257,6 +317,7 @@ export class RuleEditorComponent extends Container {
 	}
 
 	private enterFillEditMode(ruleId: string): void {
+		this._resetStageRefs();
 		const rules = this.currentListRules();
 		const rule = rules.find((r) => r.id === ruleId);
 		if (rule === undefined) {
@@ -298,30 +359,118 @@ export class RuleEditorComponent extends Container {
 		}
 	}
 
-	// ── command-select（allow-family / ask-before）──
+	// ── command-select（allow-family / ask-before）带搜索 ──
 
 	private startFillCommandSelect(kind: FillKind): void {
 		this.stage = "fill";
 		this.fillKind = kind;
 		this.clear();
-		this.currentInput = null;
+		this._resetStageRefs();
 
-		const items = this.buildPresetCommandItems();
-		const list = new SelectList(items, MAX_VISIBLE, this.theme);
+		// 搜索输入框
+		const searchInput = new Input();
+		searchInput.setValue("");
+		this.currentInput = searchInput;
+		this._searchInput = searchInput;
+		this._searchFocus = true; // 默认焦点在搜索框
+
+		// 命令列表（初始显示全部）
+		const allItems = this.buildPresetCommandItemsWithOther();
+		const list = new SelectList(allItems, MAX_VISIBLE, this.theme);
+		this.currentList = list;
+		this._commandList = list;
+
+		// 搜索输入变化时过滤列表
+		searchInput.onSubmit = (val: string): void => {
+			// Enter 在搜索框中 = 选择第一个匹配项或进入手动输入
+			const filtered = this.filterCommandItems(allItems, val.trim());
+			if (filtered.length === 0 || (filtered.length === 1 && filtered[0]?.value === "__other__")) {
+				// 无匹配 → 进入手动输入
+				this.startCommandInput();
+				return;
+			}
+			// 有匹配 → 选中第一个（非 Other）
+			const firstMatch = filtered.find((i) => i.value !== "__other__");
+			if (firstMatch !== undefined) {
+				this.onCommandSelected(firstMatch.value);
+			}
+		};
+		searchInput.onEscape = (): void => {
+			this.switchToListStage();
+		};
+
+		// 列表选择
 		list.onSelect = (item: SelectItem): void => {
 			if (item.value === "__other__") {
 				this.startCommandInput();
 				return;
 			}
-			this.fillSelections.cmd = item.value;
-			this.commitFill();
+			this.onCommandSelected(item.value);
 		};
 		list.onCancel = (): void => {
 			this.switchToListStage();
 		};
-		this.currentList = list;
-		this.addChild(new TextLines(["[pi-permission] Select command (or Other for custom)", ""]));
+
+		// 渲染
+		this.addChild(new TextLines(["[pi-permission] Select command", ""]));
+		this.addChild(new TextLines(["Type to search · Tab to switch focus · Enter to select"]));
+		this.addChild(searchInput);
 		this.addChild(list);
+	}
+
+	/** 命令选中后：弹出子命令/全选 选择 */
+	private onCommandSelected(cmd: string): void {
+		// 弹出选择：整个命令家族 / 特定子命令
+		this.clear();
+		this._resetStageRefs();
+
+		const scopeItems: SelectItem[] = [
+			{ value: "__all__", label: `${cmd} * (all subcommands)`, description: `Allow/deny all invocations of ${cmd}` },
+			{ value: "__subcmd__", label: `${cmd} <subcommand> *`, description: `Allow/deny a specific subcommand` },
+		];
+		const list = new SelectList(scopeItems, 2, this.theme);
+		list.onSelect = (item: SelectItem): void => {
+			if (item.value === "__all__") {
+				this.fillSelections.cmd = cmd;
+				this.commitFill();
+			} else {
+				// 进入子命令输入
+				this.fillSelections.cmd = cmd;
+				this.startSubcmdInput();
+			}
+		};
+		list.onCancel = (): void => {
+			// 返回命令选择
+			this.startFillCommandSelect(this.fillKind);
+		};
+		this.currentList = list;
+		this.addChild(new TextLines(["[pi-permission] Select scope for " + cmd, ""]));
+		this.addChild(list);
+	}
+
+	/** 构建命令列表 + Other（在顶部） */
+	private buildPresetCommandItemsWithOther(): SelectItem[] {
+		const items: SelectItem[] = [
+			{ value: "__other__", label: "[Type command manually]", description: "Tab here to type a custom command" },
+		];
+		for (const cmd of PRESET_COMMANDS) {
+			items.push({
+				value: cmd.cmd,
+				label: `${cmd.cmd} — ${cmd.category}`,
+				description: cmd.label,
+			});
+		}
+		return items;
+	}
+
+	/** 过滤命令列表（Enter 时检查匹配用） */
+	private filterCommandItems(items: SelectItem[], query: string): SelectItem[] {
+		if (query.length === 0) return items;
+		const lower = query.toLowerCase();
+		return items.filter((item) => {
+			if (item.value === "__other__") return true; // 始终保留 Other
+			return item.value.toLowerCase().includes(lower) || item.label.toLowerCase().includes(lower);
+		});
 	}
 
 	// ── deny-family（命令 → 子命令）──
@@ -330,11 +479,38 @@ export class RuleEditorComponent extends Container {
 		this.stage = "fill";
 		this.fillKind = "deny-family";
 		this.clear();
-		this.currentInput = null;
+		this._resetStageRefs();
 
 		if (this.denySubStage === "cmd") {
-			const items = this.buildPresetCommandItems();
-			const list = new SelectList(items, MAX_VISIBLE, this.theme);
+			// 带搜索的命令选择
+			const searchInput = new Input();
+			searchInput.setValue("");
+			this.currentInput = searchInput;
+			this._searchInput = searchInput;
+			this._searchFocus = true;
+
+			const allItems = this.buildPresetCommandItemsWithOther();
+			const list = new SelectList(allItems, MAX_VISIBLE, this.theme);
+			this.currentList = list;
+			this._commandList = list;
+
+			searchInput.onSubmit = (val: string): void => {
+				const filtered = this.filterCommandItems(allItems, val.trim());
+				if (filtered.length === 0 || (filtered.length === 1 && filtered[0]?.value === "__other__")) {
+					this.startCommandInput("deny-cmd");
+					return;
+				}
+				const firstMatch = filtered.find((i) => i.value !== "__other__");
+				if (firstMatch !== undefined) {
+					this.fillSelections.cmd = firstMatch.value;
+					this.denySubStage = "subcmd";
+					this.startFillDenyFamily();
+				}
+			};
+			searchInput.onEscape = (): void => {
+				this.switchToListStage();
+			};
+
 			list.onSelect = (item: SelectItem): void => {
 				if (item.value === "__other__") {
 					this.startCommandInput("deny-cmd");
@@ -347,8 +523,10 @@ export class RuleEditorComponent extends Container {
 			list.onCancel = (): void => {
 				this.switchToListStage();
 			};
-			this.currentList = list;
+
 			this.addChild(new TextLines(["[pi-permission] Deny — Select command", ""]));
+			this.addChild(new TextLines(["Type to search · Tab to switch focus · Enter to select"]));
+			this.addChild(searchInput);
 			this.addChild(list);
 		} else {
 			// subcmd 阶段
@@ -383,10 +561,36 @@ export class RuleEditorComponent extends Container {
 		this.stage = "fill";
 		this.fillKind = "allow-subcmd";
 		this.clear();
-		this.currentInput = null;
+		this._resetStageRefs();
 
-		const items = this.buildPresetCommandItems();
-		const list = new SelectList(items, MAX_VISIBLE, this.theme);
+		// 带搜索的命令选择
+		const searchInput = new Input();
+		searchInput.setValue("");
+		this.currentInput = searchInput;
+		this._searchInput = searchInput;
+		this._searchFocus = true;
+
+		const allItems = this.buildPresetCommandItemsWithOther();
+		const list = new SelectList(allItems, MAX_VISIBLE, this.theme);
+		this.currentList = list;
+		this._commandList = list;
+
+		searchInput.onSubmit = (val: string): void => {
+			const filtered = this.filterCommandItems(allItems, val.trim());
+			if (filtered.length === 0 || (filtered.length === 1 && filtered[0]?.value === "__other__")) {
+				this.startCommandInput("allow-subcmd-cmd");
+				return;
+			}
+			const firstMatch = filtered.find((i) => i.value !== "__other__");
+			if (firstMatch !== undefined) {
+				this.fillSelections.cmd = firstMatch.value;
+				this.startSubcmdInput();
+			}
+		};
+		searchInput.onEscape = (): void => {
+			this.switchToListStage();
+		};
+
 		list.onSelect = (item: SelectItem): void => {
 			if (item.value === "__other__") {
 				this.startCommandInput("allow-subcmd-cmd");
@@ -398,8 +602,10 @@ export class RuleEditorComponent extends Container {
 		list.onCancel = (): void => {
 			this.switchToListStage();
 		};
-		this.currentList = list;
+
 		this.addChild(new TextLines(["[pi-permission] Allow subcommand — Select command", ""]));
+		this.addChild(new TextLines(["Type to search · Tab to switch focus · Enter to select"]));
+		this.addChild(searchInput);
 		this.addChild(list);
 	}
 
@@ -409,9 +615,8 @@ export class RuleEditorComponent extends Container {
 		this.stage = "fill";
 		this.fillKind = "custom";
 		this.clear();
-		this.currentList = null;
+		this._resetStageRefs();
 		this.customFocusIndex = 0;
-		this.customChildren = [];
 
 		// 1. pattern Input
 		const patternInput = new Input();
@@ -448,6 +653,9 @@ export class RuleEditorComponent extends Container {
 		toolList.onSelect = (item: SelectItem): void => {
 			this.fillSelections.tool = item.value;
 		};
+		toolList.onCancel = (): void => {
+			this.switchToListStage();
+		};
 
 		// 4. description Input
 		const descInput = new Input();
@@ -468,6 +676,9 @@ export class RuleEditorComponent extends Container {
 			} else {
 				this.switchToListStage();
 			}
+		};
+		submitList.onCancel = (): void => {
+			this.switchToListStage();
 		};
 
 		this.customChildren = [patternInput, actionList, toolList, descInput, submitList];
@@ -494,8 +705,13 @@ export class RuleEditorComponent extends Container {
 				this.ops.push({ kind: "delete", id: this.fillEditRuleId! });
 				this.switchToListStage();
 			};
+			deleteList.onCancel = (): void => {
+				this.switchToListStage();
+			};
 			this.addChild(new TextLines([""]));
 			this.addChild(deleteList);
+			// 添加到 customChildren 以便 Tab 切换
+			this.customChildren.push(deleteList);
 		}
 
 		this.syncCustomFocus();
@@ -505,7 +721,7 @@ export class RuleEditorComponent extends Container {
 
 	private startCommandInput(returnTo?: string): void {
 		this.clear();
-		this.currentList = null;
+		this._resetStageRefs();
 		const input = new Input();
 		if ("focused" in input) (input as unknown as { focused: boolean }).focused = true;
 		input.onSubmit = (val: string): void => {
@@ -534,7 +750,7 @@ export class RuleEditorComponent extends Container {
 
 	private startSubcmdInput(): void {
 		this.clear();
-		this.currentList = null;
+		this._resetStageRefs();
 		const input = new Input();
 		if ("focused" in input) (input as unknown as { focused: boolean }).focused = true;
 		input.onSubmit = (val: string): void => {

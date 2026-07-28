@@ -216,23 +216,25 @@ describe("ApprovalComponent（G4 invalidate）", () => {
 		const joined = lines.join("\n");
 		expect(joined).toContain("bash");
 		expect(joined).toContain("rm -rf /tmp");
-		expect(joined).toContain("[y/Enter] Approve");
+		// 工作区改动去掉了 y/n 快捷键，只保留 Enter（approve）/Esc（deny）。
+		expect(joined).toContain("[Enter] Approve");
 	});
 
-	it("handleInput y → approve（done 调用一次）", () => {
+	it("handleInput Enter → approve（done 调用一次）", () => {
 		const done = vi.fn();
 		const comp = new ApprovalComponent(req, { requestRender: vi.fn() }, done);
-		// 模拟 y 键：matchesKey 对单字符 'y' 返回 true
-		comp.handleInput("y");
+		// Enter 键：matchesKey(data, "enter") 匹配 "\r"（codepoint 13）
+		comp.handleInput("\r");
 		expect(done).toHaveBeenCalledOnce();
 		const result = done.mock.calls[0]![0] as UserDecision;
 		expect(result.approved).toBe(true);
 	});
 
-	it("handleInput n → deny", () => {
+	it("handleInput Esc → deny", () => {
 		const done = vi.fn();
 		const comp = new ApprovalComponent(req, { requestRender: vi.fn() }, done);
-		comp.handleInput("n");
+		// Esc 键：matchesKey(data, "escape") 匹配 "\x1b"（codepoint 27）
+		comp.handleInput("\x1b");
 		expect(done).toHaveBeenCalledOnce();
 		const result = done.mock.calls[0]![0] as UserDecision;
 		expect(result.approved).toBe(false);
@@ -241,8 +243,8 @@ describe("ApprovalComponent（G4 invalidate）", () => {
 	it("handleInput 在 resolved 后 no-op（守卫）", () => {
 		const done = vi.fn();
 		const comp = new ApprovalComponent(req, { requestRender: vi.fn() }, done);
-		comp.handleInput("y"); // 首次 approve
-		comp.handleInput("n"); // resolved 后 no-op
+		comp.handleInput("\r"); // 首次 approve（Enter）
+		comp.handleInput("\x1b"); // resolved 后 no-op（Esc 不再生效）
 		expect(done).toHaveBeenCalledOnce();
 	});
 

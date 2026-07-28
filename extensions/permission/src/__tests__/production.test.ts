@@ -34,10 +34,12 @@ describe("createProductionClassifier", () => {
 
 	it("classifyRisk 在无模型时 fail-closed 返回 ask（不 throw）", async () => {
 		const classifier = createProductionClassifier();
-		// 无 models.json 或无可用模型 → resolveModel 返回 null → fallback ask
+		// 用不存在的 provider/model 规格强制 resolveClassifierModel 返回 null → fallback ask。
+		// （真实环境磁盘存在带 apiKey 的 models.json，model:"auto" 会解析到真实模型并调用 LLM，
+		//   无法稳定走 fail-closed 路径，故用 bogus spec 确保无可用模型。）
 		const result = await classifier.classifyRisk(
 			{ toolName: "bash", command: "ls", cwd: "/tmp" },
-			{ enabled: true, model: "auto", timeout: 5, autoApproveLowRisk: true, autoDenyHighRisk: true },
+			{ enabled: true, model: "nonexistent-provider/no-such-model", timeout: 5, autoApproveLowRisk: false, autoDenyHighRisk: true },
 		);
 		expect(result.outcome).toBe("ask");
 		expect(result.risk_level).toBe("medium");

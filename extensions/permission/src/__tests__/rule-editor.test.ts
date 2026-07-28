@@ -122,11 +122,16 @@ describe("RE4: RPC [Done]", () => {
 
 describe("RE5: RPC add flow", () => {
 	it("[+ Add rule] → 选 allow-family → 选 npm → ops 含 add", async () => {
+		// rpcAddFlow 调用序列（allow-family 模板，无 scope 选择）：
+		//   list → template → rpcSelectCommand[mode: Browse] → rpcSelectCommand[cmd: npm] → 第二次 list
+		// 注：rpcSelectCommand 现先问 "How to select command?"（Browse / Type-to-search），多一步 select。
+		//     allow-family 模板在 build 前不再追加 scope 选择（仅 deny-family/allow-subcmd 需要）。
 		const selectMock = vi.fn()
-			.mockResolvedValueOnce("[+ Add rule]") // list
-			.mockResolvedValueOnce("Allow command family") // template
-			.mockResolvedValueOnce("npm (Node package manager)") // command
-			.mockResolvedValueOnce("[Done]"); // list（第二次循环）
+			.mockResolvedValueOnce("[+ Add rule]") // list（call 0）
+			.mockResolvedValueOnce("Allow command family") // template（call 1）
+			.mockResolvedValueOnce("[Browse list]") // rpcSelectCommand mode（call 2）
+			.mockResolvedValueOnce("npm (Node package manager)") // command（call 3）
+			.mockResolvedValueOnce("[Done]"); // list 第二次循环（call 4）
 		const ctx = makeCtx({
 			mode: "rpc",
 			ui: { notify: vi.fn(), select: selectMock, custom: vi.fn() },
@@ -164,18 +169,22 @@ describe("RE6: RPC delete flow", () => {
 
 describe("RE7: G16 多循环反映前序 ops", () => {
 	it("add 后第二次 list 包含新规则", async () => {
+		// ask-before 模板调用序列（无 scope 选择）：
+		//   list → template → rpcSelectCommand[mode: Browse] → rpcSelectCommand[cmd: docker] → 第二次 list
+		// rpcSelectCommand 现多一步 mode 选择，故第二次 list 落在 call 4（非 call 3）。
 		const selectMock = vi.fn()
 			.mockResolvedValueOnce("[+ Add rule]") // list 1 (call 0)
 			.mockResolvedValueOnce("Ask before command") // template (call 1)
-			.mockResolvedValueOnce("docker (container runtime)") // command (call 2)
-			.mockResolvedValueOnce("[Done]"); // list 2 (call 3, 应含新规则)
+			.mockResolvedValueOnce("[Browse list]") // rpcSelectCommand mode (call 2)
+			.mockResolvedValueOnce("docker (container runtime)") // command (call 3)
+			.mockResolvedValueOnce("[Done]"); // list 2 (call 4, 应含新规则)
 		const ctx = makeCtx({
 			mode: "rpc",
 			ui: { notify: vi.fn(), select: selectMock, custom: vi.fn() },
 		});
 		await editRulesViaOverlay(ctx, [], makeCounter());
-		// 第四次 select（index 3）是第二次 list，options 应包含新规则
-		const secondListArgs = selectMock.mock.calls[3] as [string, string[]];
+		// 第五次 select（index 4）是第二次 list，options 应包含新规则
+		const secondListArgs = selectMock.mock.calls[4] as [string, string[]];
 		expect(secondListArgs[1]).toContain("[ask] docker *");
 	});
 });

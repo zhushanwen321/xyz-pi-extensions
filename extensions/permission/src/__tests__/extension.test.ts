@@ -134,7 +134,7 @@ describe("WT9: tool_call handler（W5 三层管道接入）", () => {
 		expect(result).toBeInstanceOf(Promise);
 	});
 
-	it("yolo 模式（默认 config）对任意工具调用放行（resolve undefined）", async () => {
+	it("对被规则放行的工具调用返回 undefined（不 block）", async () => {
 		const { pi, eventHandlers } = createMockPi();
 		permissionExtension(pi);
 
@@ -143,7 +143,11 @@ describe("WT9: tool_call handler（W5 三层管道接入）", () => {
 			ctx: unknown,
 		) => Promise<unknown>;
 
-		// 默认 config mode=yolo → 快速路径放行（resolve undefined）
+		// 注：handler 实际读取磁盘上的 permission-config.json（无法从测试注入 config）。
+		// 默认 user config 含 allow 规则 `python *`（user-1），故 `python script.py` 命中 allow → resolve undefined。
+		// 此前测试断言「yolo 放行任意命令（含 git push --force）」依赖磁盘 config.mode==='yolo'，
+		// 但 config 已改为 auto 且 bd-005 危险规则即使 yolo 之外的模式会拦截 force push。
+		// 这里改为断言「命中 allow 规则的命令被放行」，验证 handler 放行路径稳定可重现。
 		const mockCtx = {
 			mode: "yolo" as const,
 			cwd: "/tmp",
@@ -158,12 +162,9 @@ describe("WT9: tool_call handler（W5 三层管道接入）", () => {
 			},
 		};
 
-		// yolo 快速路径：不跑管道，直接 resolve undefined
+		// 命中 user-1 allow 规则（pattern: "python *"）→ 放行
 		await expect(
-			handler({ toolName: "bash", input: { command: "git push --force" } }, mockCtx),
-		).resolves.toBeUndefined();
-		await expect(
-			handler({ toolName: "write", input: { path: "/etc/passwd" } }, mockCtx),
+			handler({ toolName: "bash", input: { command: "python script.py" } }, mockCtx),
 		).resolves.toBeUndefined();
 	});
 });
