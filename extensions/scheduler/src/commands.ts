@@ -1,15 +1,22 @@
-import { formatRelativeTime,formatSchedule } from './format.js'
+import { formatRelativeTime, formatSchedule } from './format.js'
 import { parseSchedule } from './parsing.js'
 import type { SchedulerRuntime } from './runtime.js'
 
 /**
  * 注册 /schedule command。
  * 消歧规则：第一个参数匹配子命令关键词则走对应分支，否则尝试 parseSchedule 创建任务。
+ *
+ * runtime 通过 getter 获取：registerScheduleCommand 在 factory 顶层调用，此时 session_start
+ * 尚未触发、runtime 还是 null。getArgumentCompletions / handler 真正执行时才读 runtime 当前值。
  */
-export function registerScheduleCommand(pi: { registerCommand: (name: string, opts: unknown) => void }, runtime: SchedulerRuntime) {
+export function registerScheduleCommand(
+  pi: { registerCommand: (name: string, opts: unknown) => void },
+  getRuntime: () => SchedulerRuntime | null,
+) {
   pi.registerCommand('schedule', {
     description: 'Manage scheduled tasks. No args opens TUI. /schedule <schedule> <prompt> to create.',
     getArgumentCompletions(prefix: string) {
+      const runtime = getRuntime()
       const trimmed = prefix.trimStart()
       const parts = trimmed.split(/\s+/).filter(Boolean)
       if (parts.length <= 1) {
@@ -24,7 +31,7 @@ export function registerScheduleCommand(pi: { registerCommand: (name: string, op
         ].filter(opt => opt.label.startsWith(trimmed.toLowerCase()))
       }
       // on/off/rm/run 后补全任务 id
-      if (['on', 'off', 'rm', 'run'].includes(parts[0]!)) {
+      if (['on', 'off', 'rm', 'run'].includes(parts[0]!) && runtime) {
         return runtime.getSortedTasks().map(t => ({
           label: t.id,
           value: t.id,
@@ -34,6 +41,9 @@ export function registerScheduleCommand(pi: { registerCommand: (name: string, op
       return null
     },
     handler: async (args: string) => {
+      const runtime = getRuntime()
+      if (!runtime) return 'Scheduler not initialized: session not started.'
+
       const trimmed = args.trim()
       if (!trimmed) {
         // TODO: 打开 TUI 管理器（W5 实现）
