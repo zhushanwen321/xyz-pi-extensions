@@ -13,7 +13,9 @@
  */
 import { describe, expect, it, vi } from "vitest";
 
-import { handlePermissionCommand } from "../commands.js";
+import type { ResolvedModelEntry } from "../classifier/model-resolver.js";
+import { handlePermissionCommand, handlePermissionModelCommand, type PermissionModelCommandDeps } from "../commands.js";
+import type { ModelPickerContext } from "../model-picker.js";
 import { DEFAULT_CONFIG, type PermissionConfig } from "../types.js";
 
 // ──────────────────────── mock helpers ────────────────────────
@@ -197,5 +199,153 @@ describe("/permission 边界", () => {
 	it("default config 调无参 → 含 'yolo'（默认模式）", () => {
 		const msg = handlePermissionCommand(undefined, DEFAULT_CONFIG, successSave());
 		expect(msg).toContain("yolo");
+	});
+});
+
+// ──────────────────────── /permission model（W7 T6） ────────────────────────
+
+/** 构造一条 ResolvedModelEntry（测试 helper）。 */
+function makeModelEntry(provider: string, id: string, inputCost: number): ResolvedModelEntry {
+	return {
+		provider,
+		id,
+		name: id,
+		api: "openai-completions",
+		cost: { input: inputCost, output: 0, cacheRead: 0, cacheWrite: 0 },
+		hasApiKey: true,
+	};
+}
+
+/** 构造 mock ctx（mode + ui.notify/custom/select）。 */
+function makeModelPickerCtx(overrides: Partial<ModelPickerContext> = {}): ModelPickerContext {
+	const base: ModelPickerContext = {
+		mode: "rpc",
+		ui: {
+			notify: vi.fn(),
+			select: vi.fn(() => Promise.resolve("Auto")),
+			custom: vi.fn(() => Promise.resolve(undefined)),
+		},
+	};
+	return { mode: overrides.mode ?? base.mode, ui: { ...base.ui, ...overrides.ui } };
+}
+
+/** 构造 mock deps（listModels + save）。 */
+function makeModelDeps(overrides: Partial<PermissionModelCommandDeps> = {}): PermissionModelCommandDeps {
+	return {
+		listModels: overrides.listModels ?? (() => new Map([["co", [makeModelEntry("co", "m1", 0.1)]]])),
+		save: overrides.save ?? vi.fn(() => ({ success: true })),
+	};
+}
+
+describe("/permission model（W7）", () => {
+	it("无可用 model（空 Map）→ notify 降级提示，不调 save", async () => {
+		const ctx = makeModelPickerCtx();
+		const save = vi.fn(() => ({ success: true }));
+		const deps = makeModelDeps({ listModels: () => new Map(), save });
+		await handlePermissionModelCommand(ctx, makeConfig(), deps);
+		expect(ctx.ui.notify).toHaveBeenCalledOnce();
+		const [msg, level] = (ctx.ui.notify as ReturnType<typeof vi.fn>).mock.calls[0]!;
+		expect(msg).toContain("No available models");
+		expect(level).toBe("warn");
+		expect(save).not.toHaveBeenCalled();
+	});
+
+	it("选 'Auto' → 写回 config.classifier.model='auto' + notify 成功", async () => {
+		const ctx = makeModelPickerCtx({
+			ui: {
+				notify: vi.fn(),
+				select: vi.fn(() => Promise.resolve("Auto")),
+				custom: vi.fn(),
+			},
+		});
+		const save = vi.fn(() => ({ success: true }));
+		const deps = makeModelDeps({ save });
+		const config = makeConfig({ classifier: { enabled: true, model: "co/old", timeout: 90, autoApproveLowRisk: true, autoDenyHighRisk: true } });
+		await handlePermissionModelCommand(ctx, config, deps);
+		expect(save).toHaveBeenCalledOnce();
+		const savedConfig = save.mock.calls[0]![0] as PermissionConfig;
+		expect(savedConfig.classifier.model).toBe("auto");
+		expect(ctx.ui.notify).toHaveBeenCalledWith(expect.stringContaining("set to: auto"), "info");
+	});
+
+	it("选 provider/model → 写回 config.classifier.model='provider/model-id' + notify", async () => {
+		const selectMock = vi.fn()
+			.mockResolvedValueOnce("co") // provider
+			.mockResolvedValueOnce("m1"); // model
+		const ctx = makeModelPickerCtx({
+			ui: { notify: vi.fn(), select: selectMock, custom: vi.fn() },
+		});
+		const save = vi.fn(() => ({ success: true }));
+		const deps = makeModelDeps({ save });
+		await handlePermissionModelCommand(ctx, makeConfig(), deps);
+		expect(save).toHaveBeenCalledOnce();
+		const savedConfig = save.mock.calls[0]![0] as PermissionConfig;
+		expect(savedConfig.classifier.model).toBe("co/m1");
+		expect(ctx.ui.notify).toHaveBeenCalledWith(expect.stringContaining("set to: co/m1"), "info");
+	});
+
+	it("cancel（undefined）→ notify 取消，不调 save", async () => {
+		const ctx = makeModelPickerCtx({
+			ui: {
+				notify: vi.fn(),
+				select: vi.fn(() => Promise.resolve(undefined)), // cancel
+				custom: vi.fn(),
+			},
+		});
+		const save = vi.fn(() => ({ success: true }));
+		const deps = makeModelDeps({ save });
+		await handlePermissionModelCommand(ctx, makeConfig(), deps);
+		expect(ctx.ui.notify).toHaveBeenCalledWith(expect.stringContaining("cancelled"), "info");
+		expect(save).not.toHaveBeenCalled();
+	});
+
+	it("save 失败 → notify error（含 error 信息），不抛错", async () => {
+		const ctx = makeModelPickerCtx({
+			ui: {
+				notify: vi.fn(),
+				select: vi.fn(() => Promise.resolve("Auto")),
+				custom: vi.fn(),
+			},
+		});
+		const save = vi.fn(() => ({ success: false, error: "disk full" }));
+		const deps = makeModelDeps({ save });
+		await handlePermissionModelCommand(ctx, makeConfig(), deps);
+		expect(ctx.ui.notify).toHaveBeenCalledWith(expect.stringContaining("disk full"), "error");
+	});
+
+	it("handler 返回 Promise（async 签名）", () => {
+		const ctx = makeModelPickerCtx();
+		const deps = makeModelDeps();
+		const result = handlePermissionModelCommand(ctx, makeConfig(), deps);
+		// Promise.is 兼容检查
+		expect(result).toBeInstanceOf(Promise);
+		// 避免 unhandled rejection
+		result.catch(() => undefined);
+	});
+
+	it("写回保留其余字段（仅改 classifier.model）", async () => {
+		const ctx = makeModelPickerCtx({
+			ui: {
+				notify: vi.fn(),
+				select: vi.fn(() => Promise.resolve("Auto")),
+				custom: vi.fn(),
+			},
+		});
+		const save = vi.fn(() => ({ success: true }));
+		const deps = makeModelDeps({ save });
+		const config = makeConfig({
+			mode: "strict",
+			enabled: false,
+			classifier: { enabled: false, model: "co/old", timeout: 30, autoApproveLowRisk: false, autoDenyHighRisk: false },
+			userRules: [{ id: "u1", tool: "bash", pattern: "rm *", action: "deny", source: "user" }],
+		});
+		await handlePermissionModelCommand(ctx, config, deps);
+		const saved = save.mock.calls[0]![0] as PermissionConfig;
+		expect(saved.mode).toBe("strict"); // 保留
+		expect(saved.enabled).toBe(false); // 保留
+		expect(saved.classifier.enabled).toBe(false); // 保留
+		expect(saved.classifier.timeout).toBe(30); // 保留
+		expect(saved.classifier.model).toBe("auto"); // 改
+		expect(saved.userRules).toHaveLength(1); // 保留
 	});
 });

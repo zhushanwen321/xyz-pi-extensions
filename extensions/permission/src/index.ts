@@ -20,8 +20,10 @@ import type {
 	ExtensionContext,
 } from "@mariozechner/pi-coding-agent";
 
-import { handlePermissionCommand } from "./commands.js";
+import { listAvailableModels } from "./classifier/model-resolver.js";
+import { handlePermissionCommand, handlePermissionModelCommand } from "./commands.js";
 import { getConfigPath, loadAndWatchConfig, saveConfig } from "./config.js";
+import { setDefaultListAvailableModels } from "./model-picker.js";
 import { checkPermission, type CheckPermissionDeps } from "./pipeline.js";
 import { createPipelineDeps } from "./production.js";
 import { registerPermissionFooter } from "./statusline.js";
@@ -59,6 +61,12 @@ export default function permissionExtension(pi: ExtensionAPI): void {
 		console.warn(msg);
 	});
 
+	// W7：注入 listAvailableModels 真实实现（model-picker.ts 默认返回空 Map）。
+	// G1 口径：(onWarning?, filePath?) → 封装读盘；warning 透传到 console.warn。
+	setDefaultListAvailableModels((onWarning, filePath) =>
+		listAvailableModels(onWarning ?? ((m) => console.warn(m)), filePath),
+	);
+
 	/** 读取最新配置到闭包变量（mtime 缓存内部去重，未变化不读 fs） */
 	function refreshConfig(): void {
 		config = loadAndWatchConfig(getConfigPath(), (msg) => console.warn(msg));
@@ -81,10 +89,42 @@ export default function permissionExtension(pi: ExtensionAPI): void {
 
 	// ──────────────────────── /permission 命令 ────────────────────────
 	pi.registerCommand("permission", {
-		description: "View or switch permission mode (yolo/auto/approve/strict). Usage: /permission [mode|status]",
-		handler: (args: string, ctx: ExtensionCommandContext): Promise<void> => {
+		description: "View or switch permission mode (yolo/auto/approve/strict). Usage: /permission [mode|status|model]",
+		handler: async (args: string, ctx: ExtensionCommandContext): Promise<void> => {
 			// 命令执行前重载配置（确保最新，用户可能手动改过文件）
 			refreshConfig();
+			const trimmed = (args ?? "").trim();
+			// W7：/permission model → overlay 选择 classifier model（异步路径）
+			if (trimmed === "model") {
+				await handlePermissionModelCommand(
+					{
+						mode: ctx.mode,
+						ui: {
+							notify: (msg: string, type?: string) => ctx.ui.notify(msg, type),
+							select: (title: string, options: string[], opts?: unknown) =>
+								ctx.ui.select(title, options, opts),
+							custom: <T,>(
+								factory: (tui: unknown, theme: unknown, kb: unknown, done: (result: T) => void) => unknown,
+								options?: { overlay?: boolean },
+							) =>
+								ctx.ui.custom<T>(factory as Parameters<typeof ctx.ui.custom<T>>[0], options),
+						},
+					},
+					config,
+					{
+						listModels: () => listAvailableModels((m) => console.warn(m)),
+						save: (newConfig) => {
+							const result = saveConfig(newConfig);
+							if (result.success) {
+								config = newConfig; // 更新闭包状态
+							}
+							return result;
+						},
+					},
+				);
+				return;
+			}
+			// 原同步路径（yolo/auto/approve/strict/status/无参）
 			const message = handlePermissionCommand(args, config, (newConfig) => {
 				const result = saveConfig(newConfig);
 				if (result.success) {
@@ -93,7 +133,6 @@ export default function permissionExtension(pi: ExtensionAPI): void {
 				return result;
 			});
 			ctx.ui.notify(message, "info");
-			return Promise.resolve();
 		},
 	});
 

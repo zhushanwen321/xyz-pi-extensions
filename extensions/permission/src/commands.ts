@@ -13,6 +13,8 @@
  *   /permission status       显示当前配置详情
  */
 
+import type { ResolvedModelEntry } from "./classifier/model-resolver.js";
+import { type ModelPickerContext,pickModelViaOverlay } from "./model-picker.js";
 import {
 	isValidPermissionMode,
 	MODE_DESCRIPTIONS,
@@ -107,4 +109,67 @@ function switchMode(
 function modeHighlight(mode: PermissionMode): string {
 	// 纯文本标记（项目规范禁 emoji），用括号标注
 	return `${MODE_LABELS[mode]} (${mode})`;
+}
+
+// ──────────────────────── /permission model（W7） ────────────────────────
+
+/** handlePermissionModelCommand 的依赖（DI 便于测试 mock）。 */
+export interface PermissionModelCommandDeps {
+	/** 列出可用模型（按 provider 分组）。 */
+	listModels: () => Map<string, ResolvedModelEntry[]>;
+	/** 保存新配置，返回 {success, error?}。 */
+	save: (config: PermissionConfig) => { success: boolean; error?: string };
+}
+
+/**
+ * /permission model 命令：overlay 选择 classifier model（provider/model 或 auto）。
+ *
+ * 流程：
+ *  1. listModels：拿可用模型 Map。空 → 降级 notify + return。
+ *  2. pickModelViaOverlay：TUI/RPC/headless 三模式分发。
+ *  3. 写回：save(newConfig)。失败 → notify error。
+ *
+ * 用依赖注入（deps 参数）便于测试 mock listModels/save。
+ * ctx 用 ModelPickerContext 子集（mode + ui.notify/custom/select）。
+ */
+export async function handlePermissionModelCommand(
+	ctx: ModelPickerContext,
+	config: PermissionConfig,
+	deps: PermissionModelCommandDeps,
+): Promise<void> {
+	const current = config.classifier.model;
+
+	// 1. listModels
+	const models = deps.listModels();
+	if (models.size === 0) {
+		ctx.ui.notify(
+			"[pi-permission] No available models. Configure ~/.pi/agent/models.json first.",
+			"warn",
+		);
+		return;
+	}
+
+	// 2. pickModelViaOverlay
+	const selected = await pickModelViaOverlay(ctx, current, models);
+	if (selected === undefined) {
+		ctx.ui.notify("[pi-permission] Model selection cancelled.", "info");
+		return;
+	}
+
+	// 3. 写回（仅改 classifier.model，保留其余字段）
+	const newConfig: PermissionConfig = {
+		mode: config.mode,
+		enabled: config.enabled,
+		classifier: { ...config.classifier, model: selected },
+		userRules: config.userRules.map((r) => ({ ...r })),
+	};
+	const result = deps.save(newConfig);
+	if (!result.success) {
+		ctx.ui.notify(
+			`[pi-permission] Failed to save: ${result.error ?? "unknown error"}`,
+			"error",
+		);
+		return;
+	}
+	ctx.ui.notify(`[pi-permission] AI classifier model set to: ${selected}`, "info");
 }

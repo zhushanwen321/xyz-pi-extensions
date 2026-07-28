@@ -94,6 +94,7 @@ ln -s /path/to/xyz-pi-extensions-workspace/feat-permission-and-auto-mode/extensi
 /permission approve      切换到 approve 模式
 /permission strict       切换到 strict 模式
 /permission status       显示详细配置
+/permission model        overlay 选择 AI classifier 模型（W7）
 ```
 
 ## 内置规则
@@ -170,6 +171,20 @@ auto 模式下层 3 用 LLM 评估未知命令风险：
   - `low + allow + autoApproveLowRisk=false` → 强制 `ask`（转人工）
   - `high + allow + autoDenyHighRisk=true` → 强制 `deny`（即使 AI 说放行）
 - **Racing**：AI 分类与用户审批并行；AI 先返回时按 outcome 分支（allow/deny 关闭对话框，ask 等用户）
+
+### 切换 classifier 模型（/permission model）
+
+`/permission model` 弹出 overlay 选择 AI classifier 使用的模型，写回 `classifier.model`：
+
+- **第一级 provider 选择**：列出 `Auto`（自动选最便宜可用模型）+ 所有可用 provider（来自 `~/.pi/agent/models.json`，按字母序）。当前 `classifier.model` 预选高亮。
+- **第二级 model 选择**：选中具体 provider 后，列出该 provider 下所有可用 model（按 `cost.input` 升序，并列按 id 字母序）。`Esc` 回退到 provider 列表。
+- **键位**：`↑/↓` 导航、`Enter` 确认、`Esc` 取消（provider stage）或回退（model stage）。
+- **三模式分发**：
+  - **TUI**：`ctx.ui.custom` 渲染 overlay（`ProviderModelSelectorComponent`，两级 `SelectList` 状态机）。
+  - **RPC**：两次 `ctx.ui.select`（先 provider 含 `Auto`，再 model）。
+  - **headless**（json/print）：无交互 UI，返回降级提示。
+- **无可用模型**：`models.json` 不存在 / 无 provider 配 `apiKey` / 解析失败时，`listAvailableModels` 返回空 Map，命令降级为提示 `No available models. Configure ~/.pi/agent/models.json first.`（不阻塞，不修改配置）。
+- **结果写回**：选中后 `classifier.model` 更新为 `auto` 或 `provider/model-id`，其余字段（mode/enabled/timeout/userRules）保留。
 
 ## statusline 集成
 

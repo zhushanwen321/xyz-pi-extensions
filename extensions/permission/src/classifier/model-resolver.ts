@@ -160,6 +160,65 @@ export function findCheapestModel(data: ModelsJsonFile): ResolvedModelEntry | nu
 	return entries[0];
 }
 
+// ──────────────────────── listAvailableModels（W7 model picker 用） ────────────────────────
+
+/**
+ * 列出所有「可用」（provider 配了 apiKey）的模型，按 provider 分组成 Map。
+ *
+ * model picker（/permission model）用：第一级选 provider，第二级选该 provider 下的 model。
+ * 与 findCheapestModel 的区别：
+ *  - findCheapestModel 只返回单个最便宜模型（'auto' 解析用）
+ *  - listAvailableModels 返回全量分组（picker 展示用）
+ *
+ * 排序规则：
+ *  - provider 内 model 按 cost.input 升序，并列时按 id 字母序 tiebreaker
+ *  - provider 之间按字母序（Map 保持插入序，便于 picker 稳定展示）
+ *
+ * 文件缺失 / 解析失败 → 返回空 Map（不 throw，调用方据此降级为「无可选模型」提示）。
+ *
+ * @param onWarning 文件读取/解析问题的警告回调（透传给 loadModelsJson）
+ * @param filePath 可选，自定义 models.json 路径（测试用）
+ * @returns Map<providerName, ResolvedModelEntry[]>（仅含 hasApiKey=true 的 provider）
+ */
+export function listAvailableModels(
+	onWarning?: (msg: string) => void,
+	filePath?: string,
+): Map<string, ResolvedModelEntry[]> {
+	const file = loadModelsJson(onWarning, filePath);
+	if (file === null) return new Map();
+
+	const entries = flattenModels(file).filter((m) => m.hasApiKey);
+	// 按 provider 分组
+	const grouped = new Map<string, ResolvedModelEntry[]>();
+	for (const entry of entries) {
+		const list = grouped.get(entry.provider);
+		if (list === undefined) {
+			grouped.set(entry.provider, [entry]);
+		} else {
+			list.push(entry);
+		}
+	}
+
+	// provider 内排序：cost.input 升序 + id 字母序 tiebreaker
+	for (const list of grouped.values()) {
+		list.sort((a, b) => {
+			if (a.cost.input !== b.cost.input) return a.cost.input - b.cost.input;
+			return a.id < b.id ? -1 : a.id > b.id ? 1 : 0;
+		});
+	}
+
+	// provider 间按字母序重排（新建 Map 保持插入序）
+	if (grouped.size > 1) {
+		const sortedProviders = [...grouped.keys()].sort();
+		const reordered = new Map<string, ResolvedModelEntry[]>();
+		for (const p of sortedProviders) {
+			reordered.set(p, grouped.get(p)!);
+		}
+		return reordered;
+	}
+	return grouped;
+}
+
 // ──────────────────────── resolveClassifierModel ────────────────────────
 
 /**
