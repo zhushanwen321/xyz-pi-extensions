@@ -169,7 +169,7 @@ export default function (pi: ExtensionAPI): void {
 **[规范]** 所有状态变量必须在工厂函数闭包内声明，禁止模块级 let 变量。
 
 ```typescript
-// ✅ 正确：闭包内
+// 正确：闭包内
 export default function (pi: ExtensionAPI) {
   const state = { count: 0, items: [] as string[] };
   const pendingQueue: Item[] = [];
@@ -178,7 +178,7 @@ export default function (pi: ExtensionAPI) {
   pi.registerTool({ ... });
 }
 
-// ❌ 错误：模块级，被所有 session 共享
+// 错误：模块级，被所有 session 共享
 let globalState = { count: 0 };
 export default function (pi: ExtensionAPI) {
   pi.registerTool({ ... });
@@ -254,6 +254,91 @@ pi.registerTool({
 });
 ```
 
+### 4.1.1 execute 字段名与签名 **[MANDATORY]**
+
+**[MANDATORY]** Tool 的执行函数字段名**必须**是 `execute`，**禁止**用 `handler` / `fn` / `run` / `callback` 等其他名字。字段名错误时 Pi 内部调 `definition.execute(...)` 拿到 `undefined`，运行时报 `definition.execute is not a function`。
+
+**[MANDATORY]** execute 的真实签名是 SDK 全签名，**不是**只接收 params：
+
+```typescript
+async execute(toolCallId, params, signal, onUpdate, ctx) {
+  //           ↑ 5 个位置参数，params 在第 2 位
+}
+```
+
+**反模式**：把业务函数（签名 `(params) => ...`）直接当 execute 字段：
+
+```typescript
+// 错误：handler 签名只收第一个参数（toolCallId 字符串），params 解构全是 undefined
+pi.registerTool({
+  name: "my_tool",
+  handler: createMyHandler(runtime),  // 字段名错 + 签名错
+});
+```
+
+**正确模式**：execute 内联闭包做 SDK 适配——从全签名提取 params，转调业务函数：
+
+```typescript
+// 正确：字段名 execute + 内联闭包适配签名
+pi.registerTool({
+  name: "my_tool",
+  async execute(_toolCallId, params) {
+    return createMyHandler(getRuntime())(params);
+  },
+});
+```
+
+业务函数（`createMyHandler` 返回值）保持纯业务签名 `(params) => ...`，便于单元测试直接调用；SDK 适配逻辑放在 execute 内联闭包里。
+
+### 4.1.2 Runtime 延迟捕获 **[MANDATORY]**
+
+**[MANDATORY]** 依赖 session_start 才能初始化的对象（如 Runtime / Store / Registry），**禁止**在 factory 顶层注册 tool/command 时直接传入实例——此时 session_start 尚未触发，对象还是 null。
+
+**反模式**：
+
+```typescript
+// 错误：runtime 在 session_start 才赋值，factory 顶层调用时还是 null
+// runtime! 非空断言骗过编译器，运行时 execute 内 runtime.xxx() 会 NPE
+let runtime: MyRuntime | null = null;
+
+pi.on("session_start", (_e, ctx) => {
+  runtime = new MyRuntime(ctx);  // 这里才赋值
+});
+
+pi.registerTool({
+  name: "my_tool",
+  execute: createMyHandler(runtime!),  // 错误：factory 顶层传 null
+});
+
+registerMyCommand(pi, runtime!);  // 错误：同样捕获 null
+```
+
+**正确模式**：execute / handler 内联闭包，**调用时**才读 runtime 当前值；或通过 getter 显式延迟：
+
+```typescript
+// 正确：getter 延迟到 execute 真正被调用时才读 runtime
+let runtime: MyRuntime | null = null;
+const getRuntime = (): MyRuntime => {
+  if (!runtime) throw new Error("Runtime not initialized: session not started");
+  return runtime;
+};
+
+pi.on("session_start", (_e, ctx) => {
+  runtime = new MyRuntime(ctx);
+});
+
+pi.registerTool({
+  name: "my_tool",
+  async execute(_toolCallId, params) {
+    return createMyHandler(getRuntime())(params);  // 调用时读
+  },
+});
+
+registerMyCommand(pi, () => runtime);  // command 也传 getter
+```
+
+参考实现：`extensions/ask-user/src/index.ts`（execute 内联 + 闭包变量延迟读）、`extensions/scheduler/src/index.ts`（getter 模式）。
+
 ### 4.2 execute 实现规范
 
 **[规范]** 返回值格式必须为：
@@ -270,7 +355,7 @@ pi.registerTool({
 
 ```typescript
 async execute(_toolCallId, params, signal, _onUpdate, ctx) {
-  // ✅ 正确
+  // 正确
   try {
     const result = await riskyOperation();
     return { content: [{ type: "text", text: `Success: ${result}` }] };
@@ -281,7 +366,7 @@ async execute(_toolCallId, params, signal, _onUpdate, ctx) {
     };
   }
 
-  // ❌ 错误
+  // 错误
   try {
     const result = await riskyOperation();
     return { content: [{ type: "text", text: `Success: ${result}` }] };
@@ -521,8 +606,8 @@ Pi 的 extension loader 使用 [jiti](https://github.com/unjs/jiti) 加载 TypeS
 
 | 模式 | 机制 | 对非 SDK 包 import 的支持 |
 |------|------|--------------------------|
-| **Node.js 模式**（当前 xyz-pi） | `alias` | ✅ 标准 node_modules 查找，能找到依赖就能 import |
-| **Bun binary 模式**（上游 pi-mono 的编译产物） | `virtualModules` + `tryNative: false` | ⚠️ 仅 virtualModules 中的包可被解析，其他 import 会失败 |
+| **Node.js 模式**（当前 xyz-pi） | `alias` | 标准 node_modules 查找，能找到依赖就能 import |
+| **Bun binary 模式**（上游 pi-mono 的编译产物） | `virtualModules` + `tryNative: false` | 注意：仅 virtualModules 中的包可被解析，其他 import 会失败 |
 
 当前 xyz-pi 以 Node.js 脚本运行（`cli.js` 首行为 `#!/usr/bin/env node`），因此扩展的 import 走标准 node_modules 解析。
 
@@ -582,11 +667,11 @@ Pi Interactive 模式下，extension 的 `console.log` 输出直接写入终端 
 所有 `console.warn` / `console.error` 必须带 `[extension-name]` 前缀，多扩展混杂输出时可区分来源：
 
 ```typescript
-// ✅ CORRECT
+// CORRECT
 console.warn("[workflow] scene resolution failed, using default model");
 console.error("[goal] state machine invalid transition", err);
 
-// ❌ WRONG: 无前缀
+// WRONG: 无前缀
 console.warn("scene resolution failed");
 ```
 
@@ -706,7 +791,7 @@ async function handleTurnEnd(ctx: any) {
 
 ```typescript
 function process(items: string[]): string[] {
-  if (items.length === 0) return []; // ✅ 必须有
+  if (items.length === 0) return []; // 必须有
   // ...
 }
 ```
@@ -748,13 +833,13 @@ function process(items: string[]): string[] {
 **[规范]** 所有文件系统路径**禁止**硬编码字符串。必须使用 `path.join()` + 基准路径（`homedir()` / `import.meta.url`）构建。
 
 ```typescript
-// ✅ 正确
+// 正确
 import { join } from "node:path";
 import { homedir } from "node:os";
 
 const configPath = join(homedir(), ".pi", "agent", "config.json");
 
-// ❌ 错误
+// 错误
 const configPath = "/Users/zhushanwen/.pi/agent/config.json";
 ```
 
@@ -824,7 +909,7 @@ export function expandTilde(p: string): string {
 使用语义 token 着色，不硬编码 ANSI：
 
 ```typescript
-// ✅ 正确
+// 正确
 theme.fg("accent", "Title")
 theme.fg("success", "Done")
 theme.fg("error", "Failed")
@@ -832,7 +917,7 @@ theme.fg("warning", "Caution")
 theme.fg("muted", "Description")
 theme.fg("dim", "Hint text")
 
-// ❌ 错误
+// 错误
 "\x1b[32mTitle\x1b[0m"
 ```
 
@@ -1009,6 +1094,9 @@ describe("state", () => {
 | 不设防重入 | 并发操作破坏状态 | `isProcessing` 标志 |
 | agent_end 中启动 LLM 调用 | 上下文已过期 | 只做同步清理 |
 | `pi.setActiveTools(undefined)` | SDK 不支持 undefined 参数，`for...of` 遍历报 "toolNames is not iterable" | 用 `pi.getAllTools().map(t => t.name)` 获取全量工具名列表传入 |
+| Tool 执行函数字段名非 `execute`（如 `handler`/`fn`） | Pi 调 `definition.execute(...)` 拿到 undefined，报 `definition.execute is not a function` | 字段名必须 `execute`（见 §4.1.1） |
+| execute 签名只写 `(params)` 而非 SDK 全签名 | SDK 把 toolCallId 传到第 1 位，params 解构全是 undefined，运行时 NPE | execute 用全签名 `(toolCallId, params, signal, onUpdate, ctx)`，业务函数靠 execute 内联闭包适配（见 §4.1.1） |
+| Factory 顶层注册 tool/command 时传 `runtime!`（`session_start` 才赋值的 null 变量） | factory 执行时 session_start 未触发，`runtime!` 实际是 null，非空断言骗编译器，execute/handler 内 NPE | execute 内联闭包或 getter 延迟到调用时读 runtime（见 §4.1.2） |
 
 ### 19.2 结构问题（P1）
 
@@ -1058,6 +1146,9 @@ describe("state", () => {
 - [ ] 入口 `export default function(pi: ExtensionAPI)`
 - [ ] 状态在工厂闭包内，非模块级
 - [ ] 进程级单例用 `globalThis[Symbol.for]` 持有，非模块级 `let`（见 §7.5）
+- [ ] Tool 执行函数字段名为 `execute`，非 `handler`/`fn`/`callback`（见 §4.1.1）
+- [ ] Tool execute 用 SDK 全签名 `(toolCallId, params, signal, onUpdate, ctx)`，业务函数靠内联闭包适配（见 §4.1.1）
+- [ ] Tool/Command 不在 factory 顶层传 `session_start` 才初始化的 runtime/store 实例——用 getter 或 execute 内联闭包延迟读取（见 §4.1.2）
 
 ### 健壮性阶段（必须通过）
 

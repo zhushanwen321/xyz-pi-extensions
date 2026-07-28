@@ -101,6 +101,11 @@
       "name": "@zhushanwen/pi-pending-notifications",
       "directory": "extensions/pending-notifications",
       "dependsOn": []
+    },
+    {
+      "name": "@zhushanwen/pi-scheduler",
+      "directory": "extensions/scheduler",
+      "dependsOn": []
     }
   ]
 }
