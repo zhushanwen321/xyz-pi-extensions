@@ -1,5 +1,5 @@
 // src/component.ts
-import { type Component, matchesKey, parseKey, truncateToWidth } from "@mariozechner/pi-tui";
+import { type Component, matchesKey, parseKey, truncateToWidth } from "@earendil-works/pi-tui";
 
 import {
 	deleteCharBeforeCursor,

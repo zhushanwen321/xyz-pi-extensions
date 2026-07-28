@@ -1,6 +1,6 @@
 {
   "name": "@zhushanwen/pi-plan",
-  "version": "0.2.2",
+  "version": "0.2.3",
   "description": "Lightweight plan mode for Pi coding agent",
   "type": "module",
   "main": "index.ts",
@@ -15,12 +15,12 @@
   ],
   "license": "MIT",
   "peerDependencies": {
-    "@mariozechner/pi-coding-agent": ">=0.73.0",
+    "@earendil-works/pi-coding-agent": ">=0.73.0",
     "@sinclair/typebox": "*",
-    "@mariozechner/pi-ai": "*"
+    "@earendil-works/pi-ai": "*"
   },
   "peerDependenciesMeta": {
-    "@mariozechner/pi-ai": {
+    "@earendil-works/pi-ai": {
       "optional": true
     }
   },

@@ -71,6 +71,32 @@ if [[ -n "$STAGED_SPEC_RELEVANT" ]]; then
   echo ""
 fi
 
+# ── -0. namespace 严格性检查（始终触发）──────────────────────
+# 禁止仓库内出现已废弃的 @mariozechner/pi-* namespace（Pi SDK 已重命名为
+# @earendil-works/pi-*）。旧 namespace 已被 npmjs 标记 deprecated，引用
+# 会触发 pnpm install 警告，并可能让本地 monorepo 拉取未维护的旧版本。
+# 详见 .changeset/migrate-pi-namespace-to-earendil-works.md
+STAGED_NS_RELEVANT=$(git diff --cached --name-only --diff-filter=ACM \
+  | grep -E '^(extensions|shared)/.*(\.ts|\.json|\.d\.ts)$' \
+  | grep -v '/node_modules/' \
+  | grep -v '/.xyz-harness/' \
+  | grep -v '^docs/' \
+  | grep -v 'package-lock\.json$' \
+  || true)
+
+if [[ -n "$STAGED_NS_RELEVANT" ]]; then
+  echo "--- namespace 严格性检查 ---"
+  if ! bash .githooks/validate-no-mariozechner-pi $STAGED_NS_RELEVANT; then
+    echo -e "${C_RED}[FAIL]${C_RESET} namespace 检查失败"
+    echo -e "${C_YELLOW}禁止使用已废弃的 @mariozechner/pi-* namespace，请改用 @earendil-works/pi-*. 紧急 hotfix 可用 SKIP_NAMESPACE_CHECK=1 跳过${C_RESET}"
+    exit 1
+  fi
+  echo -e "${C_GREEN}[ OK ]${C_RESET} namespace 检查通过（staged 文件无旧 namespace 引用）"
+else
+  echo "--- namespace 严格性检查 ---"
+  echo -e "${C_GREEN}[ SKIP ]${C_RESET} 本次 commit 无 extensions/shared/* 文件变更，跳过 namespace 检查"
+fi
+
 # ── 0. pi manifest 检查 ──────────────────────────────────
 echo "--- pi manifest 检查 ---"
 HAS_ERROR=0
@@ -157,15 +183,24 @@ if [[ -n "$STAGED_PKG" ]]; then
       HAS_ERROR=1
     fi
 
-    # peerDependencies 含 @mariozechner/pi-coding-agent
+    # peerDependencies 含 @earendil-works/pi-coding-agent（且不含旧 namespace）
     has_core_dep=$(python3 -c "
 import json
 d=json.load(open('$pkg_json'))
 peers=d.get('peerDependencies',{})
-print('OK' if '@mariozechner/pi-coding-agent' in peers else 'MISSING')
+if '@earendil-works/pi-coding-agent' in peers and '@mariozechner/pi-coding-agent' not in peers:
+    print('OK')
+elif '@mariozechner/pi-coding-agent' in peers:
+    print('LEGACY')
+else:
+    print('MISSING')
 " 2>/dev/null)
-    if [[ "$has_core_dep" == "MISSING" ]]; then
-      echo -e "  ${C_RED}[FAIL]${C_RESET} $name: peerDependencies 缺少 @mariozechner/pi-coding-agent"
+    if [[ "$has_core_dep" == "LEGACY" ]]; then
+      echo -e "  ${C_RED}[FAIL]${C_RESET} $name: peerDependencies 用旧 namespace @mariozechner/pi-coding-agent"
+      echo -e "         ${C_YELLOW}应改用 @earendil-works/pi-coding-agent（Pi SDK 已重命名）${C_RESET}"
+      HAS_ERROR=1
+    elif [[ "$has_core_dep" == "MISSING" ]]; then
+      echo -e "  ${C_RED}[FAIL]${C_RESET} $name: peerDependencies 缺少 @earendil-works/pi-coding-agent"
       HAS_ERROR=1
     fi
 
@@ -328,7 +363,7 @@ for f in $(git diff --cached --name-only --diff-filter=ACM | grep '\.ts$' | grep
   fi
 done
 
-if [[ ${#TEST_PKGS[@]:-} -gt 0 ]]; then
+if [[ ${#TEST_PKGS[@]} -gt 0 ]]; then
   echo "--- vitest ---"
   for pkg in "${TEST_PKGS[@]}"; do
     pkg_name=$(python3 -c "import json; print(json.load(open('$pkg/package.json')).get('name', '$pkg'))" 2>/dev/null || echo "$pkg")

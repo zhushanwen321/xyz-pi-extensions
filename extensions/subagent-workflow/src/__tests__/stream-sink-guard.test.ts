@@ -18,13 +18,13 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 // ── 内联 vi.mock：覆盖 config alias，隔离真实 SDK（见 [D15] 分工说明） ──
-vi.mock("@mariozechner/pi-coding-agent", () => ({
+vi.mock("@earendil-works/pi-coding-agent", () => ({
   getAgentDir: () => "/home/user/.pi/agent",
 }));
 vi.mock("@earendil-works/pi-coding-agent", () => ({
   getAgentDir: () => "/home/user/.pi/agent",
 }));
-vi.mock("@mariozechner/pi-ai", () => ({
+vi.mock("@earendil-works/pi-ai", () => ({
   StringEnum: (values: string[]) => ({ type: "string", enum: values }),
 }));
 vi.mock("@earendil-works/pi-ai", () => ({
@@ -107,7 +107,7 @@ vi.mock("../interface/tool-workflow.ts", () => ({ registerWorkflowTool: vi.fn() 
 vi.mock("../interface/tool-workflow-script.ts", () => ({ registerWorkflowScriptTool: vi.fn() }));
 vi.mock("../interface/commands.ts", () => ({ registerWorkflowsCommand: vi.fn() }));
 
-import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
+import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 
 import subagentsExtension from "../index.ts";
 

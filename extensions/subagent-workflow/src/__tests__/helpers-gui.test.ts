@@ -9,7 +9,7 @@
  *   - 非 RPC 模式不附加 __gui__
  *   - label 格式含 slug（I#3 对齐）
  */
-import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
+import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { describe, expect, it, vi } from "vitest";
 
 import { notifyDone, type WorkflowNotifyDetails } from "../interface/helpers.ts";

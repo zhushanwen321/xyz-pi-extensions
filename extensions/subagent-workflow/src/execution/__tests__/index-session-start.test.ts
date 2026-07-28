@@ -28,7 +28,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 //      ExtensionContext/ExtensionMode 等 *类型*（编译期擦除）+ getAgentDir 运行时值。服务于
 //      全仓库绝大多数测试的类型解析与轻量 mock（不 import 真实重模块的测试直接吃 alias）。
 //   2. **本文件内联 vi.mock（下方）**：vi.mock 在运行时覆盖 config alias，确保本文件 import
-//      真实 index.ts（它 `import { getAgentDir } from "@mariozechner/pi-coding-agent"` +
+//      真实 index.ts（它 `import { getAgentDir } from "@earendil-works/pi-coding-agent"` +
 //      一组 type-only import）时，运行时只暴露 getAgentDir，彻底隔离真实 SDK 的模块顶层
 //      副作用（避免 jiti 加载真实 pi 包触发未 mock 的依赖链）。
 //   3. 形状一致性：内联 mock 的运行时值形状（`{ getAgentDir }`）与 alias stub 的运行时值
@@ -39,13 +39,13 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 //      测试统一用内联 vi.mock 覆盖），三者保持一致。
 // 结论：不抽共享 mocks 文件。alias 已承担类型解析，内联 vi.mock 承担运行时隔离，职责正交。
 
-vi.mock("@mariozechner/pi-coding-agent", () => ({
+vi.mock("@earendil-works/pi-coding-agent", () => ({
   getAgentDir: () => "/home/user/.pi/agent",
 }));
 vi.mock("@earendil-works/pi-coding-agent", () => ({
   getAgentDir: () => "/home/user/.pi/agent",
 }));
-vi.mock("@mariozechner/pi-ai", () => ({
+vi.mock("@earendil-works/pi-ai", () => ({
   StringEnum: (values: string[]) => ({ type: "string", enum: values }),
 }));
 vi.mock("@earendil-works/pi-ai", () => ({
@@ -155,7 +155,7 @@ vi.mock("../../interface/commands.ts", () => ({
 }));
 
 // ── import 被测工厂 ──
-import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
+import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 
 import subagentsExtension from "../../index.ts";
 

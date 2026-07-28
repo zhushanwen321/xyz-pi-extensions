@@ -1,5 +1,5 @@
 /**
- * @mariozechner/pi-tui 运行时 stub —— 仅用于测试环境。
+ * @earendil-works/pi-tui 运行时 stub —— 仅用于测试环境。
  *
  * core.ts value-import Text（用于 renderResult/renderCall 回调）。
  * 测试不调用渲染回调，提供最小 stub 让模块加载不报错即可。

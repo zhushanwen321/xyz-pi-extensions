@@ -9,7 +9,7 @@
  * 用 fake pi + fake ctx（不 import Pi SDK 真实实现）。
  * handleGoalCommand(pi, session, args, ctx) → Promise<void>。
  */
-import type { ExtensionAPI, ExtensionContext } from "@mariozechner/pi-coding-agent";
+import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { describe, expect, it } from "vitest";
 
 import { handleGoalCommand } from "../adapters/command-adapter";

@@ -8,7 +8,7 @@
 //
 // 测试用 mock theme（bg 记录调用色 token），不依赖真实 Pi Theme。
 
-import type { Theme } from "@mariozechner/pi-coding-agent";
+import type { Theme } from "@earendil-works/pi-coding-agent";
 import { describe, expect, it } from "vitest";
 
 import { renderBgNotifyMessage } from "../../interface/bg-notify-render.ts";

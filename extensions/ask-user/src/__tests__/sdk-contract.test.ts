@@ -30,7 +30,7 @@ describe("ask-user SDK contract", () => {
 			registerCommand() {},
 			getAllTools() { return []; },
 			setActiveTools() {},
-		} as unknown as import("@mariozechner/pi-coding-agent").ExtensionAPI;
+		} as unknown as import("@earendil-works/pi-coding-agent").ExtensionAPI;
 
 		askUserExtension(mockPi);
 
@@ -52,7 +52,7 @@ describe("ask-user SDK contract", () => {
 			registerCommand() {},
 			getAllTools() { return []; },
 			setActiveTools() {},
-		} as unknown as import("@mariozechner/pi-coding-agent").ExtensionAPI;
+		} as unknown as import("@earendil-works/pi-coding-agent").ExtensionAPI;
 		askUserExtension(mockPi);
 		expect(toolDef!.renderCall!.length).toBeGreaterThanOrEqual(1);
 	});
@@ -65,7 +65,7 @@ describe("ask-user SDK contract", () => {
 			registerCommand() {},
 			getAllTools() { return []; },
 			setActiveTools() {},
-		} as unknown as import("@mariozechner/pi-coding-agent").ExtensionAPI;
+		} as unknown as import("@earendil-works/pi-coding-agent").ExtensionAPI;
 		askUserExtension(mockPi);
 		expect(toolDef!.renderResult!.length).toBeGreaterThanOrEqual(2);
 	});

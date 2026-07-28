@@ -17,8 +17,8 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 
-import type { ExtensionAPI, ExtensionContext, ModelSelectEvent, ResourcesDiscoverEvent, ResourcesDiscoverResult, SessionShutdownEvent, SessionStartEvent, SessionTreeEvent } from "@mariozechner/pi-coding-agent";
-import { getAgentDir } from "@mariozechner/pi-coding-agent";
+import type { ExtensionAPI, ExtensionContext, ModelSelectEvent, ResourcesDiscoverEvent, ResourcesDiscoverResult, SessionShutdownEvent, SessionStartEvent, SessionTreeEvent } from "@earendil-works/pi-coding-agent";
+import { getAgentDir } from "@earendil-works/pi-coding-agent";
 
 import type { AgentRegistry } from "./execution/agent-registry.ts";
 import { bestEffort } from "./execution/best-effort.ts";
@@ -60,7 +60,7 @@ import { WorkflowScriptRegistryImpl } from "./orchestration/workflow-script-regi
 
 // ── pi.__workflowRun 类型扩展（D-8 签名） ─────────────────
 
-declare module "@mariozechner/pi-coding-agent" {
+declare module "@earendil-works/pi-coding-agent" {
   interface ExtensionAPI {
     __workflowRun?: (
       workflowName: string,

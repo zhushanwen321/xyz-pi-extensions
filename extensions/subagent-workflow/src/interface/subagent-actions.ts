@@ -8,7 +8,7 @@
 //
 // content（JSON 字符串）给 LLM，details（SubagentToolResult）给 renderResult，同源同处生成。
 
-import type { AgentToolResult } from "@mariozechner/pi-coding-agent";
+import type { AgentToolResult } from "@earendil-works/pi-coding-agent";
 import {
   guiComponent,
   type GuiContext,

@@ -3,7 +3,7 @@
 // UI 请求可观测性状态（从 subagent-service.ts 提取，降低主文件行数）。
 // 持有 sessionMode + handler 缺失告警去重集合，供 SubagentService 委托调用。
 
-import type { ExtensionMode } from "@mariozechner/pi-coding-agent";
+import type { ExtensionMode } from "@earendil-works/pi-coding-agent";
 
 // ── 跨模块桥接（ui-request-queue 无 ctx.service 引用时走这里） ──
 //

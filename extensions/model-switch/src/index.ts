@@ -8,8 +8,8 @@
  * 但不再每轮自动注入上下文——仅当 AI 主动调用 recommend 时才计算。
  */
 
-import { StringEnum } from "@mariozechner/pi-ai";
-import type { ExtensionAPI, ExtensionCommandContext, ExtensionContext } from "@mariozechner/pi-coding-agent";
+import { StringEnum } from "@earendil-works/pi-ai";
+import type { ExtensionAPI, ExtensionCommandContext, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { readCache } from "@zhushanwen/pi-quota-providers";
 import { Type } from "typebox";
 

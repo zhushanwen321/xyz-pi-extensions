@@ -15,41 +15,29 @@
     "noImplicitReturns": true,
     "noFallthroughCasesInSwitch": true,
     "paths": {
-      "@mariozechner/pi-coding-agent": [
-        "/Users/zhushanwen/.nvm/versions/node/v24.11.1/lib/node_modules/@earendil-works/pi-coding-agent/dist/index.d.ts",
-        "./shared/types/mariozechner/index"
-      ],
-      "@mariozechner/pi-tui": [
-        "/Users/zhushanwen/.nvm/versions/node/v24.11.1/lib/node_modules/@earendil-works/pi-coding-agent/node_modules/@earendil-works/pi-tui/dist/index.d.ts",
-        "./shared/types/mariozechner/index"
-      ],
-      "@mariozechner/pi-ai": [
-        "/Users/zhushanwen/.nvm/versions/node/v24.11.1/lib/node_modules/@earendil-works/pi-coding-agent/node_modules/@earendil-works/pi-ai/dist/index.d.ts",
-        "./shared/types/mariozechner/index"
-      ],
       "@earendil-works/pi-tui": [
         "/Users/zhushanwen/.nvm/versions/node/v24.11.1/lib/node_modules/@earendil-works/pi-coding-agent/node_modules/@earendil-works/pi-tui/dist/index.d.ts",
-        "./shared/types/mariozechner/index"
+        "./shared/types/earendil-works/index"
       ],
       "@earendil-works/pi-coding-agent": [
         "/Users/zhushanwen/.nvm/versions/node/v24.11.1/lib/node_modules/@earendil-works/pi-coding-agent/dist/index.d.ts",
-        "./shared/types/mariozechner/index"
+        "./shared/types/earendil-works/index"
       ],
       "@earendil-works/pi-ai": [
         "/Users/zhushanwen/.nvm/versions/node/v24.11.1/lib/node_modules/@earendil-works/pi-coding-agent/node_modules/@earendil-works/pi-ai/dist/index.d.ts",
-        "./shared/types/mariozechner/index"
+        "./shared/types/earendil-works/index"
       ],
       "typebox": [
         "/Users/zhushanwen/.nvm/versions/node/v24.11.1/lib/node_modules/@earendil-works/pi-coding-agent/node_modules/typebox/build/index.d.mts",
-        "./shared/types/mariozechner/index"
+        "./shared/types/earendil-works/index"
       ],
       "@sinclair/typebox": [
         "/Users/zhushanwen/.nvm/versions/node/v24.11.1/lib/node_modules/@earendil-works/pi-coding-agent/node_modules/typebox/build/index.d.mts",
-        "./shared/types/mariozechner/index"
+        "./shared/types/earendil-works/index"
       ],
       "@sinclair/typebox/value": [
         "/Users/zhushanwen/.nvm/versions/node/v24.11.1/lib/node_modules/@earendil-works/pi-coding-agent/node_modules/typebox/build/value/index.d.mts",
-        "./shared/types/mariozechner/index"
+        "./shared/types/earendil-works/index"
       ]
     }
   },

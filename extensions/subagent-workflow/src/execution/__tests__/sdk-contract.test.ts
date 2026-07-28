@@ -18,7 +18,7 @@ import { describe, expect, it, vi } from "vitest";
 
 // registerSubagentTool 经 subagent-tool.ts 值导入 StringEnum（pi-ai）+ Type（typebox）。
 // shared/types stub 是 .d.ts（仅类型），pnpm optional-peer-dep 插件拦截值导入 → vi.mock 兜底。
-vi.mock("@mariozechner/pi-ai", () => ({
+vi.mock("@earendil-works/pi-ai", () => ({
   StringEnum: (values: string[]) => ({ type: "string", enum: values }),
 }));
 vi.mock("@earendil-works/pi-ai", () => ({

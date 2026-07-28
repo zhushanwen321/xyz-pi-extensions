@@ -10,8 +10,8 @@
 // 抽到顶层后参数类型由 alias 提供，绕过该 quirk。
 
 import type { Component } from "@earendil-works/pi-tui";
-import { StringEnum } from "@mariozechner/pi-ai";
-import type { AgentToolResult, ExtensionAPI, ExtensionContext, Theme } from "@mariozechner/pi-coding-agent";
+import { StringEnum } from "@earendil-works/pi-ai";
+import type { AgentToolResult, ExtensionAPI, ExtensionContext, Theme } from "@earendil-works/pi-coding-agent";
 import { Type } from "@sinclair/typebox";
 
 import { SLUG_MAX_LENGTH } from "../execution/execute-options-mapper.ts";

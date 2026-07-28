@@ -1,6 +1,6 @@
 // mocks/pi-coding-agent.ts
 //
-// Vitest mock for @mariozechner/pi-coding-agent.
+// Vitest mock for @earendil-works/pi-coding-agent.
 // Provides runtime values and minimal type stubs needed by the extension factory.
 
 // ── Value exports ──

@@ -8,7 +8,7 @@
  * Python (pytest, unittest), Java (maven, gradle), Go, Rust, .NET, Ruby.
  */
 
-import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
+import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 
 /**
  * Patterns that indicate test execution.

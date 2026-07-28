@@ -1,5 +1,5 @@
 /**
- * Mock for @mariozechner/pi-ai
+ * Mock for @earendil-works/pi-ai
  *
  * plan 扩展仅用 StringEnum 定义 tool schema，真实类型由 Pi 运行时提供。
  */
