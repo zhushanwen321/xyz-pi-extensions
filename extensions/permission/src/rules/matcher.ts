@@ -13,9 +13,10 @@
  *  用 `new RegExp(pattern, 'i')` 编译；其余（builtin-safe/user）是 OpenCode
  *  wildcard，用 `wildcardToRegExp(pattern)` 编译。resolvePattern 按 source 分发。
  *
- *  ── G3: 24+5 白名单用函数 ──
- *  matchRulesForArgv 先调 isKnownSafeCommand(argv)，命中返回 allow。
- *  白名单不进 Rule[] 数组（Codex flag 子检查无法用单条 wildcard 表达）。
+ *  ── G3: 24+5 白名单用函数（C3 修正：不再短路）──
+ *  matchRulesForArgv 先遍历 rules（last-match-wins）；若无 deny/allow 命中（ask），
+ *  再查 isKnownSafeCommand(argv) 兜底返回 allow。白名单不再短路：用户 deny 规则
+ *  可覆盖白名单。白名单不进 Rule[] 数组（Codex flag 子检查无法用单条 wildcard 表达）。
  *
  * 匹配语义：last-match-wins（rules 数组顺序遍历，最后匹配的 rule 胜出）。
  * 拼接顺序由调用方（W5）负责：[...builtin-danger, ...userRules]。
@@ -74,19 +75,19 @@ function virtualSafeRule(argv0: string): Rule {
 /**
  * 对已 tokenize 的 argv 做规则匹配（happy path）。
  *
- * 顺序：
- *  1. G3：isKnownSafeCommand(argv) → 命中返回 allow（虚拟 builtin-safe rule）
- *  2. 遍历 rules（last-match-wins），对每条用 resolvePattern(rule).test(argv.join(' '))
- *  3. G1：无匹配 → ask
+ * 顺序（C3 修正：白名单不再短路，用户 deny 可覆盖白名单，符合 last-match-wins 契约）：
+ *  1. 遍历 rules（last-match-wins），对每条用 resolvePattern(rule).test(argv.join(' '))
+ *     记录 winner。
+ *  2. winner.action === 'deny' → 返回 deny（用户/builtin deny 优先于白名单）
+ *  3. winner.action === 'allow' → 返回 allow
+ *  4. winner.action === 'ask'（无匹配）：
+ *       - isKnownSafeCommand(argv) → allow（白名单兜底，虚拟 builtin-safe rule）
+ *       - 否则 → ask
+ *  5. 空 argv → ask（G1）
  *
  * 匹配目标字符串统一为 `argv.join(' ')`（builtin-danger 正则与 user wildcard 都对它匹配）。
  */
 export function matchRulesForArgv(argv: string[], rules: readonly Rule[]): RuleMatchResult {
-	// G3：先查白名单（只对 argv 有效，命令名 + flag 子检查）
-	if (argv.length > 0 && isKnownSafeCommand(argv)) {
-		return { action: "allow", matchedRule: virtualSafeRule(argv[0] ?? "") };
-	}
-
 	if (argv.length === 0) {
 		// 空命令无法匹配任何规则 → ask（G1）
 		return { action: "ask", matchedRule: undefined };
@@ -101,16 +102,30 @@ export function matchRulesForArgv(argv: string[], rules: readonly Rule[]): RuleM
 			winner = { action: rule.action, matchedRule: rule };
 		}
 	}
+
+	// deny / allow 直接由 winner 决定（用户规则可覆盖白名单）
+	if (winner.action === "deny" || winner.action === "allow") {
+		return winner;
+	}
+
+	// winner.action === 'ask'（无规则匹配）→ 白名单兜底
+	if (isKnownSafeCommand(argv)) {
+		return { action: "allow", matchedRule: virtualSafeRule(argv[0] ?? "") };
+	}
 	return winner;
 }
 
 // ──────────────────────── matchRules（退化路径，command 字符串）────────────────────────
 
 /**
- * 对原始 command 字符串做规则匹配（退化路径）。
+ * 对原始 command 字符串做规则匹配（退化路径 + C1 完整字符串补充检查）。
  *
- * 适用场景：W2 AST 解析失败（parseError）或调用方只拿到 command 字符串
- * （无法可靠 tokenize argv）。
+ * 两种使用场景：
+ *  1. 退化路径：W2 AST 解析失败（parseError）或调用方只拿到 command 字符串
+ *     （无法可靠 tokenize argv）。
+ *  2. C1 补充检查：pipeline.ts 对 bash 工具的完整 command 字符串做一次额外
+ *     builtin-danger deny 匹配，覆盖「curl | sh」这类跨 argv 管道命令（AST 按
+ *     管道拆分后单个 argv 不含 `|`，deny 规则的正则无法命中）。
  *
  * 行为：
  *  - toolName !== 'bash' → ask（W3 只管 bash，其他工具交下游）
@@ -118,8 +133,9 @@ export function matchRulesForArgv(argv: string[], rules: readonly Rule[]): RuleM
  *  - 遍历 rules（last-match-wins），对每条用 resolvePattern(rule).test(command)
  *  - 无匹配 → ask（G1）
  *
- * 不调 isKnownSafeCommand：command 字符串无法可靠提取 argv（含引号/转义/管道），
- * argv 级白名单判断由 matchRulesForArgv 在 happy path 负责。
+ * 不调 isKnownSafeCommand（不查白名单）：command 字符串无法可靠提取 argv
+ * （含引号/转义/管道），argv 级白名单判断由 matchRulesForArgv 在 happy path 负责。
+ * 因此本函数仅用于 deny 补充检查或退化路径，不用作 allow 放行依据。
  */
 export function matchRules(
 	toolName: string,

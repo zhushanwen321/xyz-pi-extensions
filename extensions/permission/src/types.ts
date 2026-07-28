@@ -226,6 +226,14 @@ export interface CheckPermissionDeps {
 	analyzeBashStructure: (command: string) => Promise<BashAnalysis>;
 	matchRulesForArgv: (argv: string[], rules: readonly Rule[]) => RuleMatchResult;
 	getDefaultRules: () => Rule[];
+	/**
+	 * 是否处于 headless 模式（json/print，无交互 UI）。
+	 *
+	 * auto 模式 Racing 用此判断：headless 时不启动 user promise（立即 deny 会抢占 AI 的 race），
+	 * 纯等 AI classifier 判定；AI 失败/超时则 fail-closed deny。
+	 * strict/approve 不受影响——它们的 askUser 走 requestHeadless 立即 deny（无 AI 可兜底）。
+	 */
+	isHeadless: () => boolean;
 	classifier: {
 		classifyRisk: (
 			ctx: ToolInvocationContext,

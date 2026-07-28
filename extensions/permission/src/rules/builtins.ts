@@ -435,7 +435,9 @@ export const BUILTIN_DANGER_RULES: readonly Rule[] = [
 	{
 		id: "bd-001",
 		tool: "bash",
-		pattern: "\\brm\\s+(-[^\\s]*r|--recursive)",
+		// 覆盖分离 flag 写法（rm -f -r /）与合并 flag（rm -rf）：
+		// `rm` 后任意 token 序列中出现含 `r` 的短 flag（-r/-fr/-rf/-frw...）或 --recursive。
+		pattern: "\\brm\\b.*(-[^\\s]*r|--recursive)",
 		action: "deny",
 		source: "builtin-danger",
 		description: "recursive delete",
@@ -451,7 +453,8 @@ export const BUILTIN_DANGER_RULES: readonly Rule[] = [
 	{
 		id: "bd-003",
 		tool: "bash",
-		pattern: "\\bchmod\\b.*777",
+		// 覆盖等价写法：777 / a+rwx / ugo+rwx / ugo=rwx（均赋予所有用户写权限）。
+		pattern: "\\bchmod\\b.*(777|a\\+rwx|ugo\\+rwx|ugo=rwx)",
 		action: "deny",
 		source: "builtin-danger",
 		description: "world-writable permissions",
@@ -459,10 +462,14 @@ export const BUILTIN_DANGER_RULES: readonly Rule[] = [
 	{
 		id: "bd-004",
 		tool: "bash",
-		pattern: ">\\s*/dev/[sh]d[a-z]",
+		// 覆盖两类危险设备写入：
+		//  1) 重定向 `> /dev/...`：`> /dev/sda`、`> /dev/nvme0n1`、`> /dev/mmcblk0`
+		//  2) dd of= 写入：`dd of=/dev/sda`、`dd of=/dev/nvme0n1`
+		// 设备名扩展至 [a-z0-9]（支持 nvme0n1 / mmcblk0 等现代命名）。
+		pattern: "(>\\s*/dev/(sd|hd|nvme|mmcblk|vd|xvd)[a-z0-9]+|of=/dev/(sd|hd|nvme|mmcblk|vd|xvd)[a-z0-9]+)",
 		action: "deny",
 		source: "builtin-danger",
-		description: "raw device redirect",
+		description: "raw device write",
 	},
 	{
 		id: "bd-005",
@@ -483,18 +490,22 @@ export const BUILTIN_DANGER_RULES: readonly Rule[] = [
 	{
 		id: "bd-007",
 		tool: "bash",
-		pattern: "\\bgit\\s+clean\\s+-[^\\s]*f",
+		// 覆盖分离 flag（git clean -d -f）与合并 flag（git clean -fd）：
+		// `git clean` 后任意位置出现含 `f` 的短 flag（-f/-fd/-df）或 --force。
+		pattern: "\\bgit\\s+clean\\b.*(-[^\\s]*f|--force)",
 		action: "deny",
 		source: "builtin-danger",
-		description: "git clean",
+		description: "git clean --force",
 	},
 	{
 		id: "bd-008",
 		tool: "bash",
-		pattern: "\\bgit\\s+checkout\\s+\\.\\s*($|[;&|])",
+		// 覆盖 `git checkout .` 与 `git checkout -- .`（均可丢弃工作区所有改动）。
+		// 行尾锚定匹配字符串结束或命令分隔符（; & |）。
+		pattern: "\\bgit\\s+checkout\\s+(--\\s+)?\\.\\s*($|[;&|])",
 		action: "deny",
 		source: "builtin-danger",
-		description: "git checkout (discard all)",
+		description: "git checkout . (discard all)",
 	},
 	{
 		id: "bd-009",
@@ -533,10 +544,12 @@ export const BUILTIN_DANGER_RULES: readonly Rule[] = [
 /**
  * 返回默认规则（builtin-danger 12 条）。
  *
- * 浅拷贝数组（防外部 push/splice 修改内置常量），元素 Rule 对象共享（caller 不应突变）。
+ * 深拷贝：每条 Rule 对象都复制（`{ ...r }`），防外部修改返回值后污染共享常量
+ * BUILTIN_DANGER_RULES（m6：浅拷贝只复制数组，元素仍共享，caller 改 rule.action
+ * /rule.pattern 会污染内置常量，影响后续所有调用）。
  */
 export function getDefaultRules(): Rule[] {
-	return [...BUILTIN_DANGER_RULES];
+	return BUILTIN_DANGER_RULES.map((r) => ({ ...r }));
 }
 
 /** 重新导出 CONDITIONAL_SAFE_COMMANDS 仅供测试断言白名单覆盖完整。 */

@@ -71,6 +71,7 @@ function makeRealisticDeps(overrides: {
 		classifier: {
 			classifyRisk: overrides.classify ?? (() => Promise.resolve({ risk_level: "medium" as const, outcome: "ask" as const, reasoning: "fallback", confidence: 0 })),
 		},
+		isHeadless: () => false,
 		requestUserApproval:
 			overrides.approve ?? (() => Promise.resolve({ approved: false, reason: "default-deny" })),
 	};

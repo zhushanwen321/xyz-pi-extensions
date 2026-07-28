@@ -20,6 +20,7 @@ import {
 	getDefaultRules,
 	isKnownSafeCommand,
 } from "../builtins.js";
+import { matchRulesForArgv } from "../matcher.js";
 
 // ──────────────────────── BT-safe: Codex 白名单 ────────────────────────
 
@@ -289,18 +290,149 @@ describe("BT-danger: BUILTIN_DANGER_RULES 12 条", () => {
 	});
 });
 
+// ──────────────────────── C2: 分离 flag 写法的正则覆盖（防绕过）────────────────────────
+
+describe("C2: 危险正则覆盖分离 flag 写法（bd-001/003/007/008）", () => {
+	// helper：取某 id 规则的 pattern 编译为 RegExp
+	const patternFor = (id: string): RegExp => {
+		const rule = BUILTIN_DANGER_RULES.find((r) => r.id === id);
+		if (!rule) throw new Error(`rule ${id} not found`);
+		return new RegExp(rule.pattern, "i");
+	};
+
+	it("bd-001: rm 分离 flag `rm -f -r /` 也命中（原来只匹配合并 -rf）", () => {
+		const re = patternFor("bd-001");
+		// 合并 flag（原有覆盖）
+		expect(re.test("rm -rf /")).toBe(true);
+		expect(re.test("rm -fr /")).toBe(true);
+		// 分离 flag（C2 新覆盖）
+		expect(re.test("rm -f -r /")).toBe(true);
+		expect(re.test("rm -f -r -f /tmp/x")).toBe(true);
+		// 长选项
+		expect(re.test("rm --recursive foo")).toBe(true);
+		// 非 recursive 不命中
+		expect(re.test("rm -f /")).toBe(false);
+		expect(re.test("rm foo")).toBe(false);
+	});
+
+	it("bd-003: chmod 等价写法 a+rwx / ugo+rwx 也命中（原来只匹配 777）", () => {
+		const re = patternFor("bd-003");
+		// 777（原有覆盖）
+		expect(re.test("chmod 777 file")).toBe(true);
+		// 等价符号写法（C2 新覆盖）
+		expect(re.test("chmod a+rwx file")).toBe(true);
+		expect(re.test("chmod ugo+rwx file")).toBe(true);
+		expect(re.test("chmod ugo=rwx file")).toBe(true);
+		// 非危险权限不命中
+		expect(re.test("chmod 755 file")).toBe(false);
+		expect(re.test("chmod a+r file")).toBe(false);
+	});
+
+	it("bd-007: git clean 分离 flag `git clean -d -f` 也命中（原来只匹配合并 -fd）", () => {
+		const re = patternFor("bd-007");
+		// 合并 flag（原有覆盖）
+		expect(re.test("git clean -fd")).toBe(true);
+		expect(re.test("git clean -df")).toBe(true);
+		// 分离 flag（C2 新覆盖）
+		expect(re.test("git clean -d -f")).toBe(true);
+		expect(re.test("git clean -x -f")).toBe(true);
+		// --force
+		expect(re.test("git clean --force")).toBe(true);
+		// dry-run（无 f）不命中
+		expect(re.test("git clean -n")).toBe(false);
+		expect(re.test("git clean -d")).toBe(false);
+	});
+
+	it("bd-008: git checkout -- . 也命中（原来只匹配 `git checkout .`）", () => {
+		const re = patternFor("bd-008");
+		// 无 -- （原有覆盖）
+		expect(re.test("git checkout .")).toBe(true);
+		expect(re.test("git checkout . ;")).toBe(true);
+		// 带 -- （C2 新覆盖）
+		expect(re.test("git checkout -- .")).toBe(true);
+		expect(re.test("git checkout -- . &&")).toBe(true);
+		// 普通分支切换不命中
+		expect(re.test("git checkout branch")).toBe(false);
+		expect(re.test("git checkout -- file.txt")).toBe(false);
+	});
+});
+
+// ──────────────────────── m8: bd-004 设备重定向规则扩展 ────────────────────────
+
+describe("m8: bd-004 覆盖 dd of=/dev/... 与现代设备名（nvme/mmcblk）", () => {
+	const re = new RegExp(
+		BUILTIN_DANGER_RULES.find((r) => r.id === "bd-004")!.pattern,
+		"i",
+	);
+
+	it("重定向 > /dev/sda（原有覆盖）", () => {
+		expect(re.test("dd if=img > /dev/sda")).toBe(true);
+	});
+
+	it("dd of=/dev/sda（C2/m8 新覆盖）", () => {
+		expect(re.test("dd if=img of=/dev/sda")).toBe(true);
+		expect(re.test("dd of=/dev/sdb bs=4M")).toBe(true);
+	});
+
+	it("现代设备名 nvme0n1 / mmcblk0（m8 新覆盖）", () => {
+		expect(re.test("dd of=/dev/nvme0n1")).toBe(true);
+		expect(re.test("dd if=img > /dev/nvme0n1p2")).toBe(true);
+		expect(re.test("dd of=/dev/mmcblk0")).toBe(true);
+	});
+
+	it("非设备写入不误报", () => {
+		expect(re.test("echo hi")).toBe(false);
+		expect(re.test("cat file > /tmp/out")).toBe(false);
+		expect(re.test("echo data > out.txt")).toBe(false);
+	});
+});
+
+// ──────────────────────── C2 端到端：matchRulesForArgv 真实链路 ────────────────────────
+
+describe("C2-e2e: matchRulesForArgv 对分离 flag 写法返回 deny", () => {
+	// builtins.test 直接测内置规则正则；此处补真实匹配链路（matchRulesForArgv）
+	const rules = getDefaultRules();
+
+	it("rm -f -r / → deny（bd-001）", () => {
+		const r = matchRulesForArgv(["rm", "-f", "-r", "/"], rules);
+		expect(r.action).toBe("deny");
+		expect(r.matchedRule?.id).toBe("bd-001");
+	});
+
+	it("chmod a+rwx file → deny（bd-003）", () => {
+		const r = matchRulesForArgv(["chmod", "a+rwx", "file"], rules);
+		expect(r.action).toBe("deny");
+		expect(r.matchedRule?.id).toBe("bd-003");
+	});
+
+	it("git clean -d -f → deny（bd-007）", () => {
+		const r = matchRulesForArgv(["git", "clean", "-d", "-f"], rules);
+		expect(r.action).toBe("deny");
+		expect(r.matchedRule?.id).toBe("bd-007");
+	});
+
+	it("git checkout -- . → deny（bd-008）", () => {
+		// argv 级：["git","checkout","--","."] join 后 "git checkout -- ."
+		const r = matchRulesForArgv(["git", "checkout", "--", "."], rules);
+		expect(r.action).toBe("deny");
+		expect(r.matchedRule?.id).toBe("bd-008");
+	});
+});
+
 // ──────────────────────── BT-misc: getDefaultRules / findGitSubcommand ────────────────────────
 
 describe("BT-misc: getDefaultRules", () => {
-	it("返回 12 条 builtin-danger 规则（浅拷贝）", () => {
+	it("返回 12 条 builtin-danger 规则（深拷贝：新数组 + 新元素对象）", () => {
 		const rules = getDefaultRules();
 		expect(rules.length).toBe(12);
-		// 浅拷贝：新数组，但元素相等（共享 Rule 对象）
+		// m6：深拷贝——新数组，元素也是新对象（不共享内置常量引用）
 		expect(rules).not.toBe(BUILTIN_DANGER_RULES);
-		expect(rules[0]).toBe(BUILTIN_DANGER_RULES[0]);
+		expect(rules[0]).not.toBe(BUILTIN_DANGER_RULES[0]);
+		// 但内容（值）相等
+		expect(rules[0]).toEqual(BUILTIN_DANGER_RULES[0]);
 	});
 
-	it("浅拷贝防外部修改——push 不影响内置常量", () => {
+	it("深拷贝防外部修改——push 不影响内置常量", () => {
 		const rules = getDefaultRules();
 		const originalLen = BUILTIN_DANGER_RULES.length;
 		rules.push({
@@ -311,6 +443,19 @@ describe("BT-misc: getDefaultRules", () => {
 			source: "user",
 		});
 		expect(BUILTIN_DANGER_RULES.length).toBe(originalLen);
+	});
+
+	it("m6：深拷贝防元素属性污染——改 rule.action 不影响内置常量", () => {
+		// 浅拷贝的缺陷：元素共享引用，改 action 会污染 BUILTIN_DANGER_RULES。
+		// 深拷贝后：修改返回值元素的属性不影响内置常量。
+		const rules = getDefaultRules();
+		const originalAction = BUILTIN_DANGER_RULES[0]!.action;
+		// 篡改返回值的第 0 条规则
+		rules[0]!.action = "allow";
+		rules[0]!.pattern = "tampered";
+		// 内置常量未被污染
+		expect(BUILTIN_DANGER_RULES[0]!.action).toBe(originalAction);
+		expect(BUILTIN_DANGER_RULES[0]!.pattern).not.toBe("tampered");
 	});
 });
 
