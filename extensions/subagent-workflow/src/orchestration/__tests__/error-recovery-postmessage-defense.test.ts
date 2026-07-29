@@ -253,11 +253,106 @@ describe("W2b: dispatchWorkflowCall postResult 防御 DataCloneError", () => {
 
 // ── W2c: postAgentResult 防御（经 handleWorkerMessage 触发） ──
 //
-// postAgentResult 是私有函数，通过 workflow-call 路径无法触发——但它与 postResult
-// 闭包采用完全一致的防御模式（try/catch + 纯字符串 fallback）。
-// postResult 路径的测试（W2b）已充分覆盖该模式的正确性。
-// 这里补充：验证 error-recovery.ts 源码中三处 postMessage 调用点都有 try/catch 包裹，
+// postAgentResult 是私有函数，通过 workflow-call 路径无法触发。但它可经 agent-call
+// 路径的「cached replay」分支触发：dispatchAgentCall 发现 run.state.calls.get(callId)
+// 已是 done 时，直接 postAgentResult(run, callId, cached.result, true)（无需 spawn
+// 子进程）。利用这一点构造行为测试——往 cached.result 里塞不可克隆值（function），
+// mock postMessage 在首次发送 agent-result 时抛 DataCloneError，验证 fallback 路径。
+//
+// 另外补充：验证 error-recovery.ts 源码中三处 postMessage 调用点都有 try/catch 包裹，
 // 防止未来重构误删防御（类似 worker-script-builder.test.ts 的源码字符串断言模式）。
+
+/** 构造 status="running" 且 calls 已含一个 done 结果（含不可克隆成员）的 mock run。
+ *  触发 dispatchAgentCall 的 cached replay 分支（line ~234），直接走 postAgentResult。 */
+function makeRunningRunWithCachedDone(
+  postMessage: ReturnType<typeof vi.fn>,
+  callId: number,
+  result: unknown,
+): WorkflowRun {
+  const calls = new Map();
+  calls.set(callId, { status: "done", result });
+  return {
+    state: {
+      status: "running",
+      calls,
+      trace: { append: vi.fn(), update: vi.fn() },
+      budget: { isExceeded: vi.fn(() => false) },
+    },
+    runtime: { worker: { postMessage } },
+  } as unknown as WorkflowRun;
+}
+
+describe("W2c: postAgentResult 行为测试（cached replay 路径）", () => {
+  it("result 不可克隆 → 回发纯字符串 fallback result（cached: false）", async () => {
+    const restore = silenceConsoleError();
+    try {
+      // 第 1 次 postMessage 抛 DataCloneError（原始 cached.result 含 function 不可克隆），
+      // 第 2 次（fallback）成功。
+      const postMessage = makeFailingPostMessage(1);
+      // cached.result 含 function 成员 → 模拟 agent 返回不可克隆值（{ bad: () => {} }）
+      const run = makeRunningRunWithCachedDone(postMessage, 7, { bad: () => {} });
+      const deps = makeDeps();
+
+      await handleWorkerMessage(
+        run,
+        { type: "agent-call", callId: 7, opts: { prompt: "noop" } },
+        deps,
+        makeHandlers(),
+      );
+      await flushMicrotasks();
+
+      // 调用两次：1 原始 agent-result（失败）+ 1 fallback（成功）
+      expect(postMessage).toHaveBeenCalledTimes(2);
+
+      // 第 1 次：原始 agent-result，result 透传原值，cached 为 replay 的 true
+      const original = postedAt(postMessage, 0);
+      expect(original.type).toBe("agent-result");
+      expect(original.callId).toBe(7);
+      expect(original.cached).toBe(true);
+
+      // 第 2 次：fallback agent-result，result 形状为 {content:"", error:"Result serialization failed: ..."}，
+      // 且 cached 固定为 false（fallback result 非缓存命中，透传原值含义失真）
+      const fallback = postedAt(postMessage, 1);
+      expect(fallback.type).toBe("agent-result");
+      expect(fallback.callId).toBe(7);
+      expect(fallback.result?.content).toBe("");
+      expect(fallback.result?.error).toContain("Result serialization failed");
+      expect(fallback.result?.error).toContain("Could not clone object");
+      expect(fallback.cached).toBe(false);
+    } finally {
+      restore();
+    }
+  });
+
+  it("fallback 也失败 → 不向上抛错，记录 worker pending 将挂起", async () => {
+    const restore = silenceConsoleError();
+    try {
+      // postMessage 永远抛 DataCloneError（原始 + fallback 均失败）
+      const postMessage = makeAlwaysFailingPostMessage();
+      const run = makeRunningRunWithCachedDone(postMessage, 8, { bad: () => {} });
+      const deps = makeDeps();
+
+      // handleWorkerMessage 自身不应抛——postAgentResult 内部已 catch
+      await expect(
+        handleWorkerMessage(
+          run,
+          { type: "agent-call", callId: 8, opts: { prompt: "noop" } },
+          deps,
+          makeHandlers(),
+        ),
+      ).resolves.toBeUndefined();
+      await flushMicrotasks();
+
+      // 至少 2 次尝试（原始 + fallback），fallback 失败也记日志
+      expect(postMessage.mock.calls.length).toBeGreaterThanOrEqual(2);
+      const errorCalls = (console.error as ReturnType<typeof vi.fn>).mock.calls.map((c) => c[0] as string);
+      expect(errorCalls.some((s) => s.includes("postAgentResult failed"))).toBe(true);
+      expect(errorCalls.some((s) => s.includes("fallback also failed"))).toBe(true);
+    } finally {
+      restore();
+    }
+  });
+});
 
 describe("W2c: postAgentResult 防御（源码结构断言）", () => {
   /** 校验：给定函数体内的 postMessage 调用被 try/catch 包裹。
