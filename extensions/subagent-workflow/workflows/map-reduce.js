@@ -48,10 +48,7 @@ if (!Array.isArray(items) || items.length === 0) {
   throw new Error("items 不是数组或为空");
 }
 
-// aggregate 模式：'concat'（默认，纯代码合并）或 'llm'（agent LLM 聚合）
-const aggregate = $ARGS.aggregate === "llm" ? "llm" : "concat";
-
-log("map-reduce 开始，items=" + items.length + " 个，operation=" + operation + " aggregate=" + aggregate);
+log("map-reduce 开始，items=" + items.length + " 个，operation=" + operation);
 
 let currentPhase = "init";
 let outcome;
@@ -107,43 +104,22 @@ try {
   }
   log("map 完成：ok=" + (items.length - mapFailed) + " failed=" + mapFailed);
 
-  // ── 段 2：reduce（agent 聚合所有 map 结果）──────────────────────
+  // ── 段 2：reduce（合并所有 map 结果）────────────────────────────
   phase("reduce");
   currentPhase = "reduce";
 
-  let reducedResult;
-  if (aggregate === "llm") {
-    reducedResult = await agent({
-      prompt:
-        "以下是对 " + items.length + " 个 item 执行「" + operation + "」的结果，请归约成单一结论：\n\n" +
-        JSON.stringify(mapped, null, 2),
-      schema: {
-        type: "object",
-        properties: {
-          reduced: { type: "string", description: "归约后的最终结果" },
-          stats: { type: "string", description: "统计摘要（成功率/共性发现等）" },
-        },
-        required: ["reduced", "stats"],
-      },
-      description: "map-reduce-reduce",
-    });
-  } else {
-    // concat 模式：纯代码合并，不调用 LLM
-    reducedResult = mapped
-      .map((m) => "[" + (m.itemIndex !== undefined ? "item " + m.itemIndex : "?") + "] " + (m.mapped || "(no result)"))
-      .join("\n");
-  }
+  // 纯代码合并：拼接各 item 的 map 结果（不调用 LLM）
+  const reducedResult = mapped
+    .map((m) => "[" + (m.itemIndex !== undefined ? "item " + m.itemIndex : "?") + "] " + (m.mapped || "(no result)"))
+    .join("\n");
 
   outcome = {
     status: mapFailed > 0 ? "partial" : "ok",
     phases_run: ["map", "reduce"],
     items_total: items.length,
     items_mapped: items.length - mapFailed,
-    reduced: aggregate === "llm" ? {
-      reduced: (reducedResult?.reduced ?? "(归约无结果)"),
-      stats: (reducedResult?.stats ?? "(归约无结果)"),
-    } : reducedResult, // concat 模式直接放拼接字符串
-    message: "map-reduce 完成：map " + items.length + " 项（失败 " + mapFailed + "）→ reduce(" + aggregate + ")",
+    reduced: reducedResult,
+    message: "map-reduce 完成：map " + items.length + " 项（失败 " + mapFailed + "）→ reduce",
   };
 } catch (err) {
   outcome = {

@@ -23,10 +23,8 @@ const task = $ARGS.task;
 if (!task) {
   throw new Error("scatter-gather 缺少必需参数 task。用法：workflow run scatter-gather --args task=\"<大任务描述>\"");
 }
-// aggregate 模式：'concat'（默认，纯代码合并）或 'llm'（agent LLM 聚合）
-const aggregate = $ARGS.aggregate === "llm" ? "llm" : "concat";
 
-log("scatter-gather 开始，task=" + task + " aggregate=" + aggregate);
+log("scatter-gather 开始，task=" + task);
 
 let currentPhase = "init";
 let outcome;
@@ -118,39 +116,18 @@ try {
   phase("gather");
   currentPhase = "gather";
 
-  let gatheredResult;
-  if (aggregate === "llm") {
-    gatheredResult = await agent({
-      prompt:
-        "以下是各子任务的处理结果，请合并成一个完整、一致的最终结果：\n\n" +
-        JSON.stringify(processed, null, 2),
-      schema: {
-        type: "object",
-        properties: {
-          mergedResult: { type: "string", description: "合并后的最终结果" },
-          completeness: { type: "string", description: "完整性评估" },
-        },
-        required: ["mergedResult", "completeness"],
-      },
-      description: "scatter-gather-merge",
-    });
-  } else {
-    // concat 模式：纯代码合并，不调用 LLM
-    gatheredResult = processed
-      .map((p) => "[" + (p.subtask || "?") + "] " + (p.result || "(no result)"))
-      .join("\n");
-  }
+  // 纯代码合并：拼接各子任务结果（不调用 LLM）
+  const gatheredResult = processed
+    .map((p) => "[" + (p.subtask || "?") + "] " + (p.result || "(no result)"))
+    .join("\n");
 
   outcome = {
     status: failedCount > 0 ? "partial" : "ok",
     phases_run: ["scatter", "process", "gather"],
     subtasks_total: subtasks.length,
     subtasks_processed: subtasks.length - failedCount,
-    gathered: aggregate === "llm" ? {
-      mergedResult: (gatheredResult?.mergedResult ?? "(合并无结果)"),
-      completeness: (gatheredResult?.completeness ?? "(合并无结果)"),
-    } : gatheredResult, // concat 模式直接放拼接字符串
-    message: "scatter-gather 完成：split " + subtasks.length + " → process（失败 " + failedCount + "）→ merge(" + aggregate + ")",
+    gathered: gatheredResult,
+    message: "scatter-gather 完成：split " + subtasks.length + " → process（失败 " + failedCount + "）→ merge",
   };
 } catch (err) {
   outcome = {

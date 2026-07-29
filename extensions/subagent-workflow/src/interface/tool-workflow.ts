@@ -237,10 +237,9 @@ export function registerWorkflowTool(
       "PRIORITY: When user says 'workflow', 'run workflow', try run action FIRST.",
       "BUILT-IN workflows — run DIRECTLY with action:run, do NOT use workflow-script generate for these: " +
       "chain (sequential 3-step: analyze→transform→synthesize; args: task), " +
-      "parallel (multi-perspective analysis; args: target, optional perspectives, optional aggregate='concat'|'llm' default concat), " +
-      "scatter-gather (split→parallel→merge; args: task, optional aggregate), " +
-      "map-reduce (parallel map→reduce; args: items/itemsJson + operation, optional aggregate). " +
-      "aggregate='concat' (default) = pure code merge (fast, no extra tokens); aggregate='llm' = LLM synthesis. " +
+      "parallel (multi-perspective analysis; args: target, optional perspectives), " +
+      "scatter-gather (split→parallel→merge; args: task), " +
+      "map-reduce (parallel map→reduce; args: items/itemsJson + operation). " +
       "Example: {\"action\":\"run\",\"name\":\"parallel\",\"args\":{\"target\":\"src/auth.ts\"}}.",
       "DISCOVERY: If unsure what workflows exist, call the workflow-script tool with " +
       "action:list first — it returns all available scripts (built-in + user-generated) " +

@@ -70,16 +70,6 @@ describe("U1: workflow tool prompt mentions built-in workflows", () => {
     expect(TOOL_WORKFLOW_SCRIPT_SRC).toMatch(/workflow.*tool.*run|run.*workflow.*tool/i);
   });
 
-  it("tool-workflow.ts promptGuidelines 含 W3 新增 aggregate 参数", () => {
-    // W3：parallel/scatter-gather/map-reduce 新增 aggregate 选项，提示词须同步说明。
-    expect(TOOL_WORKFLOW_SRC).toContain("aggregate");
-  });
-
-  it("tool-workflow.ts promptGuidelines 含 aggregate='concat'|'llm' 取值说明", () => {
-    expect(TOOL_WORKFLOW_SRC).toContain("concat");
-    expect(TOOL_WORKFLOW_SRC).toContain("'llm'");
-  });
-
   it("tool-workflow.ts promptGuidelines 强化 anti-generate（直接 run，不要 generate）", () => {
     // session 证据：弱模型看到 workflow list 后倾向 workflow-script generate 而非直接 run。
     // 提示词必须显式禁止对内置编排使用 generate。
