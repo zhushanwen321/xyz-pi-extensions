@@ -12,6 +12,8 @@
  * ExtensionContext 类型，便于测试 + 解耦。
  */
 
+// eslint-disable-next-line @typescript-eslint/ban-ts-comment
+// @ts-ignore - getApiProvider exists in dist/compat.js but is not re-exported from the main index; root tsc resolves it via stub but per-package tsc does not
 import { getApiProvider } from "@earendil-works/pi-ai";
 
 import { type ApprovalContext,requestUserApproval } from "./approval.js";
