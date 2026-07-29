@@ -111,10 +111,16 @@ latest_aggregated = ""
 must_fix = suggestion = info = 0
 
 if review_dir.is_dir():
-    # 优先找 run-<id>/round-*（按 round 号排序取最大）
+    # 找最新 run 的最新 round：排序 key = (runId, round) 双键，runId 优先（最新 run 优先）
+    # run-<id> 的 id 是 unix timestamp 秒数，大的更新；round 同理。
+    def _run_round_key(p):
+        run_m = re.search(r"run-(\d+)", p.parent.name)
+        round_m = re.search(r"round-(\d+)", p.name)
+        return (int(run_m.group(1)) if run_m else 0,
+                int(round_m.group(1)) if round_m else 0)
     rounds = sorted(
         (p for p in review_dir.glob("run-*/round-*")),
-        key=lambda p: int(re.search(r"round-(\d+)", p.name).group(1)) if re.search(r"round-(\d+)", p.name) else 0,
+        key=_run_round_key,
         reverse=True,
     )
     if not rounds:
