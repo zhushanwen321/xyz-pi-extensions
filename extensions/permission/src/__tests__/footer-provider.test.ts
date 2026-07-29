@@ -18,9 +18,10 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import {
 	FOOTER_HANDSHAKE_KEY,
-	REQUEST_RENDER_KEY,
+	type FooterLineRenderer,
 	registerPermissionFooterLine,
 	renderPermissionFooterLine,
+	REQUEST_RENDER_KEY,
 	requestFooterRender,
 } from "../footer-provider.js";
 import type { PermissionPalette } from "../statusline-palette.js";
@@ -41,27 +42,46 @@ function passthroughPalette(): PermissionPalette {
 }
 
 /** 构造最小 renderer（render 返回固定行）。 */
-function makeRenderer(order = 2, line = "permission-line") {
+function makeRenderer(order = 2, line = "permission-line"): FooterLineRenderer {
 	return {
 		order,
 		render: () => line,
 	};
 }
 
+/**
+ * mock registry 的显式返回类型。
+ *
+ * 结构上兼容 footer-provider.ts 的 FooterLineRegistry 接口（register/unregister），
+ * 额外暴露 has/calls 供断言。footer-provider.ts 的 FooterLineRegistry 未导出，
+ * 这里用结构等价契约绑定：若 footer-provider.ts 的 registry 接口签名漂移（如
+ * register 增加 id 规范化、unregister 改名），mock 会在传入 slot.registry 时
+ * 编译期暴露（slot 字面量的 registry 字段需满足该结构）。
+ *
+ * register 的 renderer 参数用导出的 FooterLineRenderer 替代原先的 unknown，
+ * 让 mock 与 consumer 端 renderer 契约漂移时编译期即可发现。
+ */
+interface MockFooterRegistry {
+	register(id: string, renderer: FooterLineRenderer): void;
+	unregister(id: string): void;
+	has(id: string): boolean;
+	calls: { op: "register" | "unregister"; id: string }[];
+}
+
 /** mock registry：记录 register/unregister 调用，内部 Map 存储。 */
-function makeRegistry() {
-	const map = new Map<string, unknown>();
+function makeRegistry(): MockFooterRegistry {
+	const map = new Map<string, FooterLineRenderer>();
 	const calls: { op: "register" | "unregister"; id: string }[] = [];
 	return {
-		register(id: string, r: unknown) {
+		register(id: string, renderer: FooterLineRenderer): void {
 			calls.push({ op: "register", id });
-			map.set(id, r);
+			map.set(id, renderer);
 		},
-		unregister(id: string) {
+		unregister(id: string): void {
 			calls.push({ op: "unregister", id });
 			map.delete(id);
 		},
-		has: (id: string) => map.has(id),
+		has: (id: string): boolean => map.has(id),
 		calls,
 	};
 }

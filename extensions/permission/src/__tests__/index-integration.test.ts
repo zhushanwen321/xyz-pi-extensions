@@ -19,6 +19,7 @@ import { join } from "node:path";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
+import { FOOTER_HANDSHAKE_KEY, REQUEST_RENDER_KEY } from "../footer-provider.js";
 import permissionExtension from "../index.js";
 
 // ──────────────────────── mock pi ────────────────────────
@@ -69,6 +70,15 @@ function getSessionStartHandler(calls: MockPiCalls): (event: unknown, ctx: unkno
 	const handlers = calls.eventHandlers.get("session_start");
 	if (!handlers || handlers.length === 0) {
 		throw new Error("session_start handler not registered");
+	}
+	return handlers[0];
+}
+
+/** 提取 session_tree handler。 */
+function getSessionTreeHandler(calls: MockPiCalls): (event: unknown, ctx: unknown) => unknown {
+	const handlers = calls.eventHandlers.get("session_tree");
+	if (!handlers || handlers.length === 0) {
+		throw new Error("session_tree handler not registered");
 	}
 	return handlers[0];
 }
@@ -125,6 +135,9 @@ beforeEach(() => {
 afterEach(() => {
 	delete process.env.PI_CODING_AGENT_DIR;
 	if (existsSync(TMP_ROOT)) rmSync(TMP_ROOT, { recursive: true, force: true });
+	// 清理 footer 握手 slot（session_start/session_tree handler 会写 globalThis）
+	Reflect.deleteProperty(globalThis, FOOTER_HANDSHAKE_KEY);
+	Reflect.deleteProperty(globalThis, REQUEST_RENDER_KEY);
 });
 
 // ──────────────────────── 测试 ────────────────────────
@@ -278,5 +291,94 @@ describe("W8 /permission rule 命令集成", () => {
 		const ctx = makeCtx("json");
 		// rule 参数应走 headless 降级（notify）
 		await expect(handler("rule", ctx)).resolves.not.toThrow();
+	});
+});
+
+// ──────────────────────── footer line 注册（duck typing + session_tree）────────────────────────
+
+describe("footer line 注册", () => {
+	it("session_start：ctx.ui 无 theme → registerFooterLineFor 返回 noop dispose，不抛异常", () => {
+		writeConfig("yolo");
+		const { pi, calls } = createMockPi();
+		permissionExtension(pi);
+		const sessionHandler = getSessionStartHandler(calls);
+
+		// ctx.ui 完全无 theme 字段（headless/mock 形状）。
+		// registerFooterLineFor 的 duck typing 守卫应命中，返回 () => {} 而不调
+		// registerPermissionFooterLine（故 globalThis 不应出现握手 slot）。
+		const ctxNoTheme = { mode: "json", cwd: "/tmp", ui: {}, signal: undefined };
+		expect(() => sessionHandler({}, ctxNoTheme)).not.toThrow();
+		expect(Reflect.get(globalThis, FOOTER_HANDSHAKE_KEY)).toBeUndefined();
+	});
+
+	it("session_start：ctx.ui.theme 存在但 fg 非函数 → noop dispose，不抛异常", () => {
+		writeConfig("yolo");
+		const { pi, calls } = createMockPi();
+		permissionExtension(pi);
+		const sessionHandler = getSessionStartHandler(calls);
+
+		// theme 存在但 fg 缺失/非函数 → duck typing 失败 → noop dispose。
+		const ctxBadFg = {
+			mode: "json",
+			cwd: "/tmp",
+			ui: { theme: { fg: "not-a-function" } },
+			signal: undefined,
+		};
+		expect(() => sessionHandler({}, ctxBadFg)).not.toThrow();
+		// 未注册 renderer → 不应触碰 globalThis 握手 slot
+		expect(Reflect.get(globalThis, FOOTER_HANDSHAKE_KEY)).toBeUndefined();
+	});
+
+	it("session_tree：触发两次 handler 不抛异常（dispose 旧 renderer → refreshConfig → 重注册）", () => {
+		writeConfig("yolo");
+		const { pi, calls } = createMockPi();
+		permissionExtension(pi);
+		const sessionTreeHandler = getSessionTreeHandler(calls);
+
+		// ctx.ui.theme 为合法 fg 函数 → 真实注册 renderer（写 globalThis slot）。
+		const ctxWithTheme = {
+			mode: "json",
+			cwd: "/tmp",
+			ui: {
+				theme: {
+					fg: (_token: string, text: string): string => text,
+				},
+			},
+			signal: undefined,
+		};
+
+		// 第一次：注册 renderer（无旧 renderer，dispose 是 noop）。
+		expect(() => sessionTreeHandler({}, ctxWithTheme)).not.toThrow();
+		expect(Reflect.get(globalThis, FOOTER_HANDSHAKE_KEY)).toBeDefined();
+
+		// 切换 config（模拟分支切换后 permission-config.json 变化）。
+		writeConfig("strict");
+
+		// 第二次：dispose 上次的 renderer → refreshConfig 读到 strict → 重新注册。
+		// disposeFooterLine 是闭包私有变量，这里间接验证：多次触发不抛、不破坏 slot 结构。
+		expect(() => sessionTreeHandler({}, ctxWithTheme)).not.toThrow();
+		// slot 仍存在且结构合规（version=1，pending 是数组）
+		const slot = Reflect.get(globalThis, FOOTER_HANDSHAKE_KEY) as {
+			version: number;
+			pending: unknown[];
+		};
+		expect(slot).toBeDefined();
+		expect(slot.version).toBe(1);
+		expect(Array.isArray(slot.pending)).toBe(true);
+		// 两次注册 + 一次 dispose（第二次触发前）→ pending 应至多 1 项（旧 renderer 已 dispose 移除）
+		expect(slot.pending.length).toBeLessThanOrEqual(1);
+	});
+
+	it("session_tree：ctx.ui 无 theme 时多次触发仍安全（noop dispose 重复调用）", () => {
+		writeConfig("yolo");
+		const { pi, calls } = createMockPi();
+		permissionExtension(pi);
+		const sessionTreeHandler = getSessionTreeHandler(calls);
+
+		// 无 theme → 两次都是 noop dispose，不应抛、不应写 globalThis。
+		const ctxNoTheme = { mode: "json", cwd: "/tmp", ui: {}, signal: undefined };
+		expect(() => sessionTreeHandler({}, ctxNoTheme)).not.toThrow();
+		expect(() => sessionTreeHandler({}, ctxNoTheme)).not.toThrow();
+		expect(Reflect.get(globalThis, FOOTER_HANDSHAKE_KEY)).toBeUndefined();
 	});
 });

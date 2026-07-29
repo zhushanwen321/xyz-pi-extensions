@@ -13,7 +13,6 @@ Pi permission 扩展 — 四档权限模式（yolo / auto / approve / strict）+
 - **用户审批 UI**：TUI（自定义 Component）/ RPC（select 对话框）/ headless（fail-closed deny）
 - **Reject-with-Reason**：用户拒绝时可输入真实理由（回传 agent 辅助理解）
 - **statusline 集成**：TUI 底部 footer 显示当前权限模式标签（通过 globalThis Symbol 握手协议向 statusline 注册一行 footer line renderer）
-- **Status Widget**：TUI 常驻区域显示 rule count + classifier model（auto 模式）
 - **fail-closed**：任何异常路径 → block（绝不静默放行）
 
 ## 安装
@@ -403,16 +402,6 @@ footer line 内容（精简版，避免 footer 拥挤）：
 模式标签：YOLO / Auto / Approve / Strict（对应 yolo/auto/approve/strict）。
 
 **未安装 statusline 时 silent 降级**：permission 功能完整，仅 footer 不显示 mode 标签。可用 `/permission status` 查看 mode。
-
-## Status Widget
-
-permission 通过 `ctx.ui.setWidget("permission", lines)` 在 TUI 常驻区域注册一个 widget（key 为 `"permission"`），显示 rule count + classifier model：
-
-- **auto 模式 + 有 model**：`[pi-permission] N user rule(s) · classifier: <model>`
-- **其他模式（或 model 为空）**：`[pi-permission] N user rule(s)`
-- rule(s) 单复数随 count 变化（1→rule，其他→rules）。
-
-> PR-1 静态版：widget 不读 meta、不判断 `isOnboarded`（onboarding gating 是 PR-2 范围），始终显示 rule count。
 
 ## 升级须知
 
