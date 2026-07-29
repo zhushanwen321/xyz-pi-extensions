@@ -248,6 +248,36 @@ describe("ApprovalComponent（G4 invalidate）", () => {
 		expect(done).toHaveBeenCalledOnce();
 	});
 
+	it("M2: y 键是 no-op（已移除 y 快捷键，不再触发 approve）", () => {
+		const done = vi.fn();
+		const comp = new ApprovalComponent(req, { requestRender: vi.fn() }, done);
+		comp.handleInput("y");
+		expect(done).not.toHaveBeenCalled();
+		// 组件仍未 resolve（后续 Enter 仍能 approve）
+		comp.handleInput("\r");
+		expect(done).toHaveBeenCalledOnce();
+		expect((done.mock.calls[0]![0] as UserDecision).approved).toBe(true);
+	});
+
+	it("M2: n 键是 no-op（已移除 n 快捷键，不再触发 deny）", () => {
+		const done = vi.fn();
+		const comp = new ApprovalComponent(req, { requestRender: vi.fn() }, done);
+		comp.handleInput("n");
+		expect(done).not.toHaveBeenCalled();
+		// 组件仍未 resolve（后续 Esc 仍能 deny）
+		comp.handleInput("\x1b");
+		expect(done).toHaveBeenCalledOnce();
+		expect((done.mock.calls[0]![0] as UserDecision).approved).toBe(false);
+	});
+
+	it("M2: 大写 Y / N 也是 no-op（大小写都不触发）", () => {
+		const done = vi.fn();
+		const comp = new ApprovalComponent(req, { requestRender: vi.fn() }, done);
+		comp.handleInput("Y");
+		comp.handleInput("N");
+		expect(done).not.toHaveBeenCalled();
+	});
+
 	it("cancel()（signal abort）→ deny，resolved 后 no-op", () => {
 		const done = vi.fn();
 		const comp = new ApprovalComponent(req, { requestRender: vi.fn() }, done);

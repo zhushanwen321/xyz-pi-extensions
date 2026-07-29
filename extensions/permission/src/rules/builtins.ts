@@ -115,6 +115,25 @@ function executableNameLookupKey(raw: string): string | undefined {
 	return slash >= 0 ? raw.slice(slash + 1) : raw;
 }
 
+// ── 合并短 flag 检查工具（G4: 合并 flag 如 -fo 需检测任意位置的 -o）──
+
+/**
+ * 检查短 flag 簇中是否含某个字符（如 `-fo` 含 `o`）。
+ *
+ * 短 flag 簇：以单个 `-` 开头、非 `--`、长度 ≥ 2 的 token。
+ * `-o` / `-fo` / `-of` / `-fox` 都算短 flag 簇；`--output` / `--output=x` 不算。
+ *
+ * @param arg 待检查的 token
+ * @param flagChar 要检测的字符（如 "o" 表示 -o）
+ * @returns 短 flag 簇中任意位置出现该字符 → true
+ */
+function shortFlagClusterHasChar(arg: string, flagChar: string): boolean {
+	// 只处理短 flag 簇：单个 - 开头，非 --，长度 ≥ 2
+	if (!arg.startsWith("-") || arg.startsWith("--") || arg.length < 2) return false;
+	// arg 去掉开头的 -，检查剩余字符
+	return arg.slice(1).includes(flagChar);
+}
+
 // ── base64 ──
 
 const UNSAFE_BASE64_OPTIONS: ReadonlySet<string> = new Set(["-o", "--output"]);
@@ -125,8 +144,8 @@ function isSafeBase64(argv: string[]): boolean {
 		return (
 			UNSAFE_BASE64_OPTIONS.has(arg) ||
 			arg.startsWith("--output=") ||
-			// `-ob64.txt` 这种合并 flag（arg 以 "-o" 开头但不是精确 "-o"）
-			(arg.startsWith("-o") && arg !== "-o")
+			// 合并短 flag 簇含 o（-o / -fo / -of / -fob64）
+			shortFlagClusterHasChar(arg, "o")
 		);
 	});
 }
@@ -418,7 +437,8 @@ function isSafeSort(argv: string[]): boolean {
 		return (
 			UNSAFE_SORT_OPTIONS.has(arg) ||
 			arg.startsWith("--output=") ||
-			(arg.startsWith("-o") && arg !== "-o")
+			// 合并短 flag 簇含 o（-o / -fo / -of / -nfo）
+			shortFlagClusterHasChar(arg, "o")
 		);
 	});
 }
@@ -432,7 +452,8 @@ function isSafeIconv(argv: string[]): boolean {
 		return (
 			UNSAFE_ICONV_OPTIONS.has(arg) ||
 			arg.startsWith("--output=") ||
-			(arg.startsWith("-o") && arg !== "-o")
+			// 合并短 flag 簇含 o（-o / -fo / -of）
+			shortFlagClusterHasChar(arg, "o")
 		);
 	});
 }
@@ -446,7 +467,8 @@ function isSafeShuf(argv: string[]): boolean {
 		return (
 			UNSAFE_SHUF_OPTIONS.has(arg) ||
 			arg.startsWith("--output=") ||
-			(arg.startsWith("-o") && arg !== "-o")
+			// 合并短 flag 簇含 o（-o / -fo / -of）
+			shortFlagClusterHasChar(arg, "o")
 		);
 	});
 }
@@ -459,7 +481,9 @@ function isSafeDate(argv: string[]): boolean {
 	return !argv.slice(1).some((arg) => {
 		return (
 			UNSAFE_DATE_OPTIONS.has(arg) ||
-			arg.startsWith("--set=")
+			arg.startsWith("--set=") ||
+			// 合并短 flag 簇含 s（-s / -ds / -sd）
+			shortFlagClusterHasChar(arg, "s")
 		);
 	});
 }
@@ -530,8 +554,11 @@ export const BUILTIN_DANGER_RULES: readonly Rule[] = [
 		id: "bd-001",
 		tool: "bash",
 		// 覆盖分离 flag 写法（rm -f -r /）与合并 flag（rm -rf）：
-		// `rm` 后任意 token 序列中出现含 `r` 的短 flag（-r/-fr/-rf/-frw...）或 --recursive。
-		pattern: "\\brm\\b.*(-[^\\s]*r|--recursive)",
+		// `rm` 后任意 token 序列中出现含 `r` 的短 flag 簇（-r/-fr/-rf/-xr...）或 --recursive。
+		// 注意：单 `-` 前必须锚定空白（\s-），否则 `.*` 会回溯到长选项 `--verbose` 的
+		// 第二个 `-`，把 `-ver` 当成短 flag 簇而误命中。`\s-` 确保只匹配 token 起始的
+		// 单连字符短 flag 簇，不会误吃 `--verbose` / `--dir` 等长选项中的 r。
+		pattern: "\\brm\\b.*(\\s-(?:[a-zA-Z]*r)|--recursive)",
 		action: "deny",
 		source: "builtin-danger",
 		description: "recursive delete",
@@ -585,8 +612,11 @@ export const BUILTIN_DANGER_RULES: readonly Rule[] = [
 		id: "bd-007",
 		tool: "bash",
 		// 覆盖分离 flag（git clean -d -f）与合并 flag（git clean -fd）：
-		// `git clean` 后任意位置出现含 `f` 的短 flag（-f/-fd/-df）或 --force。
-		pattern: "\\bgit\\s+clean\\b.*(-[^\\s]*f|--force)",
+		// `git clean` 后任意位置出现含 `f` 的短 flag 簇（-f/-fd/-df）或 --force。
+		// 注意：单 `-` 前必须锚定空白（\s-），否则 `.*` 会回溯到长选项 `--files` 的
+		// 第二个 `-`，把 `-fil` 当成短 flag 簇而误命中。`\s-` 确保只匹配 token 起始的
+		// 单连字符短 flag 簇，不会误吃 `--files` 等长选项中的 f。
+		pattern: "\\bgit\\s+clean\\b.*(\\s-(?:[a-zA-Z]*f)|--force)",
 		action: "deny",
 		source: "builtin-danger",
 		description: "git clean --force",

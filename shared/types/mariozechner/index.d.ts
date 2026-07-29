@@ -378,10 +378,6 @@ declare module "@earendil-works/pi-ai" {
 	export * from "@mariozechner/pi-ai";
 	export type Message = any;
 }
-declare module "@earendil-works/pi-ai/compat" {
-	export * from "@mariozechner/pi-ai";
-	export type Message = any;
-}
 
 declare module "typebox" {
 	export const Type: {

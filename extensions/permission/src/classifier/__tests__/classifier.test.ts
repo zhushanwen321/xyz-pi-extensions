@@ -11,7 +11,7 @@
  *  - C10 timeout 秒→毫秒传递
  *  - C11 G3 关键修正：stopReason='error' / 'aborted' → fallback（即使 result() resolve）
  */
-import type { AssistantMessageEventStream } from "@earendil-works/pi-ai";
+import type { AssistantMessageEventStream, SimpleStreamOptions } from "@earendil-works/pi-ai";
 import { describe, expect, it } from "vitest";
 
 import type { ClassifierConfig, ToolInvocationContext } from "../../types.js";
@@ -85,6 +85,19 @@ function makeDeps(over: Partial<ClassifierDeps> = {}): ClassifierDeps {
 		streamSimple: () => mockStreamFromMessage(textMessage('{"outcome":"allow","risk_level":"low","reasoning":"ok","confidence":0.9}')),
 		...over,
 	};
+}
+
+/** 捕获 streamSimple 调用参数的 spy（options 含 apiKey 等）。 */
+function capturingStreamSimple(message: unknown): {
+	spy: ClassifierDeps["streamSimple"];
+	getLastOptions: () => SimpleStreamOptions | undefined;
+} {
+	let lastOptions: SimpleStreamOptions | undefined;
+	const spy: ClassifierDeps["streamSimple"] = (_model, _context, options?) => {
+		lastOptions = options;
+		return mockStreamFromMessage(message);
+	};
+	return { spy, getLastOptions: () => lastOptions };
 }
 
 // ──────────────────────── C1-C4: happy path ────────────────────────
@@ -221,5 +234,52 @@ describe("CT4 / C11: G3 — result() 不 reject，必须显式检查 stopReason"
 		}));
 		const r = await classifier.classifyRisk(CTX, CONFIG);
 		expect(r.outcome).toBe("allow");
+	});
+});
+
+// ──────────────────────── CT5: apiKey 透传到 streamSimple options ────────────────────────
+
+describe("CT5: resolved.apiKey 透传到 streamSimple options", () => {
+	it("resolved model 含 apiKey → streamSimple 收到的 options.apiKey 是该值", async () => {
+		const { spy, getLastOptions } = capturingStreamSimple(
+			textMessage('{"outcome":"allow","risk_level":"low","reasoning":"x","confidence":0.9}'),
+		);
+		const classifier = createClassifier(makeDeps({
+			resolveModel: () => ({ ...FIXED_MODEL, apiKey: "sk-test-secret-key-12345" }),
+			streamSimple: spy,
+		}));
+		const r = await classifier.classifyRisk(CTX, CONFIG);
+		expect(r.outcome).toBe("allow");
+		const options = getLastOptions();
+		expect(options).toBeDefined();
+		expect(options?.apiKey).toBe("sk-test-secret-key-12345");
+	});
+
+	it("resolved model 无 apiKey → streamSimple options 不含 apiKey 字段", async () => {
+		// FIXED_MODEL 无 apiKey → options 不含 apiKey 键（spread 条件不触发）
+		const { spy, getLastOptions } = capturingStreamSimple(
+			textMessage('{"outcome":"allow","risk_level":"low","reasoning":"x","confidence":0.9}'),
+		);
+		const classifier = createClassifier(makeDeps({ streamSimple: spy }));
+		await classifier.classifyRisk(CTX, CONFIG);
+		const options = getLastOptions();
+		expect(options).toBeDefined();
+		expect("apiKey" in (options as object)).toBe(false);
+	});
+
+	it("apiKey 与 timeoutMs/signal 共存于 options", async () => {
+		// 验证 apiKey 与 timeoutMs 同时透传不互相覆盖（spread 合并正确）
+		const { spy, getLastOptions } = capturingStreamSimple(
+			textMessage('{"outcome":"allow","risk_level":"low","reasoning":"x","confidence":0.9}'),
+		);
+		const classifier = createClassifier(makeDeps({
+			resolveModel: () => ({ ...FIXED_MODEL, apiKey: "k9" }),
+			streamSimple: spy,
+		}));
+		// CONFIG.timeout=90 → timeoutMs=90000
+		await classifier.classifyRisk(CTX, CONFIG);
+		const options = getLastOptions();
+		expect(options?.apiKey).toBe("k9");
+		expect(options?.timeoutMs).toBe(90_000);
 	});
 });

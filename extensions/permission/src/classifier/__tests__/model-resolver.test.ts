@@ -97,6 +97,19 @@ describe("MRT2: flattenModels", () => {
 		expect(cheap?.hasApiKey).toBe(true);
 		expect(noauth?.hasApiKey).toBe(false);
 	});
+
+	it("apiKey 值从 provider.apiKey 透传（MRT2 补充：不只断言 hasApiKey 布尔）", () => {
+		const entries = flattenModels(MODELS_JSON);
+		const cheap = entries.find((e) => e.id === "mini");
+		const noauth = entries.find((e) => e.id === "ultra-cheap");
+		// 有 apiKey 的 provider：apiKey 字段透传真实值（"k1"）
+		expect(cheap?.apiKey).toBe("k1");
+		// 无 apiKey 的 provider：apiKey 字段为 undefined（而非空串）
+		expect(noauth?.apiKey).toBeUndefined();
+		// 同 provider 下所有 model 共享 provider.apiKey
+		const big = entries.find((e) => e.id === "big");
+		expect(big?.apiKey).toBe("k1");
+	});
 });
 
 describe("MRT3: findCheapestModel", () => {
@@ -148,5 +161,13 @@ describe("MRT4: resolveClassifierModel", () => {
 		expect(r?.baseUrl).toBe("http://x");
 		expect(r?.name).toBe("mini"); // 无 name → fallback 到 id
 		expect(r?.inputCost).toBeCloseTo(0.1);
+	});
+
+	it("ResolvedModel 携带 apiKey 值（MRT4 补充：透传给 streamSimple 用）", () => {
+		// reviewer 指出 MRT4 只断言 hasApiKey，没断言 apiKey 值。补断言。
+		const auto = resolveClassifierModel("auto", MODELS_JSON);
+		expect(auto?.apiKey).toBe("k1"); // cheap-co 的 apiKey
+		const explicit = resolveClassifierModel("cheap-co/big", MODELS_JSON);
+		expect(explicit?.apiKey).toBe("k1");
 	});
 });

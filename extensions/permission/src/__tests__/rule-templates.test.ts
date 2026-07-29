@@ -109,6 +109,17 @@ describe("RT2: 模板 build（G4 wildcard pattern）", () => {
 		expect(built.action).toBe("allow");
 	});
 
+	it("allow-subcmd __any__：退化为 allow-family 语义（pattern:'git *'）", () => {
+		const built = allowSubcmdTemplate.build({ cmd: "git", subcmd: "__any__" });
+		expect(built.pattern).toBe("git *");
+		expect(built.action).toBe("allow");
+	});
+
+	it("allow-subcmd undefined subcmd：也退化为 allow-family", () => {
+		const built = allowSubcmdTemplate.build({ cmd: "npm" });
+		expect(built.pattern).toBe("npm *");
+	});
+
 	it("custom：直接用 selections 字段组装", () => {
 		const built = customTemplate.build({
 			pattern: "rm -rf *",

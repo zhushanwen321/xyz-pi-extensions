@@ -74,6 +74,11 @@ export default function permissionExtension(pi: ExtensionAPI): void {
 		config = loadAndWatchConfig(getConfigPath(), (msg) => console.warn(msg));
 	}
 
+	// W6 T2：footer invalidator。session_start 注册 footer 时由 registerPermissionFooter
+	// 返回（headless/mock 返回 noop）。mode/enabled 切换成功后调用，使 footer 立即重绘
+	// 新标签（FooterHandle.render 有缓存，不 invalidate 会显示旧 mode 直到 resize）。
+	let invalidateFooter: () => void = () => {};
+
 	// ──────────────────────── session_start：重载配置 + 注册 footer ────────────────────────
 	pi.on("session_start", (_event: unknown, ctx: ExtensionContext) => {
 		refreshConfig();
@@ -81,8 +86,9 @@ export default function permissionExtension(pi: ExtensionAPI): void {
 		// 单例限制：Pi 只有一个 footer 槽位，会覆盖（或被覆盖）其他扩展的 footer
 		// （如 @zhushanwen/pi-statusline）。已知限制，README 注明。
 		// getMode/getEnabled 闭包读最新 config（session 内 mode 可变）。
-		// registerPermissionFooter 内部 duck typing：headless/mock ctx 无 setFooter/theme 时跳过。
-		registerPermissionFooter(
+		// registerPermissionFooter 内部 duck typing：headless/mock ctx 无 setFooter/theme 时
+		// 跳过，返回 noop invalidator。
+		invalidateFooter = registerPermissionFooter(
 			ctx.ui as { setFooter?: unknown; theme?: unknown },
 			() => config.mode,
 			() => config.enabled,
@@ -172,6 +178,8 @@ export default function permissionExtension(pi: ExtensionAPI): void {
 				const result = saveConfig(newConfig);
 				if (result.success) {
 					config = newConfig; // 更新闭包状态
+					// footer 仅显示 mode + enabled；切换成功后刷缓存 + 重绘，避免显示旧 mode。
+					invalidateFooter();
 				}
 				return result;
 			});
@@ -243,9 +251,9 @@ async function processToolCall(
 				ctx.ui.custom<T>(factory as Parameters<typeof ctx.ui.custom<T>>[0], options),
 			// W6 T9 G3：Reject-with-Reason。ctx.ui.input 存在则透传（采集真实拒绝理由）。
 			// approval.ts 的 collectRejectReason 会用 typeof 判断是否可用，不可用则 fallback。
-				...(typeof ctx.ui.input === "function"
-					? { input: (title: string, placeholder?: string, opts?: Parameters<typeof ctx.ui.input>[2]) => ctx.ui.input(title, placeholder, opts) }
-					: {}),
+			...(typeof ctx.ui.input === "function"
+				? { input: (title: string, placeholder?: string, opts?: Parameters<typeof ctx.ui.input>[2]) => ctx.ui.input(title, placeholder, opts) }
+				: {}),
 		},
 	};
 	const deps: CheckPermissionDeps = createPipelineDeps(approvalCtx);

@@ -104,6 +104,11 @@ describe("BT-safe-base64: base64 flag 子检查", () => {
 		expect(isKnownSafeCommand(["base64", "--output=out.bin"])).toBe(false);
 		expect(isKnownSafeCommand(["base64", "-ob64.txt"])).toBe(false); // 合并 flag
 	});
+
+	it("base64 -do（合并 -d -o）→ unsafe（G4: 合并 flag 非首位）", () => {
+		expect(isKnownSafeCommand(["base64", "-do", "out.bin"])).toBe(false);
+		expect(isKnownSafeCommand(["base64", "-fo"])).toBe(false);
+	});
 });
 
 describe("BT-safe-find: find flag 子检查", () => {
@@ -213,6 +218,10 @@ describe("BT-safe-sort: sort flag 子检查", () => {
 		expect(isKnownSafeCommand(["sort", "--output=out.txt"])).toBe(false);
 		expect(isKnownSafeCommand(["sort", "-oout.txt"])).toBe(false);
 	});
+	it("sort -fo（合并 -f -o）→ unsafe", () => {
+		expect(isKnownSafeCommand(["sort", "-fo", "out.txt"])).toBe(false);
+		expect(isKnownSafeCommand(["sort", "-nfo", "out.txt"])).toBe(false); // -n -f -o
+	});
 });
 
 describe("BT-safe-iconv: iconv flag 子检查", () => {
@@ -223,6 +232,15 @@ describe("BT-safe-iconv: iconv flag 子检查", () => {
 		expect(isKnownSafeCommand(["iconv", "-o", "out.txt"])).toBe(false);
 		expect(isKnownSafeCommand(["iconv", "--output", "out.txt"])).toBe(false);
 	});
+	it("iconv -fo（合并）→ unsafe", () => {
+		expect(isKnownSafeCommand(["iconv", "-fo", "out.txt"])).toBe(false);
+	});
+	it("iconv --output= → unsafe", () => {
+		expect(isKnownSafeCommand(["iconv", "--output=out.txt"])).toBe(false);
+	});
+	it("iconv -oout（合并首字符）→ unsafe", () => {
+		expect(isKnownSafeCommand(["iconv", "-oout.txt"])).toBe(false);
+	});
 });
 
 describe("BT-safe-shuf: shuf flag 子检查", () => {
@@ -232,6 +250,12 @@ describe("BT-safe-shuf: shuf flag 子检查", () => {
 	it("shuf -o → unsafe", () => {
 		expect(isKnownSafeCommand(["shuf", "-o", "out.txt"])).toBe(false);
 		expect(isKnownSafeCommand(["shuf", "--output=out.txt"])).toBe(false);
+	});
+	it("shuf -fo（合并）→ unsafe", () => {
+		expect(isKnownSafeCommand(["shuf", "-fo", "out.txt"])).toBe(false);
+	});
+	it("shuf --output（空格形式）→ unsafe", () => {
+		expect(isKnownSafeCommand(["shuf", "--output", "out.txt"])).toBe(false);
 	});
 });
 
@@ -244,6 +268,9 @@ describe("BT-safe-date: date flag 子检查", () => {
 		expect(isKnownSafeCommand(["date", "-s", "2025-01-01"])).toBe(false);
 		expect(isKnownSafeCommand(["date", "--set", "2025-01-01"])).toBe(false);
 		expect(isKnownSafeCommand(["date", "--set=2025-01-01"])).toBe(false);
+	});
+	it("date -ds（合并 -d -s）→ unsafe", () => {
+		expect(isKnownSafeCommand(["date", "-ds", "2025-01-01"])).toBe(false);
 	});
 });
 
@@ -413,6 +440,29 @@ describe("C2: 危险正则覆盖分离 flag 写法（bd-001/003/007/008）", () 
 		// dry-run（无 f）不命中
 		expect(re.test("git clean -n")).toBe(false);
 		expect(re.test("git clean -d")).toBe(false);
+	});
+
+	it("bd-001: 长选项 --verbose 不误报（只匹配短 flag 簇的 r）", () => {
+		const re = patternFor("bd-001");
+		// 短 flag（原有覆盖）
+		expect(re.test("rm -rf /")).toBe(true);
+		expect(re.test("rm -fr /")).toBe(true);
+		expect(re.test("rm -f -r /")).toBe(true);
+		// 长选项含 r 但非 recursive → 不应命中
+		expect(re.test("rm --verbose file")).toBe(false);
+		expect(re.test("rm --dir foo")).toBe(false);
+		// --recursive 命中
+		expect(re.test("rm --recursive x")).toBe(true);
+		// 短 flag 簇中 r 在任意位置
+		expect(re.test("rm -xr /tmp")).toBe(true);
+	});
+
+	it("bd-007: 长选项 --files 不误报", () => {
+		const re = patternFor("bd-007");
+		expect(re.test("git clean -fd")).toBe(true);
+		expect(re.test("git clean --force")).toBe(true);
+		// 长选项含 f 但非 force → 不应命中
+		expect(re.test("git clean --files foo")).toBe(false);
 	});
 
 	it("bd-008: git checkout -- . 也命中（原来只匹配 `git checkout .`）", () => {

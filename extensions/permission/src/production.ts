@@ -13,10 +13,10 @@
  */
 
 // eslint-disable-next-line @typescript-eslint/ban-ts-comment
-// @ts-ignore - getApiProvider exists in dist/compat.js but is not re-exported from the main index; root tsc resolves it via stub but per-package tsc does not
+// @ts-ignore - getApiProvider resolves via root tsconfig stub but per-package tsc paths differ
 import { getApiProvider } from "@earendil-works/pi-ai";
 
-import { type ApprovalContext,requestUserApproval } from "./approval.js";
+import { type ApprovalContext, requestUserApproval } from "./approval.js";
 import { analyzeBashStructure } from "./ast/index.js";
 import { createClassifier } from "./classifier/index.js";
 import { resolveClassifierModel } from "./classifier/index.js";

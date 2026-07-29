@@ -390,3 +390,86 @@ describe("REC12: Wave 3 — 搜索过滤一致性（M5）", () => {
 		expect(text).toContain("Enter command name"); // startCommandInput 界面
 	});
 });
+
+// ──────────────────────── C1/C2/C3: _resetStageRefs 死锁修复回归 ────────────────────────
+
+describe("REC13: C3 — _resetStageRefs 多次 stage 转换不残留旧组件引用（死锁修复回归）", () => {
+	// C3 根因：switchTo*/startFill* 方法手动清理子组件引用时遗漏字段，
+	// 导致 handleInput 把输入路由到已清空的旧组件（输入死锁）。
+	// _resetStageRefs 集中清理 _searchInput/_commandList/_searchFocus/
+	// currentInput/currentList/customChildren，杜绝遗漏。
+	// 因这些字段是 private，通过行为验证：Esc 回退后再进 stage，
+	// 输入字符应作用于「新」组件而非残留的旧组件（不 crash、过滤正确）。
+	it("command-select → Esc 回退 → 再进 command-select：输入字符过滤新列表（不路由到旧组件）", () => {
+		const { comp } = createComp();
+		// 1. 进 command-select stage（add → allow-family）
+		comp.handleInput("\r"); // [+ Add rule] → add stage
+		comp.handleInput("\r"); // allow-family → command-select stage
+		expect(comp.render(80).join("\n")).toContain("Select command");
+		// 2. 输入字符到 searchInput（验证旧 _searchInput 活跃：能过滤列表）
+		comp.handleInput("g");
+		comp.handleInput("i");
+		let text = comp.render(80).join("\n");
+		expect(text).toMatch(/git/i); // 'gi' 前缀过滤出 git
+		// 3. Esc 回退：command-select 的 searchInput.onEscape → switchToListStage
+		//    → _resetStageRefs 清空 _searchInput/_commandList
+		comp.handleInput("\x1b");
+		text = comp.render(80).join("\n");
+		expect(text).toContain("Permission Rules"); // 回到 list stage
+		// 4. 再进 command-select stage（list → add → allow-family）
+		comp.handleInput("\r"); // [+ Add rule] → add stage
+		comp.handleInput("\r"); // allow-family → command-select stage（新建 _searchInput/_commandList）
+		expect(comp.render(80).join("\n")).toContain("Select command");
+		// 5. 关键：输入字符应作用于「新」searchInput → 过滤新 commandList
+		//    若旧引用残留，过滤会错乱或 crash。输入 'gi' 应再次过滤出 git。
+		comp.handleInput("g");
+		comp.handleInput("i");
+		text = comp.render(80).join("\n");
+		expect(text).toMatch(/git/i); // 新列表被正确过滤
+		// npm 不应出现（'gi' 不是 npm 前缀）—— 证明输入路由到新组件而非旧组件
+		expect(text).not.toMatch(/npm/i);
+	});
+
+	it("custom form → Esc 回退 → 再进 command-select：Tab/字符不误触发旧 customChildren", () => {
+		// 跨 fillKind 转换（custom → list → command-select）：
+		// customChildren 在 _resetStageRefs 被清空，再进 command-select 时
+		// handleInput 不应走 custom 分支（fillKind 已变为 command-select）。
+		const { comp } = createComp();
+		// 进 custom form：add → custom 模板（index 4）
+		comp.handleInput("\r"); // [+ Add rule]
+		for (let i = 0; i < 4; i++) comp.handleInput("\x1b[B"); // Down x4 → custom
+		comp.handleInput("\r"); // Enter → custom form
+		expect(comp.render(80).join("\n")).toContain("Custom Rule");
+		// Esc：pattern Input.onEscape → switchToListStage → _resetStageRefs 清 customChildren
+		comp.handleInput("\x1b");
+		expect(comp.render(80).join("\n")).toContain("Permission Rules");
+		// 再进 command-select
+		comp.handleInput("\r"); // [+ Add rule]
+		comp.handleInput("\r"); // allow-family → command-select
+		expect(comp.render(80).join("\n")).toContain("Select command");
+		// 输入字符 + Tab：不应 crash，不应误触发残留 customChildren 的 Tab 路由
+		comp.handleInput("g");
+		comp.handleInput("\t"); // Tab 切换搜索框↔列表（command-select 语义，非 custom Tab 循环）
+		// 不抛错 + 仍处于 command-select stage
+		const text = comp.render(80).join("\n");
+		expect(text).toContain("Select command");
+	});
+
+	it("连续多次 add↔list 转换不残留 currentList（Enter 选模板稳定生效）", () => {
+		// 多次 switchToAddStage/switchToListStage 循环：每次 _resetStageRefs 清 currentList，
+		// 新 currentList 正确赋值。验证连续进 add stage 选模板仍能正常进入 fill stage。
+		const { comp } = createComp();
+		for (let round = 0; round < 3; round++) {
+			// list → add
+			comp.handleInput("\r"); // [+ Add rule] → add stage
+			expect(comp.render(80).join("\n")).toContain("Select Template");
+			// add → list（Esc）
+			comp.handleInput("\x1b");
+			expect(comp.render(80).join("\n")).toContain("Permission Rules");
+		}
+		// 最后一次进 add 并选 allow-family：currentList 是新建的，onSelect 正常触发
+		comp.handleInput("\r"); // → add stage
+		comp.handleInput("\r"); // allow-family → command-select
+		expect(comp.render(80).join("\n")).toContain("Select command");
+	});
+});

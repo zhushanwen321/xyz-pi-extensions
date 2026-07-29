@@ -190,7 +190,17 @@ export const allowSubcmdTemplate: RuleTemplate = {
 	description: "Allow only a specific subcommand (e.g., git status, git log)",
 	build(selections): RuleWithoutId {
 		const cmd = selections.cmd ?? "unknown";
-		const subcmd = selections.subcmd ?? "unknown";
+		const subcmd = selections.subcmd;
+		// __any__ 哨兵：用户在 RPC 流程选了「all subcommands」→ 退化为 allow-family 语义，
+		// 避免拼成永不匹配的死规则 `<cmd> __any__ *`（与 deny-family 对称）。
+		if (subcmd === undefined || subcmd === "__any__") {
+			return {
+				tool: "bash",
+				pattern: `${cmd} *`,
+				action: "allow",
+				source: "user",
+			};
+		}
 		return {
 			tool: "bash",
 			pattern: `${cmd} ${subcmd} *`,

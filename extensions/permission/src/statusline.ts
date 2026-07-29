@@ -187,23 +187,40 @@ export function paletteFromTheme(theme: { fg(token: string, text: string): strin
  * SDK 未声明的 setFooter 类型。
  *
  * 防御：headless（json/print）模式或 mock ctx 可能无 setFooter/theme —— 此时跳过
- * footer 注册（footer 仅 TUI 有意义）。用 duck typing 检查，不抛异常。
+ * footer 注册（footer 仅 TUI 有意义），返回 noop invalidator。用 duck typing 检查，不抛异常。
  *
- * @param ctxUi ctx.ui 对象（需含 setFooter + theme，缺失则跳过）
+ * 返回 invalidator：调用它清 footer 渲染缓存 + 触发重绘（mode/enabled 切换后 footer
+ * 才会显示新标签）。FooterHandle 由 Pi 在 factory 内部创建，扩展拿不到，故 invalidator
+ * 通过闭包捕获 factory 内创建的 handle + tui 句柄。
+ *
+ * @param ctxUi ctx.ui 对象（需含 setFooter + theme，缺失则跳过，返回 noop）
  * @param getMode 返回当前 PermissionMode 的闭包
  * @param getEnabled 返回当前 enabled 状态的闭包
+ * @returns invalidator 函数（mode 切换成功后调用，使 footer 立即反映新 mode）
  */
 export function registerPermissionFooter(
 	ctxUi: { setFooter?: unknown; theme?: unknown },
 	getMode: () => PermissionMode,
 	getEnabled: () => boolean,
-): void {
+): () => void {
 	// duck typing：setFooter 必须是函数，theme 必须有 fg 函数（headless/mock 缺失则跳过）
-	if (typeof ctxUi.setFooter !== "function") return;
+	if (typeof ctxUi.setFooter !== "function") return () => {};
 	const theme = ctxUi.theme as { fg?: unknown } | undefined;
-	if (!theme || typeof theme.fg !== "function") return;
+	if (!theme || typeof theme.fg !== "function") return () => {};
 
 	const palette = paletteFromTheme(theme as { fg(token: string, text: string): string });
-	const factory = createPermissionFooter(getMode, getEnabled, palette);
+	// 闭包捕获：factory 被 Pi 调用时创建的 handle + tui，供 invalidator 刷缓存 + 重绘。
+	let handle: FooterHandle | undefined;
+	let tui: TuiHandle | undefined;
+	const factory = (t: TuiHandle, th: unknown, data: unknown): FooterHandle => {
+		tui = t;
+		const h = createPermissionFooter(getMode, getEnabled, palette)(t, th, data);
+		handle = h;
+		return h;
+	};
 	(ctxUi as unknown as UiWithFooter).setFooter(factory);
+	return () => {
+		handle?.invalidate();
+		tui?.requestRender();
+	};
 }
