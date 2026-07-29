@@ -3,7 +3,7 @@
  *
  * 用真实 fs + 临时目录（os.tmpdir + 随机子目录），不用 mock fs。
  */
-import { existsSync, mkdtempSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
@@ -52,7 +52,7 @@ describe("WT1: 默认配置生成（首次无配置文件）", () => {
 		const configPath = join(tempDir, "permission-config.json");
 		loadAndWatchConfig(configPath);
 
-		const content = require("node:fs").readFileSync(configPath, "utf-8");
+		const content = readFileSync(configPath, "utf-8");
 		expect(() => JSON.parse(content)).not.toThrow();
 	});
 });
@@ -168,7 +168,7 @@ describe("WT5: mtime 缓存（文件变化时重读）", () => {
 		// 注意：writeFileSync 可能不改变 mtime（如果写入太快），
 		// 用 utimes 显式更新 mtime 确保变化
 		const future = new Date(Date.now() + 2000);
-		require("node:fs").utimesSync(configPath, future, future);
+		utimesSync(configPath, future, future);
 
 		const second = loadAndWatchConfig(configPath);
 		expect(second.mode).toBe("strict");
@@ -185,7 +185,7 @@ describe("WT7: 保存配置", () => {
 
 		// 文件被写入
 		expect(existsSync(configPath)).toBe(true);
-		const content = require("node:fs").readFileSync(configPath, "utf-8");
+		const content = readFileSync(configPath, "utf-8");
 		const parsed = JSON.parse(content);
 		expect(parsed.mode).toBe("strict");
 
@@ -196,7 +196,7 @@ describe("WT7: 保存配置", () => {
 
 	it("saveConfig 失败时返回 error（只读目录）", () => {
 		const readOnlyDir = join(tempDir, "readonly");
-		require("node:fs").mkdirSync(readOnlyDir, { mode: 0o500 });
+		mkdirSync(readOnlyDir, { mode: 0o500 });
 		const configPath = join(readOnlyDir, "permission-config.json");
 
 		const result = saveConfig(DEFAULT_CONFIG, configPath);
