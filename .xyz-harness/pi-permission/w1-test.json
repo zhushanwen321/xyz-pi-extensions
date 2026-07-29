@@ -1,0 +1,42 @@
+{
+  "testJudgment": {
+    "necessityMet": "W1 成功交付扩展骨架并修复 reviewer 的 2 critical + 5 major 问题。types.ts 声明全部类型、config.ts 实现 loadAndWatchConfig（mtime+size 双 key 缓存 + 深拷贝返回）+ saveConfig（信任调用方 + 原子写）、commands.ts 实现 /permission 命令、index.ts 扩展工厂（session_start + registerCommand + tool_call 占位不读 config）。statusline 推到 W6（ctx.ui.setFooter TUI Component，W1 不做）。24 测试全过，typecheck 零错误。",
+    "sufficiencyMet": {
+      "gapsConfirmed": [
+        "design-review gap 1（statusline API）：reviewer 确认 pi.on('statusline') 不存在，statusline 扩展用 ctx.ui.setFooter。W1 决定推到 W6，移除无效的 statusline 注册。gap 已解决（推迟而非删除）。",
+        "design-review gap 2（CommandDefinition 结构）：确认 pi.registerCommand(name, {description, handler}) handler 返回 Promise<void>，typecheck 通过。gap 已解决。"
+      ],
+      "gapsNewlyFound": [
+        "reviewer 发现 statusline 集成需要 ctx.ui.setFooter 的 TUI Component（render/width 绘制逻辑），比预期复杂，W1 不适合做。已在 plan 的 W6 加入 statusline（W6 原是测试+文档，现追加 statusline TUI）。这个 plan 变更在 W6 clarify 时处理。",
+        "config 缓存的 mtime+size 双 key 仍有理论边界：同一 mtime 同一 size 但内容不同（极端罕见，saveConfig 用 rename 原子写 + content 长度通常变化，实际不会触发）。不阻塞。"
+      ],
+      "overlapsConfirmed": [],
+      "note": "所有 9 个 testCases 通过（config 13 测试 + types 6 + extension 5）。reviewer 的 C1/C2/M1-M5/m1/m4 已修复（M5 模块级 cache 是有意设计——配置文件是跨 session 共享的单一文件，mtime+size 缓存对多 session 读是安全的，saveConfig 后各 session 在 session_start/tool_call/command 时重读；不违反 session 隔离的意图，因为隔离的是闭包 let config 不是 cache）。"
+    },
+    "alternativesReconsidered": "reviewer 的修复方向全部采纳：statusline 推迟而非用错误 API、tool_call 不读 config、saveConfig 不 normalize、深拷贝防污染、mtime+size 双 key。types.ts 统一声明仍然正确（W2-W5 import 同一来源）。无替代方案需重新考虑。",
+    "tradeoffCostRealized": [
+      {
+        "tradeoffRef": "WT1",
+        "costRealized": true,
+        "note": "types.ts ~170 行含 W1 不用的类型，成本兑现但可接受。"
+      },
+      {
+        "tradeoffRef": "WT2",
+        "costRealized": true,
+        "note": "tool_call 占位放行，/permission 切到 strict 后不立即生效（W5 才实现管道）。成本兑现，但 W1 已去掉 statusline 显示（原计划用 statusline 提示模式），改用 /permission status 查询。"
+      }
+    ],
+    "riskOutcome": [
+      {
+        "riskRef": "WR1",
+        "outcome": "mitigated",
+        "note": "Pi SDK API 基本符合预期，但 statusline 事件不存在是意外。已通过移除该注册 + 推到 W6 缓解。registerCommand 的 handler 返回类型需 Promise<void>（reviewer 发现后修复）。"
+      },
+      {
+        "riskRef": "WR2",
+        "outcome": "not-materialized",
+        "note": "getConfigPath() 路径解析正确，config.test.ts 用临时目录验证通过。"
+      }
+    ]
+  }
+}

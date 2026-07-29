@@ -1,0 +1,49 @@
+{
+  "execReviewJudgment": {
+    "readability": {
+      "score": 4,
+      "issues": [
+        "config.ts 的 CacheEntry/cloneConfig/normalize 等辅助函数较多，新读者需线性扫一遍才理解全貌"
+      ]
+    },
+    "architecture": {
+      "score": 4,
+      "issues": [
+        "statusline 集成缺失（推到 W6），原 plan 声明要做但 reviewer 发现 SDK API 不支持 pi.on('statusline')"
+      ]
+    },
+    "codeSmells": {
+      "items": [
+        "commands.ts 的 modeHighlight 函数（返回 'YOLO (yolo)' 格式）略冗余，可简化"
+      ],
+      "severity": "low"
+    },
+    "layerSpecific": {
+      "testCodeQuality": {
+        "score": 4,
+        "issues": [
+          "commands.ts handlePermissionCommand 的各种输入分支（无参数/status/合法 mode/非法 mode/已同 mode）未独立单元测试，只通过 extension.test.ts 间接测试"
+        ]
+      },
+      "mockFidelityNote": "extension.test.ts 用 mock pi 对象（记录 registerCommand/on 调用），不依赖真实 Pi 运行时。mock 充分覆盖了注册逻辑和 handler 调用，但无法验证真实 Pi 环境下的 ctx.ui.notify 行为（需 W6 集成测试或 manual）。"
+    },
+    "overallVerdict": "pass",
+    "followupActions": [
+      {
+        "description": "W6 追加 statusline TUI Component（ctx.ui.setFooter + render 绘制模式图标）",
+        "priority": "medium",
+        "targetScope": "next-wave"
+      },
+      {
+        "description": "W6 或后续：/permission 交互式方向键菜单（ctx.ui.custom + 自定义 Component）",
+        "priority": "low",
+        "targetScope": "next-wave"
+      },
+      {
+        "description": "W6 补 commands.ts handlePermissionCommand 的独立单元测试（各种输入分支）",
+        "priority": "medium",
+        "targetScope": "next-wave"
+      }
+    ]
+  }
+}

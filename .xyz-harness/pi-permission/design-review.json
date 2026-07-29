@@ -1,0 +1,84 @@
+{
+  "designReviewJudgment": {
+    "necessity": "Pi 当前默认 yolo 无防护，是 5 个竞品里最激进的选择（Claude Code default=manual 需审批、Codex default=on-request、OpenCode default=yolo 但有声明式规则、ZCode default=build risky 才问）。用户明确要四档模式，解决 yolo 的安全缺口同时保留高频用户的无感体验。三层管道（AST+规则+AI）是竞品综合最佳实践：Codex 的 AST 白名单最严格、OpenCode 的声明式规则最灵活、pi-permission-system 的 AI Racing 零延迟。Pi 无 OS 沙箱是根本约束，必须把 Codex 依赖沙箱的安全责任全压到软件层（AST+AI+审批），这个设计是对该约束的正确回应。",
+    "sufficiency": {
+      "gaps": [
+        "Subagent（非 UI 上下文）的 ask 转发未在当前 split 明确——pi-permission-system 有 permission-forwarding.ts 处理 subagent 无 UI 时的 ask 转发到主 session。W5 应包含此能力，但 inheritedItemIds 未列。补救：W5 实现时参考 pi-permission-system permission-forwarding.ts，不单独拆 wave（属于 Pi 集成的一部分）。",
+        "MCP 工具的权限粒度未明确——当前 Rule.tool 用 wildcard 匹配 toolName，MCP 工具名是 'mcp__server__tool' 格式（Claude Code 约定），需确认 Pi 的 MCP 工具命名。补救：W5 实现时核实 Pi MCP 工具名格式，Rule.tool 直接匹配即可（不需要单独的 mcp 类别）。",
+        "用户审批决策的 'always' 持久化粒度未在 dataModels 明确——DM5 的 userRules 是用户主动配置的规则，审批时勾 'always' 自动生成的规则应该存哪里？补救：W5 实现时，审批 'always' 决策追加到 config 的 userRules 数组（带 description 标注 auto-generated），与用户手动配置的规则统一管理。"
+      ],
+      "overlaps": [
+        "W2 AST 分析和 W3 规则引擎都处理 'bash 命令安全性'，但职责正交无重叠：W2 只做结构检查（有无危险语法结构），W3 做语义匹配（命令名+参数是否在白名单）。W2 输出 clean=true 时 W3 才查白名单，clean=false 跳过 W3 直接进 W4 AI。边界清晰。",
+        "W4 AI Classifier 和 W5 Racing 都涉及 AI 调用，但 W4 是纯 classifyRisk 函数（依赖注入可独立测试），W5 是编排（raceClassifierAndUser 组合 W4 + 用户 UI）。边界清晰。"
+      ],
+      "meceNote": "6 个 wave 的拆分按模块边界（状态机/AST/规则/AI/编排/测试），每个 wave 产出独立可测模块。W1-W4 可并行（W2/W3/W4 无互相依赖，W1 无依赖），W5 依赖 W1-W4（编排层），W6 依赖 W5（测试整体）。依赖图无环，拆分 MECE。三个 gap 都是实现细节级别，不影响 wave 拆分边界，在 W5 实现时补救。"
+    },
+    "alternatives": "考虑过的不选方案：(1) fork pi-permission-system 加四档模式——排除原因：包名混用（@earendil-works/pi-ai vs @mariozechner/pi-ai）+ 旧版事件名（event.type==='text' vs 当前 'text_delta'）+ 4 层规则合并对 MVP 过重，新建更干净。(2) 用 shell-quote 做粗筛不做 AST（MVP 方案）——排除原因：用户明确要完整版，shell-quote 对命令替换盲区是安全漏洞。(3) AI Classifier 带 transcript 上下文（Claude Code YoloClassifier 方式）——排除原因：用户明确不带（省 token），纯命令判断对 permission 场景够用。(4) 走 structured-output 扩展保证 AI 输出格式——排除原因：走主对话 token 成本过高（几千 vs 250）且 steer hook 污染主对话，不适合高频轻量判断。",
+    "tradeoffs": [
+      {
+        "id": "T1",
+        "decision": "选 web-tree-sitter wasm 而非原生绑定",
+        "reason": "Pi 扩展通过 pi install 分发，不能假设用户机器有 C++ 工具链；原生绑定 Node 24 编译失败是硬伤",
+        "cost": "体积 5.7MB（vs 原生 19.8MB 但含 C 源；vs shell-quote 42KB 但能力弱）；首次 wasm 编译 ~几十 ms 延迟；异步 init API 略繁琐"
+      },
+      {
+        "id": "T2",
+        "decision": "AI Classifier 直接调 streamSimple 而非走主对话/子进程",
+        "reason": "高频轻量判断需省 token 省延迟；同进程调用继承主进程 provider 配置",
+        "cost": "无法复用主对话上下文（不带 transcript）；需自己写 JSON 容错（vs structured-output 的 ajv 强校验）；AI 判断与主对话隔离，agent 看不到 AI 的推理过程"
+      },
+      {
+        "id": "T3",
+        "decision": "规则引擎用单层用户配置（~/.pi/agent/permission-config.json）而非 pi-permission-system 的 4 层合并",
+        "reason": "MVP 避免过度设计；4 层合并（global/project/agent/project-agent）对当前单一用户场景过重",
+        "cost": "未来若需项目级/agent 级差异化规则，需重构为多层合并；不支持 trusted floor（项目层不能放宽全局 deny）这种高级安全特性"
+      },
+      {
+        "id": "T4",
+        "decision": "Racing 设计（AI 与用户审批框并发）",
+        "reason": "零延迟——用户原本就要等审批，AI 在后台跑不抢时间；AI 快则自动决断省一次点击",
+        "cost": "实现复杂度增加（AbortController + Promise.race + 只 resolve 一次保证）；用户框可能闪现后立即关闭（AI 很快时）体验略奇怪；两条 lane 都失败的容错路径需仔细处理"
+      }
+    ],
+    "risks": [
+      {
+        "id": "R1",
+        "item": "web-tree-sitter wasm 在 Pi 运行时加载失败（路径定位错误/bundler 错误处理 .wasm/Node 版本不兼容）",
+        "severity": "high",
+        "mitigation": "W2 实现时：(1) 用 require.resolve('tree-sitter-bash/tree-sitter-bash.wasm') 定位路径，不硬编码；(2) package.json files 字段必须包含 'node_modules/web-tree-sitter/**' 和 'node_modules/tree-sitter-bash/*.wasm'（或打包时 copy wasm 到扩展目录）；(3) 启动时 try/catch init，失败 fallback 到 '所有 bash 命令 clean=false'（跳过 AST 直接进规则/AI 层），不阻塞扩展；(4) W6 测试覆盖 wasm 加载失败场景"
+      },
+      {
+        "id": "R2",
+        "item": "AI Classifier 模型不可用（models.json 无配置/API key 失效/provider 不支持）",
+        "severity": "medium",
+        "mitigation": "W4 实现：(1) getApiProvider 返回 undefined 时 fallback {outcome:'ask'}（ES7 已规划）；(2) model='auto' 时 findCheapestModel 找不到可用模型则 fallback；(3) 所有 AI 调用 try/catch，失败 fallback {outcome:'ask'}（fail-safe 交用户审批）；(4) 日志记录失败原因供调试"
+      },
+      {
+        "id": "R3",
+        "item": "Pi tool_call hook 的 ctx 结构与假设不符（event 字段名/ctx.ui 可用性/sessionManager API）",
+        "severity": "medium",
+        "mitigation": "W5 实现前：(1) 先读 pi-mono fork 的 coding-agent 包确认 tool_call event 结构（event.toolName? event.input? ctx.ui.custom?）；(2) 参考 xyz-pi-extensions 现有扩展（ask-user/vision）的 hook 用法；(3) W6 集成测试覆盖四档模式端到端"
+      },
+      {
+        "id": "R4",
+        "item": "Racing 竞态导致双重 resolve 或用户框泄漏（AI 和用户几乎同时决策）",
+        "severity": "medium",
+        "mitigation": "W5 实现：(1) 用 pi-permission-system classifier-racing.ts 的成熟模式（resolveUserDialog 外部 resolve + claim 原子标记）；(2) Promise.race 后败者调 AbortController.abort + 关闭用户框；(3) W6 测试覆盖两条 lane 同时完成、AI 先完成、用户先完成、都失败四种场景"
+      },
+      {
+        "id": "R5",
+        "item": "扩展体积过大导致 pi install 慢或 npm pack 失败（5.7MB wasm + web-tree-sitter）",
+        "severity": "low",
+        "mitigation": "W6 验证：(1) npm pack --dry-run 检查 tarball 大小和文件清单；(2) package.json files 字段精确包含所需文件避免打包多余 .node/.cjs；(3) 如体积超标考虑只打包 .wasm 不打包 web-tree-sitter 的 sourcemap"
+      }
+    ],
+    "layerSpecific": {
+      "techChoiceRationale": "5 个 techChoice 都有 ≥2 个 alternatives + 对比 rationale。TC1（web-tree-sitter）的调研最扎实（researcher 实测 6 个库），排除理由具体（Node 24 编译失败/sh-syntax Cmd 空壳/bash-parser 8 年停滞）。TC2/TC3（LLM 调用+格式）基于 pi-mono 源码确认 + pi-permission-system 验证。TC4（规则引擎）选 OpenCode 风格而非 pi-permission-system 4 层合并，理由是 MVP 避免过度设计。TC5（状态管理）遵循 Pi 平台约束。",
+      "interfaceContractNote": "6 个 interface 签名清晰，输入/输出类型明确。I1（checkPermission）是主入口编排三层管道；I2-I4 是各层独立函数（可独立测试）；I5（Racing）组合 I4 + 用户 UI；I6（配置加载）独立。所有 interface 永不 throw（异常 fallback 到 ask/deny）。潜在问题：I5 的 showUserDialog 参数是注入的，W5 实现时需确认 Pi ctx.ui.custom 的 API 形态（ask-user 扩展有范例）。",
+      "dataModelSoundness": "5 个 dataModel 无冲突。DM1 PermissionMode 是 4 值枚举（yolo/auto/approve/strict）；DM2 Rule 的 source 字段区分内置 vs 用户（避免用户规则覆盖内置安全规则——但当前设计 last-match-wins 允许覆盖，需 W3 实现时决定是否禁止用户覆盖 builtin-safe 的 allow）；DM3 PermissionDecision 的 source 字段支持审计；DM4 ClassifierConfig 有合理默认值；DM5 配置文件 schema 完整。不变量：mode 字段必填，其他可选。",
+      "errorCoverage": "8 个 errorSpec 覆盖所有失败路径：AST 初始化/解析失败（ES1/2）、AI 调用/超时/解析失败（ES3/4/5）、配置解析失败（ES6）、provider 不存在（ES7）、Racing 全失败（ES8）。所有策略都是 fail-safe（fallback 到 ask 交用户审批）或 fail-closed（Racing 全失败时 deny 不放行）。未覆盖的边角：wasm 文件被杀毒软件删除（归入 ES1）、用户审批 UI 自身崩溃（归入 ES8）——可接受。",
+      "testabilityNote": "各层模块设计为可独立测试：I2 analyzeBashStructure（输入命令字符串，输出结构分析，纯函数除 wasm 加载外无副作用）、I3 matchRules（纯函数，输入 toolName+command+rules，输出匹配结果，零依赖）、I4 classifyRisk 用依赖注入模式（createClassifier(deps) 工厂，生产用 streamSimple，测试用 mock provider，参考 pi-permission-system ai-classifier.ts）、I5 raceClassifierAndUser 同样依赖注入（showUserDialog 和 classifier 都可 mock）。W6 测试策略：I2/I3 用真实输入测纯函数；I4 用 mock provider 测 JSON 解析容错和 fallback；I5 用 Promise 定时控制测竞态（AI 先/用户先/同时/都失败）；W5 集成测试用 Pi SDK 契约测试模板（参考 subagent-workflow 的 sdk-contract.test.ts）。",
+      "crossWaveContractNote": "跨 wave 接口契约对齐：W2 产出 BashAnalysis 给 W5（W5 据此决定走层2还是跳层3）；W3 产出 RuleMatchResult 给 W5（W5 据此决定 allow/deny/进层3）；W4 产出 ClassifierResult 给 W5（W5 据此决定 allow/deny/ask 或 fallback）；W1 产出 PermissionConfig（含 mode/rules/classifier）给 W5（W5 从 PermissionContext 读取）。W5 是编排层，依赖 W1 的 PermissionContext 类型 + W2 的 BashAnalysis + W3 的 RuleMatchResult + W4 的 ClassifierResult，这些类型定义在 W1 的 types.ts 里统一声明（W2/W3/W4 import 使用），避免跨 wave 类型定义碎片化。W6 测试所有跨 wave 边界。契约风险：W2 的 BashAnalysis.commands（string[][]）格式需与 W3 的 matchRules 输入对齐——W5 编排时把 commands 每个元素传给 matchRules 做规则匹配。"
+    }
+  }
+}

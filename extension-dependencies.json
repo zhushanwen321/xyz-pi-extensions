@@ -103,6 +103,11 @@
       "dependsOn": []
     },
     {
+      "name": "@zhushanwen/pi-permission",
+      "directory": "extensions/permission",
+      "dependsOn": []
+    },
+    {
       "name": "@zhushanwen/pi-scheduler",
       "directory": "extensions/scheduler",
       "dependsOn": []

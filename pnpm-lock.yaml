@@ -150,6 +150,28 @@ importers:
         specifier: ^4.1.8
         version: 4.1.10(@opentelemetry/api@1.9.0)(@types/node@24.13.3)(@vitest/coverage-v8@4.1.10)(vite@8.1.5(@types/node@24.13.3)(jiti@2.7.0)(yaml@2.9.0))
 
+  extensions/permission:
+    dependencies:
+      '@earendil-works/pi-coding-agent':
+        specifier: '*'
+        version: 0.82.1(ws@8.21.1)(zod@4.4.3)
+      tree-sitter-bash:
+        specifier: ^0.25.1
+        version: 0.25.1
+      web-tree-sitter:
+        specifier: ^0.26.11
+        version: 0.26.11
+    devDependencies:
+      '@earendil-works/pi-ai':
+        specifier: '*'
+        version: 0.82.1(ws@8.21.1)(zod@4.4.3)
+      '@earendil-works/pi-tui':
+        specifier: '*'
+        version: 0.82.1
+      vitest:
+        specifier: ^4.1.8
+        version: 4.1.10(@opentelemetry/api@1.9.0)(@types/node@24.13.3)(@vitest/coverage-v8@4.1.10)(vite@8.1.5(@types/node@24.13.3)(jiti@2.7.0)(yaml@2.9.0))
+
   extensions/plan:
     dependencies:
       '@earendil-works/pi-ai':
@@ -1643,6 +1665,10 @@ packages:
   natural-compare@1.4.0:
     resolution: {integrity: sha512-OWND8ei3VtNC9h7V60qff3SVobHr996CTwgxubgyQYEpg290h9J0buyECNNJexkFm5sOajh5G116RYA1c8ZMSw==}
 
+  node-addon-api@8.9.0:
+    resolution: {integrity: sha512-ekZMeaaIzSQTSpr7X2X3iJM7lTzgnx8ahAG9pJfT/7+14mlEM8ZYQ9cgCDvSSRbReFK0oHli3WrZdCiRsgAT9Q==}
+    engines: {node: ^18 || ^20 || >= 21}
+
   node-domexception@1.0.0:
     resolution: {integrity: sha512-/jKZoMpw0F8GRwl4/eLROPA3cfcXtLApP0QzLmUT/HuPCZWyB7IY9ZrMeKw2O/nFIqPQB3PVM9aYm0F312AXDQ==}
     engines: {node: '>=10.5.0'}
@@ -1651,6 +1677,10 @@ packages:
   node-fetch@3.3.2:
     resolution: {integrity: sha512-dRB78srN/l6gqWulah9SrxeYnxeddIG30+GOqK/9OlLVyLg3HPnr6SqOWTWOXKRwC2eGYCkZ59NNuSgvSrpgOA==}
     engines: {node: ^12.20.0 || ^14.13.1 || >=16.0.0}
+
+  node-gyp-build@4.8.4:
+    resolution: {integrity: sha512-LA4ZjwlnUblHVgq0oBF3Jl/6h/Nvs5fzBLwdEF4nuxnFdsfajde4WfxtJr3CaiH+F6ewcIB/q4jQ4UzPyid+CQ==}
+    hasBin: true
 
   obug@2.1.4:
     resolution: {integrity: sha512-4a+OsYv9UktOJKE+l1A4OufDgdRF9PifWj+tJnHURo/P+WOxpG4GzUFL9qCalmWauao6ogiG+QvnCovwPoyAWA==}
@@ -1910,6 +1940,14 @@ packages:
     resolution: {integrity: sha512-65P7iz6X5yEr1cwcgvQxbbIw7Uk3gOy5dIdtZ4rDveLqhrdJP+Li/Hx6tyK0NEb+2GCyneCMJiGqrADCSNk8sQ==}
     engines: {node: '>=8.0'}
 
+  tree-sitter-bash@0.25.1:
+    resolution: {integrity: sha512-7hMytuYIMoXOq24yRulgIxthE9YmggZIOHCyPTTuJcu6EU54tYD+4G39cUb28kxC6jMf/AbPfWGLQtgPTdh3xw==}
+    peerDependencies:
+      tree-sitter: ^0.25.0
+    peerDependenciesMeta:
+      tree-sitter:
+        optional: true
+
   ts-algebra@2.0.0:
     resolution: {integrity: sha512-FPAhNPFMrkwz76P7cdjdmiShwMynZYN6SgOujD1urY4oNm80Ou9oMdmbR45LotcKOXoy7wSmHkRFE6Mxbrhefw==}
 
@@ -2046,6 +2084,9 @@ packages:
     resolution: {integrity: sha512-d2JWLCivmZYTSIoge9MsgFCZrt571BikcWGYkjC1khllbTeDlGqZ2D8vD8E/lJa8WGWbb7Plm8/XJYV7IJHZZw==}
     engines: {node: '>= 8'}
 
+  web-tree-sitter@0.26.11:
+    resolution: {integrity: sha512-Q5Dm3YTIXSXuH6FxX6RuzX2Qwpc4DPGiYMU87Wg5Z8OIStiQFiUex4zMDc0vBTw78EphaYJacncJghCHzbZptg==}
+
   which@2.0.2:
     resolution: {integrity: sha512-BLI3Tl1TW3Pvl70l3yq3Y64i+awpwXqsGBYWkkqMtnbXgrMD+yj7rhW0kuEDxzJaYXGjEW5ogapKNMEKNMjibA==}
     engines: {node: '>= 8'}
@@ -2136,7 +2177,7 @@ snapshots:
       '@aws-sdk/types': 3.974.2
       '@smithy/core': 3.31.0
       '@smithy/fetch-http-handler': 5.6.12
-      '@smithy/node-http-handler': 4.7.3
+      '@smithy/node-http-handler': 4.9.12
       '@smithy/types': 4.16.1
       tslib: 2.8.1
 
@@ -3643,6 +3684,8 @@ snapshots:
 
   natural-compare@1.4.0: {}
 
+  node-addon-api@8.9.0: {}
+
   node-domexception@1.0.0: {}
 
   node-fetch@3.3.2:
@@ -3650,6 +3693,8 @@ snapshots:
       data-uri-to-buffer: 4.0.1
       fetch-blob: 3.2.0
       formdata-polyfill: 4.0.10
+
+  node-gyp-build@4.8.4: {}
 
   obug@2.1.4: {}
 
@@ -3873,6 +3918,11 @@ snapshots:
     dependencies:
       is-number: 7.0.0
 
+  tree-sitter-bash@0.25.1:
+    dependencies:
+      node-addon-api: 8.9.0
+      node-gyp-build: 4.8.4
+
   ts-algebra@2.0.0: {}
 
   ts-api-utils@2.5.0(typescript@6.0.3):
@@ -3955,6 +4005,8 @@ snapshots:
       - msw
 
   web-streams-polyfill@3.3.3: {}
+
+  web-tree-sitter@0.26.11: {}
 
   which@2.0.2:
     dependencies:

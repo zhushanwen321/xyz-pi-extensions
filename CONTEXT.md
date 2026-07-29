@@ -214,6 +214,33 @@ _Avoid_: trust list, whitelist
 workflow 节点验证模式分类，可选值 `internal` / `follow-up` / `none`。仅在 `ExecutionTraceNode.verifyStrategy?` 可选字段存在，**不**序列化到 JSONL。是 debug 辅助，不强制 AI 标注。
 _Avoid_: check mode, validation level
 
+### Permission
+
+**Permission Mode**
+`@zhushanwen/pi-permission` 扩展的四档权限模式，按严格等级从低到高：`yolo`（完全放行）/ `auto`（AST+规则+AI Classifier 三层管道）/ `approve`（规则+人工审批，无 AI）/ `strict`（全部审批）。通过 `/permission <mode>` 切换，持久化到 `~/.pi/agent/permission-config.json`。
+_Avoid_: 权限模式（口语可，正式文档用 Permission Mode）
+
+**Permission Pipeline（三层管道）**
+auto 模式的安全检查管道：层 1 AST 结构分析（tree-sitter-bash 检测危险结构）→ 层 2 规则匹配（白名单 + builtin-danger + user rules，last-match-wins）→ 层 3 AI Classifier + 用户审批竞速。任一层 allow 则放行，deny 则拒绝，ask 流向下游。
+_Avoid_: 权限管道
+
+**Permission Decision**
+checkPermission 的返回值，三态 `action`（allow/deny/ask）+ `reason` + `source`（mode/ast/rule/ai/user）+ 可选 `riskLevel`/`matchedRule`/`confidence`。checkPermission 永不 throw（fail-closed：异常 → ask）。
+_Avoid_: 决策结果
+
+**Permission Rule**
+层 2 规则匹配单元，字段含 `id`/`tool`（wildcard）/`pattern`（wildcard 或 builtin-danger 的 RegExp 源串）/`action`（allow/deny/ask）/`source`（builtin-safe/builtin-danger/user）。拼接顺序 `[...getDefaultRules(), ...userRules]`，last-match-wins 语义（user 可覆盖 builtin）。
+_Avoid_: 权限规则
+
+**AST Structure Analysis（层 1）**
+bash 命令的 tree-sitter-bash 结构分析。11 个 named node 白名单（program/list/pipeline/command 等）+ 6 个 anonymous token 白名单（`&&`/`||`/`;`/`|`/`"`/`'`）。非白名单节点（command_substitution/subshell/file_redirect/simple_expansion 等）→ `clean=false`，流向下游审批。fail-closed：wasm 加载失败/parse 异常/超长 → `parseError=true`。
+
+**AI Classifier（层 3）**
+auto 模式的 LLM 风险分类器，输出 `risk_level`（low/medium/high）+ `outcome`（allow/deny/ask）+ `reasoning` + `confidence`。与用户审批 UI 并行竞速：AI 先返回时按 outcome 分支（allow/deny 关闭对话框，ask 等用户）。WT7 偏差补丁：`low+allow+autoApproveLowRisk=false` → ask；`high+allow+autoDenyHighRisk=true` → deny。
+
+**Reject-with-Reason**
+用户拒绝工具调用时采集真实理由的机制（W6 T9 G3）。「受阻」可观测条件：`ctx.ui.input` 存在（typeof === 'function'）→ 弹文本输入框采集 reason（回传 agent 辅助理解）；缺失 → fallback 固定文案。RPC 分支已完整接入，TUI 分支保留简化 deny（TODO 后续迭代）。
+
 ## Flagged Ambiguities
 
 **"压缩"同时存在于 Pi 原生（Compaction）和 Context Engineering（L0/L1/L2）**

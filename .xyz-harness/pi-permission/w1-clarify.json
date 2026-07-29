@@ -1,0 +1,22 @@
+{
+  "clarifications": [
+    {
+      "id": "WC1",
+      "question": "W1 的交付边界是什么？哪些必须实现，哪些留给后续 wave？",
+      "resolution": "W1 必须实现：1) package.json（name=@zhushanwen/pi-permission, pi.extensions=['./index.ts'], type:module, keywords:['pi-package'], dependencies 含 @earendil-works/pi-ai, files 字段预留 wasm 位置）；2) index.ts re-export src/index.ts；3) src/index.ts 扩展工厂函数（export default permissionExtension(pi)），注册 /permission 命令 + session_start 初始化状态 + 占位的 tool_call hook（W1 里直接放行，W5 替换为管道）；4) src/types.ts 定义 PermissionMode/PermissionConfig/Rule/PermissionDecision 等全部类型（DM1-DM5，给后续 wave import）；5) src/config.ts 实现 I6 loadAndWatchConfig（读 ~/.pi/agent/permission-config.json + 默认配置 + mtime 缓存）；6) src/commands.ts 实现 /permission 命令（显示当前模式 + 切换四档）；7) statusline 集成（显示当前模式图标）。W1 不实现：AST（W2）、规则匹配（W3）、AI（W4）、管道编排（W5）。W1 的 tool_call hook 是占位：检查 mode，yolo 放行，其他模式也先放行（W5 替换）。",
+      "type": "grilling"
+    },
+    {
+      "id": "WC2",
+      "question": "/permission 命令的 UI 交互形态？参考哪个现有扩展？",
+      "resolution": "参考 ask-user 扩展的 ctx.ui.custom 交互模式（inline 渲染自定义 Component）。/permission 无参数时显示当前模式 + 四档选项列表（方向键选择 + Enter 确认 + Esc 取消），参考 pi-permission-system 的 config-modal.ts zellij-modal 模式。模式图标建议：yolo=⊘, auto=🛡, approve=?, strict=🔒（用文字图标，项目规范禁 emoji，用 lucide 或纯文本字符）。切换后立即写配置文件持久化 + 更新闭包状态 + 刷新 statusline。headless/RPC 模式（ctx.mode==='rpc'）下 /permission 命令走通道（参考 ask-user channel-handler 模式）。",
+      "type": "research"
+    },
+    {
+      "id": "WC3",
+      "question": "session_start 初始化做什么？状态如何隔离？",
+      "resolution": "session_start 回调里：1) 调 loadAndWatchConfig 读配置（每个 session 独立读，配置文件 mtime 变化时重读）；2) 把 config 存入闭包变量（不存模块级 let，遵循 Pi session 隔离约束）；3) 初始化 web-tree-sitter Parser（W2 提供，W1 里先不初始化或 try/catch）。配置变化的监听用 mtime 轮询（每次 tool_call 时检查，参考 pi-permission-system permission-manager.ts 模式），不用 fs.watch（Pi 运行时可能限制）。状态持久化用 config.json 文件（跨 session）+ ctx.sessionManager entries（session 内审批决策，W5 用）。",
+      "type": "research"
+    }
+  ]
+}

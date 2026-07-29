@@ -1,0 +1,216 @@
+{
+  "techChoices": [
+    {
+      "id": "TC1",
+      "area": "bash AST 解析",
+      "choice": "web-tree-sitter@0.26.11 + tree-sitter-bash@0.25.1（.wasm 文件）",
+      "alternatives": [
+        "原生 tree-sitter Node 绑定（Node 24 编译失败硬伤，排除）",
+        "shell-quote（对命令替换/子shell 盲区，只能做粗筛不能单独用）",
+        "sh-syntax（Cmd 变体数据不可遍历隐藏陷阱，排除）",
+        "bash-parser（8 年停滞，排除）"
+      ],
+      "rationale": "纯 wasm 零编译跨平台（Pi 扩展通过 pi install 分发，不能假设用户有 C++ 工具链），能力最强（与 Codex/Claude Code/OpenCode 同款 grammar），OpenCode 已验证可行。体积 5.7MB 可接受。调研报告 docs/research/permission/technical/03-bash-ast-libraries.md。"
+    },
+    {
+      "id": "TC2",
+      "area": "LLM 调用",
+      "choice": "@earendil-works/pi-ai 的 getApiProvider(api).streamSimple() 直接调",
+      "alternatives": [
+        "spawn pi 子进程（vision 扩展方式，进程启动开销大、无法做 Racing、token 成本高）",
+        "走主对话 + structured-output 扩展（token 成本过高，steer hook 污染主对话）"
+      ],
+      "rationale": "同进程调用继承主进程已注册的 provider，无需扩展初始化；不传 tools 字段=无工具调用省 token；~250 token total（system prompt ~150 + output ~50 + user prompt ~50）；与 pi-permission-system 同款方案已验证。调研报告 docs/research/permission/technical/01-pi-llm-invocation.md。注意用 @earendil-works/pi-ai（pi-mono 真实包名）不用 @mariozechner/pi-ai（alias）。"
+    },
+    {
+      "id": "TC3",
+      "area": "LLM 输出格式",
+      "choice": "JSON system prompt 强制 + 解析容错（正则提取 + JSON.parse + 字段验证）+ fallback 到 {outcome:'ask'}",
+      "alternatives": [
+        "structured-output 扩展 + ajv 校验（走主对话，token 成本过高，不适合高频轻量判断）"
+      ],
+      "rationale": "fail-safe 到 ask（解析失败交用户审批），temperature=0 提高确定性。pi-permission-system parseClassifierResponse 模式已验证可靠。调研报告 docs/research/permission/technical/02-llm-output-format.md。"
+    },
+    {
+      "id": "TC4",
+      "area": "规则引擎",
+      "choice": "OpenCode 风格 Rule[] + findLast 评估 + wildcard 匹配（* → .*, 末尾 ' *' 转可选分组）",
+      "alternatives": [
+        "pi-permission-system 的 4 层合并（global/project/agent/project-agent，对 MVP 过重）"
+      ],
+      "rationale": "声明式 allow/deny/ask 三态 + last-match-wins 天然适配白名单放行+黑名单拦截+灰区审批。wildcard 实现照搬 OpenCode packages/core/src/util/wildcard.ts（~14 行）。MVP 用单层用户配置（~/.pi/agent/permission-rules.json）+ 内置规则，不做多层合并。"
+    },
+    {
+      "id": "TC5",
+      "area": "模式状态管理",
+      "choice": "session_start 重建的闭包变量 + ctx.sessionManager entries 持久化 + config.json 文件",
+      "alternatives": [
+        "模块级 let（多 session 共享，违反 Pi 约束）"
+      ],
+      "rationale": "遵循 Pi 平台 session 隔离约束（AGENTS.md）。当前模式（yolo/auto/approve/strict）存闭包，用户审批决策的 always 规则存文件（跨 session）。参考 pi-permission-system extension-config.ts 模式。"
+    }
+  ],
+  "interfaces": [
+    {
+      "id": "I1",
+      "name": "checkPermission",
+      "signature": "async function checkPermission(input: PermissionCheckInput, ctx: PermissionContext): Promise<PermissionDecision>",
+      "contract": "三层管道主入口。\n\n输入 PermissionCheckInput: { toolName: string; command?: string; path?: string; toolInput?: unknown; cwd: string; agentName?: string }\n输入 PermissionContext: { mode: PermissionMode; rules: Rule[]; classifier?: ClassifierConfig; signal?: AbortSignal }\n\n返回 PermissionDecision: { action: 'allow'|'deny'|'ask'; reason: string; source: 'ast'|'rule'|'ai'|'mode'; riskLevel?: 'low'|'medium'|'high'; matchedRule?: Rule }\n\n契约：\n- mode='yolo' → 直接返回 {action:'allow', source:'mode'}\n- mode='strict' → 直接返回 {action:'ask', source:'mode'}（全部人工审批）\n- mode='auto'/'approve' → 走三层管道\n- 永不 throw，所有异常 fallback 到 {action:'ask', source:'mode', reason:'check failed: ...'}\n- 阻塞调用（AI 层可能耗时 1-90s），调用方需考虑超时"
+    },
+    {
+      "id": "I2",
+      "name": "analyzeBashStructure",
+      "signature": "async function analyzeBashStructure(command: string): Promise<BashAnalysis>",
+      "contract": "层1 AST 结构检查（仅 bash 工具调用）。\n\n返回 BashAnalysis: { clean: boolean; commands: string[][]; dangerousStructures: string[]; parseError: boolean }\n\n契约：\n- 用预加载的 web-tree-sitter Parser（启动时 init + Language.load 一次）\n- ALLOWED_KINDS 白名单遍历，非白名单节点记入 dangerousStructures\n- clean=true 表示命令只有 SimpleCommand（管道/&&/|| 等也在白名单），可进层2\n- clean=false 表示含命令替换/重定向/子shell等，跳过层2直接进层3\n- parseError=true 表示 AST 解析失败（malformed），按 dangerous 处理\n- Parser 未初始化时抛 Error（调用方 catch 后 fallback 到层2/3）"
+    },
+    {
+      "id": "I3",
+      "name": "matchRules",
+      "signature": "function matchRules(toolName: string, command: string | undefined, rules: Rule[]): RuleMatchResult",
+      "contract": "层2 规则匹配。\n\nRule: { id: string; tool: string; pattern: string; action: 'allow'|'deny'|'ask'; source: 'builtin-safe'|'builtin-danger'|'user' }\n返回 RuleMatchResult: { action: 'allow'|'deny'|'ask'; matchedRule?: Rule }（无匹配返回 {action:'ask'}）\n\n契约：\n- last-match-wins（rules 数组从后往前找第一个匹配）\n- tool 字段 wildcard 匹配 toolName（'*' 匹配全部）\n- pattern 字段 wildcard 匹配 command（'*' → .*, '?' → 单字符, 末尾 ' *' 转可选分组）\n- command 为 undefined 时只匹配 tool\n- 纯函数无副作用，可独立测试"
+    },
+    {
+      "id": "I4",
+      "name": "classifyRisk",
+      "signature": "async function classifyRisk(context: ToolInvocationContext, config: ClassifierConfig, signal: AbortSignal): Promise<ClassifierResult>",
+      "contract": "层3 AI Classifier。\n\n输入 ToolInvocationContext: { toolName: string; command?: string; path?: string; cwd: string; agentName?: string }\n输入 ClassifierConfig: { model: string; timeout: number; autoApproveLowRisk: boolean; autoDenyHighRisk: boolean }\n返回 ClassifierResult: { risk_level: 'low'|'medium'|'high'; outcome: 'allow'|'ask'|'deny'; reasoning: string; confidence: number }\n\n契约：\n- 用 getApiProvider(model.api).streamSimple() 同进程调用\n- system prompt ~150 token，user prompt 含 toolName/command/path/cwd/agentName\n- temperature=0, maxTokens=256, 不传 tools\n- JSON 输出 + parseClassifierResponse 容错\n- 失败/超时/解析失败 → fallback {risk_level:'medium', outcome:'ask'}\n- autoApproveLowRisk=false 时 low → ask；autoDenyHighRisk=false 时 high → ask\n- 永不 throw（所有异常 catch 后返回 fallback）"
+    },
+    {
+      "id": "I5",
+      "name": "raceClassifierAndUser",
+      "signature": "async function raceClassifierAndUser(ctx: PermissionContext, input: PermissionCheckInput, showUserDialog: () => Promise<UserDecision>): Promise<PermissionDecision>",
+      "contract": "Racing 设计（仅 auto 模式调用）。\n\nshowUserDialog: () => Promise<UserDecision>（调用方注入的审批 UI，UserDecision={approved:boolean,reason?:string,scope?:'once'|'session'|'always'}）\n\n契约：\n- Promise.race 同时跑 classifyRisk 和 showUserDialog\n- classifier 先返回且 outcome='allow'/'deny' → 用 AI 决策，关闭用户框\n- classifier 返回 'ask' 或失败 → fallback 到还在等待的 showUserDialog\n- 用户先决策 → abort classifier，用用户决策\n- AbortController 保证只 resolve 一次\n- 永不 throw"
+    },
+    {
+      "id": "I6",
+      "name": "loadAndWatchConfig",
+      "signature": "function loadAndWatchConfig(ctx: ExtensionContext): PermissionConfig",
+      "contract": "配置加载 + 热重载。\n\n返回 PermissionConfig: { mode: PermissionMode; rules: Rule[]; classifier: ClassifierConfig; enabled: boolean }\n\n契约：\n- 从 ~/.pi/agent/permission-config.json 读取（首次创建默认配置）\n- mtime 戳缓存避免重复读（pi-permission-system 模式）\n- 文件变化时自动重载（fs.watch 或每次 tool_call 时检查 mtime）\n- 解析失败 fallback 到默认配置 + 警告\n- 模式切换（/permission 命令）写入此文件持久化"
+    }
+  ],
+  "dataModels": [
+    {
+      "id": "DM1",
+      "name": "PermissionMode",
+      "format": "typescript",
+      "definition": "/** 四档权限模式，按严格等级排序 */\nexport type PermissionMode = 'yolo' | 'auto' | 'approve' | 'strict';\n\nexport const PERMISSION_MODES: PermissionMode[] = ['yolo', 'auto', 'approve', 'strict'];\n\nexport const MODE_DESCRIPTIONS: Record<PermissionMode, string> = {\n  yolo: '完全无防护，所有工具调用放行',\n  auto: '安全命令规则直接放行 + 非安全命令过 AI 审查 + AI 认为安全放行/AI 认为非安全人工审批',\n  approve: '自动模式去除 AI，规则匹配后安全放行、非安全直接人工审批',\n  strict: '全部审批',\n};",
+      "notes": "yolo=最低严格等级，strict=最高。模式间差异通过三层管道开关组合实现。"
+    },
+    {
+      "id": "DM2",
+      "name": "Rule",
+      "format": "typescript",
+      "definition": "/** 权限规则（层2 用） */\nexport interface Rule {\n  /** 唯一 id（用户规则用 'user-<n>'，内置用 'builtin-safe-<n>'/'builtin-danger-<n>'） */\n  id: string;\n  /** 工具名匹配模式，wildcard（'*' 匹配全部，'bash' 精确匹配） */\n  tool: string;\n  /** 命令匹配模式，wildcard（仅 bash 工具用，其他工具 undefined） */\n  pattern: string;\n  /** 决策动作 */\n  action: 'allow' | 'deny' | 'ask';\n  /** 规则来源 */\n  source: 'builtin-safe' | 'builtin-danger' | 'user';\n  /** 可选描述（UI 展示用） */\n  description?: string;\n}",
+      "notes": "last-match-wins：规则数组从后往前找第一个匹配。内置只读白名单 source='builtin-safe'，内置危险规则 source='builtin-danger'，用户自定义 source='user'。"
+    },
+    {
+      "id": "DM3",
+      "name": "PermissionDecision",
+      "format": "typescript",
+      "definition": "/** 权限决策结果 */\nexport interface PermissionDecision {\n  /** 最终动作 */\n  action: 'allow' | 'deny' | 'ask';\n  /** 人类可读的原因（UI 展示 + 拒绝理由回传给 agent） */\n  reason: string;\n  /** 决策来源（用于审计/调试） */\n  source: 'mode' | 'ast' | 'rule' | 'ai' | 'user';\n  /** AI 风险等级（仅 source='ai' 时） */\n  riskLevel?: 'low' | 'medium' | 'high';\n  /** 匹配的规则（仅 source='rule' 时） */\n  matchedRule?: Rule;\n  /** AI 置信度（仅 source='ai' 时） */\n  confidence?: number;\n}",
+      "notes": "action='allow'=放行，'deny'=拦截（agent 收到拒绝原因），'ask'=需人工审批。"
+    },
+    {
+      "id": "DM4",
+      "name": "ClassifierConfig",
+      "format": "typescript",
+      "definition": "/** AI Classifier 配置 */\nexport interface ClassifierConfig {\n  /** 是否启用 AI 层（auto 模式自动 true，其他模式忽略） */\n  enabled: boolean;\n  /** 模型：'auto'（选最便宜）或 'provider/model-id'（如 'zhipu/glm-4-flash'） */\n  model: string;\n  /** 超时秒数，默认 90 */\n  timeout: number;\n  /** 低风险是否自动放行，默认 true */\n  autoApproveLowRisk: boolean;\n  /** 高风险是否自动拦截（转人工审批），默认 true */\n  autoDenyHighRisk: boolean;\n}",
+      "notes": "model='auto' 时从 ~/.pi/agent/models.json 选 cost.input 最便宜的可用模型。"
+    },
+    {
+      "id": "DM5",
+      "name": "PermissionConfig（持久化格式）",
+      "format": "json-schema",
+      "definition": "{\n  \"type\": \"object\",\n  \"properties\": {\n    \"mode\": { \"type\": \"string\", \"enum\": [\"yolo\", \"auto\", \"approve\", \"strict\"] },\n    \"enabled\": { \"type\": \"boolean\", \"default\": true },\n    \"classifier\": {\n      \"type\": \"object\",\n      \"properties\": {\n        \"enabled\": { \"type\": \"boolean\", \"default\": true },\n        \"model\": { \"type\": \"string\", \"default\": \"auto\" },\n        \"timeout\": { \"type\": \"number\", \"default\": 90 },\n        \"autoApproveLowRisk\": { \"type\": \"boolean\", \"default\": true },\n        \"autoDenyHighRisk\": { \"type\": \"boolean\", \"default\": true }\n      }\n    },\n    \"userRules\": {\n      \"type\": \"array\",\n      \"items\": {\n        \"type\": \"object\",\n        \"properties\": {\n          \"tool\": { \"type\": \"string\" },\n          \"pattern\": { \"type\": \"string\" },\n          \"action\": { \"type\": \"string\", \"enum\": [\"allow\", \"deny\", \"ask\"] },\n          \"description\": { \"type\": \"string\" }\n        },\n        \"required\": [\"tool\", \"pattern\", \"action\"]\n      }\n    }\n  },\n  \"required\": [\"mode\"]\n}",
+      "notes": "文件位置 ~/.pi/agent/permission-config.json。内置只读白名单和危险规则在代码里硬编码，不进配置文件。用户自定义规则通过 userRules 字段或 /permission 命令管理。"
+    }
+  ],
+  "errorSpecs": [
+    {
+      "id": "ES1",
+      "scenario": "web-tree-sitter Parser 初始化失败（wasm 加载失败/损坏）",
+      "strategy": "catch 后 fallback：层1 标记所有 bash 命令为 clean=false（跳过层2直接进层3），日志记录一次警告。不阻塞扩展启动。",
+      "errorCode": "PERM_AST_INIT_FAILED"
+    },
+    {
+      "id": "ES2",
+      "scenario": "AST 解析单条命令失败（malformed 语法）",
+      "strategy": "按 dangerous 处理（clean=false, parseError=true），进入层3 AI 判断。不 throw。",
+      "errorCode": "PERM_AST_PARSE_FAILED"
+    },
+    {
+      "id": "ES3",
+      "scenario": "AI Classifier 调用失败（网络错误/API key 无效/模型不存在）",
+      "strategy": "catch 后返回 fallback {risk_level:'medium', outcome:'ask'}，交用户审批。fail-safe 不阻塞。日志记录错误。",
+      "errorCode": "PERM_CLASSIFIER_FAILED"
+    },
+    {
+      "id": "ES4",
+      "scenario": "AI Classifier 超时（超过 config.timeout 秒）",
+      "strategy": "AbortController 取消，返回 fallback {outcome:'ask'}。Racing 设计下用户框仍在等待，自然 fallback。",
+      "errorCode": "PERM_CLASSIFIER_TIMEOUT"
+    },
+    {
+      "id": "ES5",
+      "scenario": "AI 输出 JSON 解析失败（模型返回非 JSON 或字段非法）",
+      "strategy": "parseClassifierResponse 返回 fallback {risk_level:'medium', outcome:'ask', reasoning:'parse failure'}。不 throw。",
+      "errorCode": "PERM_CLASSIFIER_PARSE_FAILED"
+    },
+    {
+      "id": "ES6",
+      "scenario": "配置文件 permission-config.json 解析失败（malformed JSON）",
+      "strategy": "fallback 到默认配置（mode=yolo, enabled=true），TUI 显示警告。不阻塞扩展启动。",
+      "errorCode": "PERM_CONFIG_PARSE_FAILED"
+    },
+    {
+      "id": "ES7",
+      "scenario": "getApiProvider 返回 undefined（model.api 无对应 provider）",
+      "strategy": "catch 后 fallback {outcome:'ask'}。日志记录 model.api 值供调试。",
+      "errorCode": "PERM_NO_PROVIDER"
+    },
+    {
+      "id": "ES8",
+      "scenario": "Racing 中两条 lane 都失败（用户框异常 + classifier 失败）",
+      "strategy": "catch 所有异常，返回 {action:'deny', source:'mode', reason:'permission check failed: both lanes failed'}。fail-closed（拒绝而非放行）。",
+      "errorCode": "PERM_RACING_ALL_FAILED"
+    }
+  ],
+  "split": [
+    {
+      "slug": "w1-skeleton-mode",
+      "description": "扩展骨架 + 四档模式状态机 + 配置加载/持久化 + /permission 命令 + statusline 集成。产出可运行的扩展（模式可切换但管道未实现，默认全部 allow）。",
+      "dependsOn": [],
+      "inheritedItemIds": ["DM1", "DM5", "I6"]
+    },
+    {
+      "slug": "w2-ast-analyzer",
+      "description": "web-tree-sitter 集成 + Codex ALLOWED_KINDS 白名单移植 + analyzeBashStructure 实现。独立模块，可独立测试。包含 wasm 预加载和错误处理。",
+      "dependsOn": [],
+      "inheritedItemIds": ["TC1", "I2"]
+    },
+    {
+      "slug": "w3-rule-engine",
+      "description": "规则引擎：wildcard 匹配 + last-match-wins + 内置只读白名单（Codex 24 命令+flag子检查）+ 内置危险规则（permission-gate 10 类）+ matchRules 实现。纯函数模块。",
+      "dependsOn": [],
+      "inheritedItemIds": ["TC4", "DM2", "I3"]
+    },
+    {
+      "slug": "w4-ai-classifier",
+      "description": "AI Classifier：streamSimple 调用 + system prompt + JSON 容错解析 + classifyRisk 实现 + model 解析（auto 选最便宜）。独立模块，依赖注入便于测试。",
+      "dependsOn": [],
+      "inheritedItemIds": ["TC2", "TC3", "DM4", "I4", "ES3", "ES4", "ES5", "ES7"]
+    },
+    {
+      "slug": "w5-pipeline-integration",
+      "description": "三层管道编排 checkPermission + Racing raceClassifierAndUser + Pi 集成（tool_call hook + before_agent_start 工具过滤 + 审批 UI + 拒绝理由回传 agent + session 隔离）。依赖 W1-W4 全部完成。",
+      "dependsOn": ["w1-skeleton-mode", "w2-ast-analyzer", "w3-rule-engine", "w4-ai-classifier"],
+      "inheritedItemIds": ["I1", "I5", "DM3", "ES1", "ES2", "ES6", "ES8", "TC5"]
+    },
+    {
+      "slug": "w6-tests-docs",
+      "description": "单元测试（AST 分析/wildcard 匹配/规则引擎/JSON 解析/Racing 竞态）+ 集成测试（四档模式端到端）+ README + AGENTS.md/CLAUDE.md 目录结构同步 + changeset。依赖 W5。",
+      "dependsOn": ["w5-pipeline-integration"],
+      "inheritedItemIds": []
+    }
+  ]
+}

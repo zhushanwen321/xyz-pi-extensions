@@ -15,6 +15,11 @@ declare module "@earendil-works/pi-coding-agent" {
 	/** Pi run mode. Use "tui" to guard terminal-only UI such as custom components. */
 	export type ExtensionMode = "tui" | "rpc" | "json" | "print";
 
+	export interface ExtensionUIDialogOptions {
+		signal?: AbortSignal;
+		timeout?: number;
+	}
+
 	export interface ExtensionContext {
 		cwd: string;
 		sessionManager: ReadonlySessionManager;
@@ -29,10 +34,10 @@ declare module "@earendil-works/pi-coding-agent" {
 		/** Whether dialog-capable UI is available (true in TUI and RPC modes) */
 		hasUI: boolean;
 		ui: {
-			notify(msg: string, type?: string): void;
-			confirm(title: string, message: string, opts?: unknown): Promise<boolean>;
-			select(title: string, options: string[], opts?: unknown): Promise<string | undefined>;
-			input(title: string, placeholder?: string, opts?: unknown): Promise<string | undefined>;
+			notify(msg: string, type?: "info" | "warning" | "error"): void;
+			confirm(title: string, message: string, opts?: ExtensionUIDialogOptions): Promise<boolean>;
+			select(title: string, options: string[], opts?: ExtensionUIDialogOptions): Promise<string | undefined>;
+			input(title: string, placeholder?: string, opts?: ExtensionUIDialogOptions): Promise<string | undefined>;
 			// verified against Pi SDK d.ts (pi-coding-agent v0.80.3, types.d.ts:134) — signature matches exactly
 			editor(title: string, prefill?: string): Promise<string | undefined>;
 			setStatus(key: string, text: string | undefined): void;
@@ -312,6 +317,8 @@ declare module "@earendil-works/pi-tui" {
 	export class Input {
 		onSubmit?: (value: string) => void;
 		onEscape?: () => void;
+		/** Focusable interface — set by TUI/container when focus changes */
+		focused: boolean;
 		getValue(): string;
 		setValue(value: string): void;
 		handleInput(data: string): void;
@@ -331,6 +338,29 @@ declare module "@earendil-works/pi-ai" {
 	export function StringEnum<T extends readonly string[]>(values: T, options?: Record<string, unknown>): T[number];
 	export type Message = any;
 	export type AssistantMessage = any;
+	// Types consumed by permission/classifier (loose stubs; real types verified by
+	// package-level tsc which resolves to the real Pi SDK via tsconfig paths).
+	export type Api = string;
+	export type AssistantMessageEventStream = { result(): Promise<any> };
+	export interface Context {
+		systemPrompt?: string;
+		messages: any[];
+		[key: string]: any;
+	}
+	export type Model<TApi extends Api = Api> = any;
+	export interface SimpleStreamOptions {
+		timeoutMs?: number;
+		signal?: AbortSignal;
+		[key: string]: any;
+	}
+	// G2 (W5 design-review): production classifier 需要 getApiProvider 解析 provider
+	// 以调用 streamSimple。ApiProvider 携带 streamSimple（与 classifier ClassifierDeps 对齐）。
+	export interface ApiProvider {
+		api: string;
+		stream: unknown;
+		streamSimple: (model: Model<Api>, context: Context, options?: SimpleStreamOptions) => AssistantMessageEventStream;
+	}
+	export function getApiProvider(api: string): ApiProvider | undefined;
 }
 
 declare module "@earendil-works/pi-coding-agent" {

@@ -1,0 +1,41 @@
+{
+  "retrospectData": {
+    "reviewedItems": [
+      {"itemId": "necessity", "verdict": "correct", "note": "W1 骨架必要性强，为 W2-W6 提供集成基础"},
+      {"itemId": "sufficiency", "verdict": "correct", "note": "MECE 拆分合理，7 任务覆盖全交付物"},
+      {"itemId": "alternatives", "verdict": "correct", "note": "types.ts 统一声明 + tool_call 占位放行 都是对的"},
+      {"itemId": "necessityMet", "verdict": "correct", "note": "W1 成功交付，24 测试全过"},
+      {"itemId": "sufficiencyMet", "verdict": "correct", "note": "9 个 testCase 全覆盖"},
+      {"itemId": "alternativesReconsidered", "verdict": "correct", "note": "reviewer 修复方向全部采纳"},
+      {"itemId": "WT1", "verdict": "correct", "note": "types.ts 统一声明是对的"},
+      {"itemId": "WT2", "verdict": "correct", "note": "tool_call 占位放行是对的，但原 plan '读 config 检查 mode' 错，修复后去掉"},
+      {"itemId": "WR1", "verdict": "wrong", "note": "statusline 事件不存在，移除并推 W6"},
+      {"itemId": "WR2", "verdict": "correct", "note": "getConfigPath 路径解析正确"},
+      {"itemId": "readability", "verdict": "correct", "note": "score 4 合理，可读性好"},
+      {"itemId": "architecture", "verdict": "correct", "note": "score 4 合理，分层清晰"},
+      {"itemId": "codeSmell:commands.ts modeHighlight 函数略冗余", "verdict": "accepted", "note": "low severity，后续可简化"},
+      {"itemId": "followup:W6 追加 statusline TUI Component", "verdict": "accepted", "note": "推到 W6，已在 W6 plan 加入"},
+      {"itemId": "followup:W6 补 handlePermissionCommand 独立单测", "verdict": "accepted", "note": "推到 W6"}
+    ],
+    "lessonsLearned": "1) Pi SDK API 假设必须先读真实 types.d.ts 验证（statusline 事件不存在是教训）。2) reviewer subagent 审查价值极高——发现 2 critical + 5 major 是主 agent 自审盲点。3) tool_call 高频回调内禁止同步 fs 调用。4) 缓存返回值要深拷贝防污染。5) cw test gate 默认跑全仓库测试，需 cw.config.json 收窄到本包。6) saveConfig 应信任调用方的类型化对象，不重新 normalize。7) cw exec-review 的 codeSmells 必须是 {items, severity} 结构不是 {score, note}，input schema 要严格对照 types.d.ts。",
+    "wrongJudgments": [
+      {
+        "judgmentRef": "WR1",
+        "why": "statusline 事件在 Pi SDK 不存在",
+        "fixApplied": "移除 pi.on('statusline')，statusline 推到 W6 用 ctx.ui.setFooter"
+      }
+    ],
+    "processIssues": [
+      {
+        "issue": "cw test gate 第一次失败因默认跑全仓库测试",
+        "rootCause": "cw 默认 testRunner.command='npx vitest run' + cwd=workspacePath",
+        "improvement": "创建 cw.config.json 配 testRunner.command 收窄到本包"
+      },
+      {
+        "issue": "cw exec-review 第一次提交的 codeSmells 结构错误（{score,note} 而非 {items,severity}），gate 没校验就存，导致 retrospect crash",
+        "rootCause": "cw exec-review gate 对 codeSmells 结构无校验",
+        "improvement": "提交前严格对照 handlers/types.d.ts 的 ExecReviewJudgment 接口"
+      }
+    ]
+  }
+}

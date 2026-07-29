@@ -1,0 +1,52 @@
+{
+  "name": "@zhushanwen/pi-permission",
+  "version": "0.0.1",
+  "description": "Pi permission extension — four permission modes (yolo/auto/approve/strict) with three-layer pipeline (AST + rules + AI classifier).",
+  "type": "module",
+  "main": "src/index.ts",
+  "pi": {
+    "extensions": [
+      "./index.ts"
+    ]
+  },
+  "keywords": [
+    "pi-package",
+    "permission",
+    "security",
+    "approval",
+    "bash",
+    "sandbox"
+  ],
+  "license": "MIT",
+  "files": [
+    "src/",
+    "index.ts"
+  ],
+  "scripts": {
+    "typecheck": "npx tsc --noEmit",
+    "test": "vitest run",
+    "test:watch": "vitest"
+  },
+  "dependencies": {
+    "tree-sitter-bash": "^0.25.1",
+    "web-tree-sitter": "^0.26.11"
+  },
+  "peerDependencies": {
+    "@earendil-works/pi-ai": "*",
+    "@earendil-works/pi-coding-agent": "*",
+    "@earendil-works/pi-tui": "*"
+  },
+  "peerDependenciesMeta": {
+    "@earendil-works/pi-ai": {
+      "optional": true
+    },
+    "@earendil-works/pi-tui": {
+      "optional": true
+    }
+  },
+  "devDependencies": {
+    "@earendil-works/pi-ai": "*",
+    "@earendil-works/pi-tui": "*",
+    "vitest": "^4.1.8"
+  }
+}

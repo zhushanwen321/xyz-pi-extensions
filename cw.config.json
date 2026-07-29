@@ -1,0 +1,6 @@
+{
+  "testRunner": {
+    "command": "pnpm --filter @zhushanwen/pi-permission test",
+    "cwd": "."
+  }
+}

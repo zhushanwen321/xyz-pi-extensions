@@ -21,6 +21,7 @@ xyz-pi-extensions/
 │   ├── model-switch/        → @zhushanwen/pi-model-switch
 │   ├── plan/                → @zhushanwen/pi-plan
 │   ├── ask-user/            → @zhushanwen/pi-ask-user
+│   ├── permission/          → @zhushanwen/pi-permission (四档权限模式 yolo/auto/approve/strict + 三层管道 AST+规则+AI Classifier；含 statusline footer 集成 + 12 条内置危险规则 + 50+9 白名单 + Reject-with-Reason)
 │   ├── pending-notifications/ → @zhushanwen/pi-pending-notifications
 │   └── scheduler/           → @zhushanwen/pi-scheduler (定时任务调度，duration 间隔 + cron 表达式)
 ├── shared/                      # 内部共享包（private，不独立发布）
@@ -799,6 +800,7 @@ ln -s /path/to/xyz-pi-extensions/skills/<name> ~/.agents/skills/<name>
 | `extensions/model-switch/` | `@zhushanwen/pi-model-switch` | 模型切换 | — |
 | `extensions/plan/` | `@zhushanwen/pi-plan` | 轻量级 Plan Mode（brainstorming + writing-plans） | — |
 | `extensions/ask-user/` | `@zhushanwen/pi-ask-user` | 内联自适应 ask_user 工具（单/多问题、分屏预览、内联编辑器） | — |
+| `extensions/permission/` | `@zhushanwen/pi-permission` | 四档权限模式（yolo/auto/approve/strict）+ 三层管道（AST + 规则 + AI Classifier）+ statusline footer | — |
 | `extensions/pending-notifications/` | `@zhushanwen/pi-pending-notifications` | 异步操作注册表（EventBus + session entries 跟踪 workflow/subagent） | — |
 | `extensions/scheduler/` | `@zhushanwen/pi-scheduler` | 定时任务调度（duration + cron） | — |
 

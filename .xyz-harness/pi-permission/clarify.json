@@ -1,0 +1,40 @@
+{
+  "clarifications": [
+    {
+      "id": "C1",
+      "question": "四档模式的精确定义和行为边界是什么？",
+      "resolution": "按严格等级排序四档：1) yolo=完全无防护，所有工具调用放行；2) 自动=安全命令规则直接放行+非安全命令过AI审查+AI认为安全放行/AI认为非安全人工审批+用户可自定义安全/非安全规则；3) 审批=自动模式去除AI（规则匹配后安全放行、非安全直接人工审批不经过AI）；4) 严格=全部审批。模式间差异通过三层管道的开关组合实现（AST结构检查/规则allow/规则deny/AI/用户审批各自的启用状态）。",
+      "type": "research"
+    },
+    {
+      "id": "C2",
+      "question": "三层管道架构各层的职责和决策流是什么？",
+      "resolution": "层1 AST结构检查（web-tree-sitter解析bash命令，ALLOWED_KINDS白名单，含命令替换/重定向/子shell等危险结构→标记需进一步判断）；层2规则匹配（内置Codex风格只读白名单24个纯只读命令+base64/find/rg/git/sed的flag子检查+permission-gate 10类危险规则+用户自定义allow/deny/ask规则，last-match-wins）；层3 AI Classifier（streamSimple直接调最便宜模型，~150 token system prompt+JSON输出+Racing设计：AI与用户审批框并发，AI快则自动决断，AI慢/失败/不确定→fallback用户审批）。非bash工具（read/write/edit/mcp）跳过层1直接进层2。",
+      "type": "research"
+    },
+    {
+      "id": "C3",
+      "question": "bash AST 解析选哪个库？为什么不用原生绑定或其他库？",
+      "resolution": "选 web-tree-sitter(0.26.11) + tree-sitter-bash.wasm(1.3MB)，总体积5.7MB接受。理由：纯wasm零编译跨平台（Pi扩展通过pi install分发，不能假设用户有C++工具链），能力最强（与Codex/Claude Code/OpenCode同款grammar），Node 24原生编译失败是硬伤所以不用原生tree-sitter绑定，sh-syntax的Cmd变体数据不可遍历是隐藏陷阱不能用，shell-quote对命令替换盲区不能单独用，bash-parser 8年停滞不用。",
+      "type": "research"
+    },
+    {
+      "id": "C4",
+      "question": "AI Classifier 如何调用 LLM？如何保证输出格式？",
+      "resolution": "调用方式：getApiProvider(api).streamSimple(model, context, options)直接调（从@earendil-works/pi-ai/compat import），同进程，主进程已注册provider无需扩展初始化，不传tools字段=无工具调用。Model用'auto'选最便宜（findCheapestModel从~/.pi/agent/models.json按cost.input排序），temperature=0, maxTokens=256。输出格式：JSON system prompt强制+解析容错（正则提取JSON+JSON.parse+字段验证）+fallback到{outcome:'ask'}（fail-safe交用户审批），不用structured-output扩展（走主对话token成本过高且steer hook污染主对话）。AI不带transcript上下文（纯命令判断省token）。注意pi-permission-system旧代码用event.type==='text'但当前pi-ai是text_delta，移植要改或用stream.result()。",
+      "type": "research"
+    },
+    {
+      "id": "C5",
+      "question": "新建还是fork pi-permission-system？扩展放在哪里？AST模块放在哪里？",
+      "resolution": "新建extensions/permission/，与pi-permission-system无关（避免@earendil-works/pi-ai vs @mariozechner/pi-ai包名混用+旧版事件名包袱）。AST模块自包含在extensions/permission/内，不做shared（未来有需求再提取）。完整版一次做齐（不分MVP阶段）。",
+      "type": "research"
+    },
+    {
+      "id": "C6",
+      "question": "Pi扩展的标准架构和集成点是什么？",
+      "resolution": "遵循项目docs/standards.md规范：入口index.ts re-export src/index.ts；src/index.ts是扩展工厂函数export default，注册tool+command+events；状态管理独立为state.ts；pi.on('tool_call')做运行时权限检查；pi.on('before_agent_start')过滤工具集和system prompt；ctx.sessionManager + 文件做状态持久化；package.json必须有pi.extensions=['./index.ts']+type:module+keywords:['pi-package']+pi.skills（如有）；files字段必须包含wasm等资源文件；依赖@earendil-works/pi-ai（不是@mariozechner/pi-ai）。",
+      "type": "research"
+    }
+  ]
+}
