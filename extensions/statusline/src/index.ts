@@ -28,6 +28,11 @@ import {
 } from "@zhushanwen/pi-quota-providers";
 
 import {
+	type FooterLineRegistry,
+	getOrCreateFooterRegistry,
+	registerRequestRender,
+} from "./footer-handshake-access.js";
+import {
 	buildSearchLine,
 	buildTokenPlanLines,
 	fmtCount,
@@ -107,11 +112,14 @@ interface TuiRef {
 	current: TuiHandle | null;
 }
 
-/** 注册 statusline footer。从 session_start handler 提取。 */
+/** 注册 statusline footer。从 session_start handler 提取。
+ *  factory 内（tuiRef.current 就绪后）注册 requestRender 入口，供其他扩展通过
+ *  globalThis 触发本 footer 重绘；footer dispose 时注销该入口。 */
 function initFooter(
 	ctx: ExtensionContext,
 	state: StatuslineRuntimeState,
 	tuiRef: TuiRef,
+	footerRegistry: FooterLineRegistry | undefined,
 ): void {
 	(ctx.ui as unknown as UiWithFooter).setFooter(
 		(t: TuiHandle, theme: Theme, footerData: ReadonlyFooterDataProvider) => {
@@ -120,15 +128,21 @@ function initFooter(
 			// 兜底定时器:定期 requestRender,让空闲时也能走表 + 检测 provider 缓存过期。
 			// triggerUpdate 内部 TTL 节流(2min + 并发闸)防住过频请求。
 			const interval = setInterval(() => t.requestRender(), RENDER_INTERVAL_MS);
+			// 注册 requestRender 入口:其他扩展(如 permission)通过 globalThis
+			// REQUEST_RENDER_KEY 调 requestFooterRender() 触发本 footer 立即重绘。
+			// identity-check 注销避免覆盖更新的 fn。
+			const unregisterRender = registerRequestRender(() => t.requestRender());
 			return {
 				dispose() {
 					unsub();
 					clearInterval(interval);
+					// 注销 requestRender 入口（identity check:仅当槽位仍是本 fn 时删除）
+					unregisterRender();
 					tuiRef.current = null;
 				},
 				invalidate() {},
 				render(width: number) {
-					return buildLines(ctx, theme, footerData, width, state);
+					return buildLines(ctx, theme, footerData, width, state, footerRegistry);
 				},
 			};
 		},
@@ -188,6 +202,9 @@ export default function statuslineExtension(pi: ExtensionAPI) {
 function registerSessionLifecycle(pi: ExtensionAPI): void {
 	const state: StatuslineRuntimeState = makeInitialState();
 	const tuiRef: TuiRef = { current: null };
+	// footer registry 引用：session_start 时获取/创建 canonical 实例（owner）。
+	// consumer（如 permission）通过 globalThis 握手注册外部行，buildLines 遍历 entries 聚合。
+	let footerRegistry: FooterLineRegistry | undefined;
 
 	pi.on("session_start", async (_event: unknown, ctx: ExtensionContext) => {
 		Object.assign(state, makeInitialState(), {
@@ -196,7 +213,11 @@ function registerSessionLifecycle(pi: ExtensionAPI): void {
 			sessionName: ctx.sessionManager.getSessionName() ?? undefined,
 		});
 		refreshTotals(state, ctx);
-		initFooter(ctx, state, tuiRef);
+		// 获取/创建 canonical footer registry（owner 职责，幂等）。
+		// 若 permission 先于 statusline session_start，其 renderer 已在 slot.pending 中，
+		// 这里 flush 进 canonical registry。
+		footerRegistry = getOrCreateFooterRegistry();
+		initFooter(ctx, state, tuiRef, footerRegistry);
 		triggerUpdate();
 	});
 
@@ -406,28 +427,100 @@ function computeRunMs(st: StatuslineRuntimeState): number {
 	return 0;
 }
 
+// ── 内部固定行 + 外部行聚合 ─────────────────────────────
+//
+// 内部行（statusline 自己渲染的 5 个区域）order 分配：
+//   sl:dir=0, sl:model=1, sl:ctx=3（原隐式位置 2，留 order=2 给外部行插入 line2-line3 之间）
+//   sl:search=4, sl:token-plan=5（多行展开）
+// 外部行（如 permission）order=2 插入到 line2（model）和 line3（ctx）之间。
+
+/** 内部行 render 统一签名：(ctx, theme, fd, st) → 单行字符串（空串表示跳过） */
+type InternalLineRender = (
+	ctx: ExtensionContext,
+	theme: Theme,
+	fd: ReadonlyFooterDataProvider,
+	st: StatuslineRuntimeState,
+) => string;
+
+/** 内部行定义。order 决定与外部行混合排序后的最终位置。
+ *  render 签名统一为 (ctx, theme, fd, st):内部从 theme 派生 palette,
+ *  适配 buildLine1(ctx, fd, palette) / buildLine2(ctx, st, palette) /
+ *  buildLine3(ctx, st, palette, theme) 各自不同的入参。
+ *  export 仅供单测验证 order 分配（见 __tests__/build-lines-aggregation.test.ts TC7）。 */
+export const INTERNAL_LINES: ReadonlyArray<{
+	id: string;
+	order: number;
+	render: InternalLineRender;
+}> = [
+	{ id: "sl:dir", order: 0, render: (ctx, theme, fd, _st) => buildLine1(ctx, fd, makePalette(theme)) },
+	{ id: "sl:model", order: 1, render: (ctx, theme, _fd, st) => buildLine2(ctx, st, makePalette(theme)) },
+	{ id: "sl:ctx", order: 3, render: (ctx, theme, _fd, st) => buildLine3(ctx, st, makePalette(theme), theme) },
+];
+
+/**
+ * 聚合内部行与外部行(registry),按 order 排序后 truncate。
+ *
+ * 内部行来自 INTERNAL_LINES + 搜索行(order=4) + token-plan 多行(order=5);
+ * 外部行来自 footer registry(其他扩展通过 globalThis 握手注册)。
+ * 外部行 render 抛异常时防御性跳过(不破坏整个 footer)。
+ *
+ * 提取为独立 export 函数便于单测(见 __tests__/build-lines-aggregation.test.ts)。
+ */
+export function aggregateLines(
+	internal: ReadonlyArray<{ order: number; text: string }>,
+	registry: FooterLineRegistry | undefined,
+	ctx: ExtensionContext,
+	theme: Theme,
+): Array<{ order: number; text: string }> {
+	const all: Array<{ order: number; text: string }> = [];
+	for (const line of internal) {
+		if (line.text.length > 0) all.push({ order: line.order, text: line.text });
+	}
+	if (registry) {
+		for (const [, renderer] of registry.entries()) {
+			try {
+				const text = renderer.render(ctx, theme);
+				if (text) all.push({ order: renderer.order, text });
+			// eslint-disable-next-line taste/no-silent-catch
+			} catch (renderErr) {
+				// 防御:外部 renderer 抛异常不应破坏整个 footer,仅记录诊断
+				console.warn("[statusline] footer renderer failed:", renderErr);
+			}
+		}
+	}
+	all.sort((a, b) => a.order - b.order);
+	return all;
+}
+
 function buildLines(
 	ctx: ExtensionContext,
 	theme: Theme,
 	fd: ReadonlyFooterDataProvider,
 	width: number,
 	st: StatuslineRuntimeState,
+	footerRegistry: FooterLineRegistry | undefined,
 ): string[] {
 	const cache = readCache();
 	const providers = buildRuntimeProviders();
 	const palette = makePalette(theme);
 	const themeFg = (token: string, text: string) => theme.fg(token, text);
 
-	const lines: string[] = [
-		buildLine1(ctx, fd, palette),
-		buildLine2(ctx, st, palette),
-		buildLine3(ctx, st, palette, theme),
-		buildSearchLine(cache, providers, palette, themeFg),
-		...buildTokenPlanLines(cache, providers, palette, themeFg),
-	];
+	// 内部固定行(dir/model/ctx)由 INTERNAL_LINES render
+	const internal: Array<{ order: number; text: string }> = INTERNAL_LINES.map((line) => ({
+		order: line.order,
+		text: line.render(ctx, theme, fd, st),
+	}));
+	// 搜索行(order=4)
+	internal.push({
+		order: 4,
+		text: buildSearchLine(cache, providers, palette, themeFg),
+	});
+	// token-plan 多行(order=5)
+	for (const text of buildTokenPlanLines(cache, providers, palette, themeFg)) {
+		internal.push({ order: 5, text });
+	}
 
-	// 过滤空行（line2/line3 在某些状态下可能空，line4 没搜索工具时空）
-	return lines
-		.filter((l) => l.length > 0)
-		.map((l) => truncateToWidth(l, width));
+	// 聚合内部 + 外部行,排序 + truncate
+	return aggregateLines(internal, footerRegistry, ctx, theme)
+		.map((l) => truncateToWidth(l.text, width));
 }

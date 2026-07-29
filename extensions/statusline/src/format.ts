@@ -92,12 +92,12 @@ export interface SpeedLike {
 	day: number;
 }
 
-/** 渲染速度部分：speed 123t/s · day 85t/s（无速度返回空串） */
+/** 渲染速度部分：speed 123t/s（无速度返回空串）
+ *  day 标记已移除（footer 宽度有限，数据保留在 SpeedLike 结构中供后续查询）。 */
 export function formatSpeedPart(sp: SpeedLike, p: PlainPallet): string {
-	const parts: string[] = [];
-	if (sp.current > 0) parts.push(`${p.g(`${sp.current}`)}${p.d("t/s")}`);
-	if (sp.day > 0) parts.push(`${p.d("day")} ${p.g(`${sp.day}`)}${p.d("t/s")}`);
-	return parts.length ? `│ ${p.d("speed")} ${parts.join(" · ")}` : "";
+	return sp.current > 0
+		? `│ ${p.d("speed")} ${p.g(`${sp.current}`)}${p.d("t/s")}`
+		: "";
 }
 
 // ── 缓存命中率渲染 ─────────────────────────────────────
@@ -107,12 +107,12 @@ export interface CacheRatioLike {
 	day: number | null;
 }
 
-/** 渲染缓存命中率部分：cache 85% · day 72%（无数据返回空串） */
+/** 渲染缓存命中率部分：cache 85%（无数据返回空串）
+ *  day 标记已移除（footer 宽度有限，数据保留在 CacheRatioLike 结构中供后续查询）。 */
 export function formatCacheRatioPart(cr: CacheRatioLike, p: PlainPallet): string {
-	const parts: string[] = [];
-	if (cr.current !== null) parts.push(`${p.g(`${cr.current}`)}${p.d("%")}`);
-	if (cr.day !== null) parts.push(`${p.d("day")} ${p.g(`${cr.day}`)}${p.d("%")}`);
-	return parts.length ? `│ ${p.d("cache")} ${parts.join(" · ")}` : "";
+	return cr.current !== null
+		? `│ ${p.d("cache")} ${p.g(`${cr.current}`)}${p.d("%")}`
+		: "";
 }
 
 // ── 路径工具 ─────────────────────────────────────────
