@@ -216,6 +216,45 @@ shared/quota-providers/    # workspace 共享包
         └── tavily.ts
 ```
 
+## Footer Line 注册协议
+
+statusline 是 footer 的 **canonical owner**。其他扩展可以通过 **globalThis Symbol 握手协议** 注册自己的 footer 行，避免 `ctx.ui.setFooter` 单例冲突（Pi 只有一个 footer 槽位，多扩展各自 setFooter 会互相覆盖）。
+
+> 供其他扩展作者参考。参考实现见 [ADR-036](../../docs/adr/036-statusline-footer-aggregation.md) 与 `@zhushanwen/pi-permission` 的 `extensions/permission/src/footer-provider.ts`。
+
+### 协议
+
+- `FOOTER_HANDSHAKE_KEY = Symbol.for('@zhushanwen/pi-statusline.footerHandshake')`
+- `REQUEST_RENDER_KEY = Symbol.for('@zhushanwen/pi-statusline.requestRender')`
+- slot shape：`{version: 1, registry?: FooterLineRegistry, pending: PendingEntry[]}`
+- **statusline 是 canonical owner**：唯一创建 registry（`getOrCreateFooterRegistry`），并向 `slot.registry` 写入实例。
+- **consumer 永不创建 registry**：只通过 handshake key 读写 slot。registry 未就绪时 consumer 把 line entry push 到 `slot.pending`，等 statusline 后到时 flush（pending-flush 模式，沿用 ask-user #M4 修复）。
+- renderer 带数字 `order`，`buildLines` 按 order 升序聚合 statusline 自身行 + 所有外部注册行。
+- **加载顺序无关**：statusline 先到则直接注册；consumer 先到则入 pending 队列由 statusline flush。
+
+### consumer 用法
+
+consumer 端用**纯 globalThis 反射**（不静态 import statusline），定义本地等价的 `FooterLineRenderer` / `FooterLineRegistry` interface（结构匹配即可，TS 结构类型天然兼容）。这样 statusline 作为可选 `peerDep` 未安装时，静态 import 不会破坏 consumer —— 只是在反射时拿不到 registry，silent 降级。
+
+```
+session_start → 读 globalThis[FOOTER_HANDSHAKE_KEY]
+  ├─ slot 已存在 & registry 就绪 → 直接 registry.register(...)
+  └─ 否则 → push 到 slot.pending（statusline 后到时 flush）
+```
+
+详见 [ADR-036](../../docs/adr/036-statusline-footer-aggregation.md) 和 `@zhushanwen/pi-permission` 的 `extensions/permission/src/footer-provider.ts` 作为参考实现。
+
+### 时序注意：首帧前 `requestFooterRender()` 为 noop
+
+`getOrCreateFooterRegistry()`（line 注册入口）在 statusline 的 `session_start` handler 内同步执行并 flush pending，但 `requestFooterRender()`（重绘触发）依赖的 `REQUEST_RENDER_KEY` 句柄要等到 **footer factory 回调**（Pi 实际创建 TUI 时）内才通过 `registerRequestRender()` 挂到 `globalThis`，晚于 `session_start`。
+
+因此存在一个窗口：**`session_start` 之后、footer factory 回调之前**，此间 consumer（如 permission）调 `requestFooterRender()` 会是 noop（`REQUEST_RENDER_KEY` 尚未就绪）。
+
+- 实际影响轻微：statusline 有 `RENDER_INTERVAL_MS`（30s）兜底定时器，`onBranchChange` 也会触发重绘，所以 renderer 注册的内容不会永远丢失——只是 mode 切换后「立即重绘」的承诺在此窗口内不成立。
+- 如果 consumer 需要在窗口内保证可见，可依赖兜底定时器，或在自身下次生命周期事件里再次调用 `requestFooterRender()`。
+
+此为已知设计取舍（review #7），非 bug；无需强制修复。
+
 ## 性能 / 缓存
 
 - provider 数据通过 `cache.ts` 缓存，TTL 5 分钟

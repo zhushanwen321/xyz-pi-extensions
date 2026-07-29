@@ -105,7 +105,13 @@
     {
       "name": "@zhushanwen/pi-permission",
       "directory": "extensions/permission",
-      "dependsOn": []
+      "dependsOn": [
+        {
+          "package": "@zhushanwen/pi-statusline",
+          "type": "optional",
+          "reason": "permission 模式标签通过 globalThis Symbol 握手协议（FOOTER_HANDSHAKE_KEY = Symbol.for('@zhushanwen/pi-statusline.footerHandshake')）注册为 statusline footer 的一行（order=2，line2 和 line3 之间）。协议沿用 ask-user 的 {version, registry, pending} 模式，permission 是 consumer 不创建 registry 实例，statusline 是 canonical owner。无代码层 import（纯 globalThis 反射，加载顺序无关）。缺失时 silent 降级：permission 功能完整，仅 footer 不显示 mode 标签。"
+        }
+      ]
     },
     {
       "name": "@zhushanwen/pi-scheduler",

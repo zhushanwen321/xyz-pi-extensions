@@ -10,8 +10,13 @@
  *  - session 隔离：config 在 session_start 重建的闭包，每 session 独立。
  *  - yolo 快速路径：mode=yolo 或 enabled=false → 直接 return undefined（不跑管道）。
  *
- * W6 阶段：session_start 注册权限 footer（ctx.ui.setFooter），显示当前 mode + enabled。
- *  - 单例限制：Pi 只有一个 footer 槽位，会覆盖其他扩展的 footer（README 注明）。
+ * W6 阶段（footer-provider 重构）：session_start / session_tree 通过握手协议注册 footer
+ * line renderer（consumer 端，statusline 是 canonical owner），显示当前 mode + enabled +
+ * rule count + classifier model（auto 模式）。所有权限信息聚合到 footer 一行（order=2），
+ * 不再使用 setWidget，避免与 statusline widget 区域重复。
+ *  - footer line 不再独占 Pi footer 槽位，而是作为 statusline footer 的一行（order=2），
+ *    与 statusline 自身行共存（解决旧 setFooter 单例覆盖问题）。
+ *  - session_tree：分支切换后重建 renderer 闭包，避免持有过期 config。
  */
 
 import type {
@@ -28,7 +33,13 @@ import { editRulesViaOverlay } from "./rule-editor.js";
 import { makeNextIdCounter } from "./rule-templates.js";
 import { checkPermission, type CheckPermissionDeps } from "./pipeline.js";
 import { createPipelineDeps } from "./production.js";
-import { registerPermissionFooter } from "./statusline.js";
+import {
+	registerPermissionFooterLine,
+	requestFooterRender,
+	renderPermissionFooterLine,
+	type FooterLineRenderer,
+} from "./footer-provider.js";
+import { paletteFromTheme, type PermissionPalette } from "./statusline-palette.js";
 import type { PermissionConfig } from "./types.js";
 
 // ──────────────────────── tool_call event 最小子集 ────────────────────────
@@ -74,25 +85,28 @@ export default function permissionExtension(pi: ExtensionAPI): void {
 		config = loadAndWatchConfig(getConfigPath(), (msg) => console.warn(msg));
 	}
 
-	// W6 T2：footer invalidator。session_start 注册 footer 时由 registerPermissionFooter
-	// 返回（headless/mock 返回 noop）。mode/enabled 切换成功后调用，使 footer 立即重绘
-	// 新标签（FooterHandle.render 有缓存，不 invalidate 会显示旧 mode 直到 resize）。
-	let invalidateFooter: () => void = () => {};
+	// W6 T2（footer-provider 重构）：footer line dispose 句柄。session_start /
+	// session_tree 注册 renderer 时由 registerPermissionFooterLine 返回（statusline 未安装
+	// 或 headless 时仍返回合法 dispose，内部 noop）。分支切换时调用以注销旧 renderer，
+	// 避免持有过期 config 闭包。mode/enabled 切换后调 requestFooterRender() 触发重绘。
+	let disposeFooterLine: () => void = () => {};
 
-	// ──────────────────────── session_start：重载配置 + 注册 footer ────────────────────────
+	// ──────────────────────── session_start：重载配置 + 注册 footer line ────────────────────────
 	pi.on("session_start", (_event: unknown, ctx: ExtensionContext) => {
 		refreshConfig();
-		// W6 T2：注册权限 footer（显示当前 mode + enabled）。
-		// 单例限制：Pi 只有一个 footer 槽位，会覆盖（或被覆盖）其他扩展的 footer
-		// （如 @zhushanwen/pi-statusline）。已知限制，README 注明。
-		// getMode/getEnabled 闭包读最新 config（session 内 mode 可变）。
-		// registerPermissionFooter 内部 duck typing：headless/mock ctx 无 setFooter/theme 时
-		// 跳过，返回 noop invalidator。
-		invalidateFooter = registerPermissionFooter(
-			ctx.ui as { setFooter?: unknown; theme?: unknown },
-			() => config.mode,
-			() => config.enabled,
-		);
+		// footer-provider：通过握手协议注册 footer line renderer（consumer 端）。
+		// statusline 是 canonical owner；permission 永不创建 registry，只 push pending 或
+		// 直接 register（owner 已就绪时）。duck typing：headless/mock ctx 无 theme 时跳过。
+		disposeFooterLine = registerFooterLineFor(ctx);
+	});
+
+	// ──────────────────────── session_tree：分支切换后重建 renderer 闭包 ────────────────────────
+	// 分支切换（worktree/leaf 变化）后，旧 renderer 闭包可能持有过期 config；重建确保读到新值。
+	// 同时重载 config（用户可能在分支里手动改过 permission-config.json）。
+	pi.on("session_tree", (_event: unknown, ctx: ExtensionContext) => {
+		refreshConfig();
+		disposeFooterLine();
+		disposeFooterLine = registerFooterLineFor(ctx);
 	});
 
 	// ──────────────────────── /permission 命令 ────────────────────────
@@ -130,6 +144,8 @@ export default function permissionExtension(pi: ExtensionAPI): void {
 							const result = saveConfig(newConfig);
 							if (result.success) {
 								config = newConfig; // 更新闭包状态
+								// userRules 数量变化 → 请求 statusline 重绘 footer（rule count 部分）。
+								requestFooterRender();
 							}
 							return result;
 						},
@@ -166,6 +182,8 @@ export default function permissionExtension(pi: ExtensionAPI): void {
 							const result = saveConfig(newConfig);
 							if (result.success) {
 								config = newConfig; // 更新闭包状态
+								// classifier model 变化 → 请求 statusline 重绘 footer（auto 模式显示 model）。
+								requestFooterRender();
 							}
 							return result;
 						},
@@ -178,8 +196,8 @@ export default function permissionExtension(pi: ExtensionAPI): void {
 				const result = saveConfig(newConfig);
 				if (result.success) {
 					config = newConfig; // 更新闭包状态
-					// footer 仅显示 mode + enabled；切换成功后刷缓存 + 重绘，避免显示旧 mode。
-					invalidateFooter();
+					// mode/enabled 切换后请求 statusline 重绘 footer，避免显示旧 mode 直到 resize/timer。
+					requestFooterRender();
 				}
 				return result;
 			});
@@ -198,6 +216,37 @@ export default function permissionExtension(pi: ExtensionAPI): void {
 		approvalChain = approvalChain.then(run, run);
 		return approvalChain;
 	});
+
+	// ──────────────────────── footer line 辅助（闭包内，捕获 config） ────────────────────────
+
+	/**
+	 * 从 ctx.ui.theme 构造 palette 并注册 permission footer line renderer。
+	 * duck typing：headless/mock ctx 无 theme（或 theme.fg 非函数）时跳过，
+	 * 返回 noop dispose（不抛异常）。renderer 闭包读最新 config（refreshConfig/切换后生效）。
+	 */
+	function registerFooterLineFor(ctx: ExtensionContext): () => void {
+		const theme = (ctx.ui as { theme?: { fg?: unknown } }).theme;
+		if (!theme || typeof theme.fg !== "function") return () => {};
+		const palette = paletteFromTheme(theme as { fg(token: string, text: string): string });
+		return registerPermissionFooterLine(makePermissionFooterRenderer(palette));
+	}
+
+	/**
+	 * 构造 footer line renderer。render 闭包读最新 config.mode/enabled/userRules/classifier，
+	 * 故 session 内任意字段切换后 statusline 重绘即可见新值（无需重建 renderer）。
+	 */
+	function makePermissionFooterRenderer(palette: PermissionPalette): FooterLineRenderer {
+		return {
+			order: 2,
+			render: () => renderPermissionFooterLine(
+				config.mode,
+				config.enabled,
+				config.userRules.length,
+				config.classifier.model,
+				palette,
+			),
+		};
+	}
 }
 
 // ──────────────────────── processToolCall（单次工具调用处理） ────────────────────────

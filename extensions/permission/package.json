@@ -34,13 +34,17 @@
   "peerDependencies": {
     "@earendil-works/pi-ai": "*",
     "@earendil-works/pi-coding-agent": "*",
-    "@earendil-works/pi-tui": "*"
+    "@earendil-works/pi-tui": "*",
+    "@zhushanwen/pi-statusline": "*"
   },
   "peerDependenciesMeta": {
     "@earendil-works/pi-ai": {
       "optional": true
     },
     "@earendil-works/pi-tui": {
+      "optional": true
+    },
+    "@zhushanwen/pi-statusline": {
       "optional": true
     }
   },
