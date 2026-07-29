@@ -85,12 +85,12 @@ try {
   let mapFailed = 0;
   for (let i = 0; i < mappedRaw.length; i++) {
     const r = mappedRaw[i];
-    if (!r || r.error) {
+    if (!r || r.status === "failed" || r.error) {
       mapped.push({
         itemIndex: i,
         item: items[i],
         status: "failed",
-        error: r ? r.error : "agent 无返回",
+        error: r ? (r.error || "agent 返回 failed 状态") : "agent 无返回",
       });
       mapFailed++;
     } else {
@@ -98,7 +98,7 @@ try {
         itemIndex: i,
         item: items[i],
         status: "ok",
-        mapped: r.mapped,
+        mapped: (typeof r.mapped === "string" ? r.mapped : "(无结果)"),
       });
     }
   }

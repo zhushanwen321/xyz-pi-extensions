@@ -28,6 +28,9 @@ if (!target) {
 const perspectives = Array.isArray($ARGS.perspectives) && $ARGS.perspectives.length > 0
   ? $ARGS.perspectives
   : ["security", "performance", "maintainability"];
+if (perspectives.some((p) => typeof p !== "string")) {
+  throw new Error("parallel 参数 perspectives 必须是字符串数组，实际含非字符串元素");
+}
 // aggregate 模式：'concat'（默认，纯代码合并）或 'llm'（agent LLM 聚合）
 const aggregate = $ARGS.aggregate === "llm" ? "llm" : "concat";
 
@@ -70,15 +73,20 @@ try {
   let failedCount = 0;
   for (let i = 0; i < perPerspectiveRaw.length; i++) {
     const r = perPerspectiveRaw[i];
-    if (!r || r.error) {
+    if (!r || r.status === "failed" || r.error) {
       perPerspective.push({
         perspective: perspectives[i],
         status: "failed",
-        error: r ? r.error : "agent 无返回",
+        error: r ? (r.error || "agent 返回 failed 状态") : "agent 无返回",
       });
       failedCount++;
     } else {
-      perPerspective.push({ perspective: perspectives[i], status: "ok", ...r });
+      perPerspective.push({
+        perspective: perspectives[i],
+        status: "ok",
+        score: typeof r.score === "number" ? r.score : undefined,
+        findings: Array.isArray(r.findings) ? r.findings : [],
+      });
     }
   }
   if (failedCount === perspectives.length) {

@@ -64,6 +64,9 @@ try {
   if (subtasks.length === 0) {
     throw new Error("scatter 返回的 subtasks 为空");
   }
+  if (subtasks.some((s) => !s || typeof s.name !== "string")) {
+    throw new Error("scatter 返回的 subtasks 每项需含 name 字符串字段");
+  }
   log("scatter 出 " + subtasks.length + " 个子任务");
 
   // ── 段 2：process（parallel 并行处理每个子任务）──────────────────
@@ -91,15 +94,19 @@ try {
   let failedCount = 0;
   for (let i = 0; i < processedRaw.length; i++) {
     const r = processedRaw[i];
-    if (!r || r.error) {
+    if (!r || r.status === "failed" || r.error) {
       processed.push({
         subtask: subtasks[i].name,
         status: "failed",
-        error: r ? r.error : "agent 无返回",
+        error: r ? (r.error || "agent 返回 failed 状态") : "agent 无返回",
       });
       failedCount++;
     } else {
-      processed.push({ subtask: subtasks[i].name, status: "ok", result: r.result });
+      processed.push({
+        subtask: subtasks[i].name,
+        status: "ok",
+        result: (typeof r.result === "string" ? r.result : "(无结果)"),
+      });
     }
   }
   if (failedCount === subtasks.length) {

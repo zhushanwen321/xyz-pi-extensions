@@ -116,3 +116,55 @@ describe("U2: 内置脚本 agent() 返回值属性访问含 null guard", () => {
     }
   });
 });
+
+// W4: parallel() 降级返回值 {status:'failed'} 兼容 + 结果字段守卫 + spread 消除
+describe("W4: parallel() failed-status 兼容 + 结果字段守卫 + spread 消除", () => {
+  // W1 后 worker parallel() 可能返回 {status:'failed', error:'...'}，脚本 for 循环
+  // 必须识别此对象并标记失败（不能误判为成功）。验证三个含 parallel() 的脚本。
+  const PARALLEL_SCRIPTS = ["parallel.js", "scatter-gather.js", "map-reduce.js"] as const;
+
+  it.each(PARALLEL_SCRIPTS)("%s 含 r.status === \"failed\" 失败识别（W1 兼容）", (filename) => {
+    const src = readScript(filename);
+    // 三个脚本都应有 `r.status === "failed"` 检查（识别 W1 的降级对象）
+    expect(src).toContain('r.status === "failed"');
+  });
+
+  it("parallel.js perPerspective 不再用 spread 透传 agent 字段（spread 消除）", () => {
+    const src = readScript("parallel.js");
+    // W4 后显式取 score/findings，不再 ...r
+    expect(src).not.toContain("...r");
+    // 显式字段守卫存在
+    expect(src).toContain("typeof r.score === \"number\"");
+    expect(src).toContain("Array.isArray(r.findings)");
+  });
+
+  it("scatter-gather.js r.result 字段守卫存在", () => {
+    const src = readScript("scatter-gather.js");
+    expect(src).toContain("typeof r.result === \"string\"");
+    expect(src).toContain("\"(无结果)\"");
+  });
+
+  it("map-reduce.js r.mapped 字段守卫存在", () => {
+    const src = readScript("map-reduce.js");
+    expect(src).toContain("typeof r.mapped === \"string\"");
+    expect(src).toContain("\"(无结果)\"");
+  });
+
+  it("parallel.js perspectives 元素类型校验存在", () => {
+    const src = readScript("parallel.js");
+    expect(src).toContain("perspectives.some");
+    expect(src).toContain("typeof p !== \"string\"");
+  });
+
+  it("scatter-gather.js subtasks 元素结构校验存在", () => {
+    const src = readScript("scatter-gather.js");
+    expect(src).toContain("subtasks.some");
+    expect(src).toContain("typeof s.name !== \"string\"");
+  });
+
+  it("chain.js task 类型校验拒绝非字符串与空白", () => {
+    const src = readScript("chain.js");
+    expect(src).toContain("typeof task !== \"string\"");
+    expect(src).toContain("task.trim() === \"\"");
+  });
+});
