@@ -158,7 +158,10 @@ stage1 = {
     "must_fix": must_fix,
     "suggestion": suggestion,
     "info": info,
+    # clean = 修复前快照的 must_fix==0。单轮不循环下 aggregated.md 数字不反映修复后状态，
+    # 故 clean 不再是 ready_to_submit 的硬条件（见 ready 公式）。保留供诊断。
     "clean": (must_fix == 0),
+    "clean_note": "snapshot before fix; gate closure verified by worker receipts (pr-cr-fix SKILL.md Gate-3 软 gate)",
 }
 
 # ── Stage 2: Pre-merge 状态
@@ -191,10 +194,12 @@ stage2 = {
 }
 
 # ── 综合 ready_to_submit
+# stage1.clean 不作为硬条件：「单轮不循环」下 aggregated.md 的 must_fix 是修复前快照，
+# 修复闭合由 pr-cr-fix 主 agent 校验 worker 回执保证（软 gate），不由本脚本读快照数字保证。
+# 硬 gate = PR 存在 + 本地已同步 + pre-merge PASS。
 ready = (
     stage0["pr_exists"] is True
     and stage0["local_ahead_of_origin"] == 0
-    and stage1["clean"] is True
     and stage2["result"] == "PASS"
 )
 
