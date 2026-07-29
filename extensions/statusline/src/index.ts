@@ -131,6 +131,12 @@ function initFooter(
 			// 注册 requestRender 入口:其他扩展(如 permission)通过 globalThis
 			// REQUEST_RENDER_KEY 调 requestFooterRender() 触发本 footer 立即重绘。
 			// identity-check 注销避免覆盖更新的 fn。
+			//
+			// 时序注意(见 README「时序注意」+ ADR-036):此 factory 回调在 Pi 实际
+			// 创建 TUI 时执行,晚于 session_start 里的 getOrCreateFooterRegistry()。
+			// 因此 session_start 到本回调之间存在窗口,其间 consumer 调
+			// requestFooterRender() 为 noop(REQUEST_RENDER_KEY 未就绪),由
+			// RENDER_INTERVAL_MS 兜底定时器 + onBranchChange 触发兜底。
 			const unregisterRender = registerRequestRender(() => t.requestRender());
 			return {
 				dispose() {
@@ -216,6 +222,10 @@ function registerSessionLifecycle(pi: ExtensionAPI): void {
 		// 获取/创建 canonical footer registry（owner 职责，幂等）。
 		// 若 permission 先于 statusline session_start，其 renderer 已在 slot.pending 中，
 		// 这里 flush 进 canonical registry。
+		//
+		// 注意:此处同步 flush pending(line 注册)可达;但 requestRender 句柄(REQUEST_RENDER_KEY)
+		// 要等 initFooter 内的 factory 回调才挂载,此前的 requestFooterRender() 为 noop(由
+		// RENDER_INTERVAL_MS 兜底)。详见 initFooter 内注释 + README「时序注意」章节。
 		footerRegistry = getOrCreateFooterRegistry();
 		initFooter(ctx, state, tuiRef, footerRegistry);
 		triggerUpdate();

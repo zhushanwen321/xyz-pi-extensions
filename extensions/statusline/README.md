@@ -244,6 +244,17 @@ session_start → 读 globalThis[FOOTER_HANDSHAKE_KEY]
 
 详见 [ADR-036](../../docs/adr/036-statusline-footer-aggregation.md) 和 `@zhushanwen/pi-permission` 的 `extensions/permission/src/footer-provider.ts` 作为参考实现。
 
+### 时序注意：首帧前 `requestFooterRender()` 为 noop
+
+`getOrCreateFooterRegistry()`（line 注册入口）在 statusline 的 `session_start` handler 内同步执行并 flush pending，但 `requestFooterRender()`（重绘触发）依赖的 `REQUEST_RENDER_KEY` 句柄要等到 **footer factory 回调**（Pi 实际创建 TUI 时）内才通过 `registerRequestRender()` 挂到 `globalThis`，晚于 `session_start`。
+
+因此存在一个窗口：**`session_start` 之后、footer factory 回调之前**，此间 consumer（如 permission）调 `requestFooterRender()` 会是 noop（`REQUEST_RENDER_KEY` 尚未就绪）。
+
+- 实际影响轻微：statusline 有 `RENDER_INTERVAL_MS`（30s）兜底定时器，`onBranchChange` 也会触发重绘，所以 renderer 注册的内容不会永远丢失——只是 mode 切换后「立即重绘」的承诺在此窗口内不成立。
+- 如果 consumer 需要在窗口内保证可见，可依赖兜底定时器，或在自身下次生命周期事件里再次调用 `requestFooterRender()`。
+
+此为已知设计取舍（review #7），非 bug；无需强制修复。
+
 ## 性能 / 缓存
 
 - provider 数据通过 `cache.ts` 缓存，TTL 5 分钟

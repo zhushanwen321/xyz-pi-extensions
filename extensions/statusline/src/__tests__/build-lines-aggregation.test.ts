@@ -9,6 +9,7 @@
 //   TC7 内部行 order 分配：sl:ctx order===3（为外部行留 order=2 间隙）
 //   TC9 registry 持续性：多次 aggregateLines 调用 registry 仍可读（owner 持有 canonical 引用）
 //   额外：外部行 render 抛异常 → 防御性跳过（不破坏整个 footer）
+import type { ExtensionContext, Theme } from "@earendil-works/pi-coding-agent";
 import { describe, expect, it, vi } from "vitest";
 
 import {
@@ -30,9 +31,27 @@ function makeMockRegistry(entriesList: Array<[string, FooterLineRenderer]>): Foo
 }
 
 // ctx/theme 在 aggregateLines 中只透传给 renderer.render，mock renderer 忽略它们。
-// 测试允许 `as any`（eslint.config.mjs 测试 override 关闭 no-explicit-any），用它避免双重断言。
-const mockCtx = {} as Parameters<typeof aggregateLines>[1];
-const mockTheme = {} as Parameters<typeof aggregateLines>[2];
+//
+// 显式 mock 类型定义：aggregateLines 的入参是 SDK 的 ExtensionContext / Theme（巨大结构），
+// 测试不关心其内部，构造完整对象代价过高且与被测逻辑无关。这里用 Partial<...> 作中间层：
+//  - 用显式命名类型 MockCtx / MockTheme 取代裸 `as Parameters<typeof aggregateLines>[N]` 索引，
+//    让「这是 mock 空对象」的意图在类型层可读；
+//  - Partial 保证空对象字面量是合法的，无需 `as any`（测试允许 any，但这里不必用）。
+type MockCtx = Partial<ExtensionContext>;
+type MockTheme = Partial<Theme>;
+
+/** 构造 ctx mock：空对象（aggregateLines 仅透传给 renderer.render，mock renderer 忽略它）。 */
+function makeMockCtx(): MockCtx {
+	return {};
+}
+
+/** 构造 theme mock：空对象（同上，仅透传）。 */
+function makeMockTheme(): MockTheme {
+	return {};
+}
+
+const mockCtx = makeMockCtx();
+const mockTheme = makeMockTheme();
 
 // ── TC3 聚合外部行 ─────────────────────────────────────
 

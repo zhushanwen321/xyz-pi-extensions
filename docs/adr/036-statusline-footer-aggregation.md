@@ -92,6 +92,8 @@ REQUEST_RENDER_KEY  = Symbol.for('@zhushanwen/pi-statusline.requestRender')
 - handshake 形状：`{version: 1, registry?: FooterLineRegistry, pending: PendingEntry[]}`
 - version 守卫：slot.version !== 1 时 console.warn + 丢弃重建
 
+**隐式公开 API 契约**：Symbol 字面量 `'@zhushanwen/pi-statusline.footerHandshake'` 与 `'@zhushanwen/pi-statusline.requestRender'` 是 statusline 对外暴露的**隐式公开 API**——consumer（如 permission）通过硬编码此字符串、用 `Symbol.for(...)` 反射访问握手 slot，无静态 import。这意味着这两个字符串**没有 semver 的编译期保护**：改名时 consumer 端不会 typecheck 报错，只会运行时静默失效（拿不到 registry、`requestFooterRender()` noop）。因此改名（或删除）属于 **breaking change**，需要 statusline **major bump**，并在 ADR + 两端源码注释中同步更新（当前 permission 端 `footer-provider.ts` 与 statusline 端 `footer-handshake-access.ts` 各自定义字面量，靠注释互相提醒保持一致）。`HANDSHAKE_VERSION` 守卫只防御 slot 形状漂移，不覆盖 key 字面量改名。
+
 #### 1.2 statusline 端：canonical owner 实现
 
 新建 `extensions/statusline/src/footer-handshake-access.ts`：
