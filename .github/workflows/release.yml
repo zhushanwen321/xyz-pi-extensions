@@ -37,6 +37,18 @@ jobs:
 
       # Fallback: changeset publish skips brand-new packages (npm 404 on info).
       # For any workspace package not yet on npm, publish it with --access public.
+      #
+      # IMPORTANT: this fallback only handles packages that are entirely absent from
+      # the npm registry. It MUST NOT republish a version that changeset publish
+      # just released. We check package-level existence (not version-level) for two
+      # reasons:
+      #   1. A version-level check (npm view name@version) races with npm registry
+      #      eventual consistency — the new version may still 404 moments after a
+      #      successful changeset publish, causing a duplicate publish attempt →
+      #      E403 "cannot publish over previously published versions", which (under
+      #      `set -e` semantics in composite steps) skips the GitHub Release step.
+      #   2. Once a package exists on npm, all subsequent version bumps are handled
+      #      by `pnpm changeset publish` above; this fallback has nothing to do.
       - name: Publish new packages (changeset fallback)
         run: |
           for pkg_json in extensions/*/package.json shared/*/package.json; do
@@ -47,11 +59,11 @@ jobs:
             name=$(node -p "require('./$pkg_json').name" 2>/dev/null)
             version=$(node -p "require('./$pkg_json').version" 2>/dev/null)
             [ -n "$name" ] || continue
-            # Check if this version exists on npm
-            if npm view "$name@$version" version >/dev/null 2>&1; then
-              echo "✓ $name@$version already on npm"
+            # Check if the PACKAGE exists on npm (not the version — see note above)
+            if npm view "$name" version >/dev/null 2>&1; then
+              echo "✓ $name exists on npm (version $version handled by changeset publish)"
             else
-              echo "→ Publishing $name@$version (new package or version)"
+              echo "→ Publishing $name@$version (brand-new package, not yet on npm)"
               (cd "$(dirname "$pkg_json")" && npm publish --access public)
             fi
           done

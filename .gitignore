@@ -12,3 +12,6 @@ coverage/
 
 # zcode 编辑器会话计划（per-session 产物，不入库）
 .zcode/
+
+# code-review 运行时产物（aggregated.md / premerge-result / run-* 等）
+.review/
