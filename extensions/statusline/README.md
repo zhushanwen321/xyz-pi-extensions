@@ -216,6 +216,34 @@ shared/quota-providers/    # workspace 共享包
         └── tavily.ts
 ```
 
+## Footer Line 注册协议
+
+statusline 是 footer 的 **canonical owner**。其他扩展可以通过 **globalThis Symbol 握手协议** 注册自己的 footer 行，避免 `ctx.ui.setFooter` 单例冲突（Pi 只有一个 footer 槽位，多扩展各自 setFooter 会互相覆盖）。
+
+> 供其他扩展作者参考。参考实现见 [ADR-036](../../docs/adr/036-statusline-footer-aggregation.md) 与 `@zhushanwen/pi-permission` 的 `extensions/permission/src/footer-provider.ts`。
+
+### 协议
+
+- `FOOTER_HANDSHAKE_KEY = Symbol.for('@zhushanwen/pi-statusline.footerHandshake')`
+- `REQUEST_RENDER_KEY = Symbol.for('@zhushanwen/pi-statusline.requestRender')`
+- slot shape：`{version: 1, registry?: FooterLineRegistry, pending: PendingEntry[]}`
+- **statusline 是 canonical owner**：唯一创建 registry（`getOrCreateFooterRegistry`），并向 `slot.registry` 写入实例。
+- **consumer 永不创建 registry**：只通过 handshake key 读写 slot。registry 未就绪时 consumer 把 line entry push 到 `slot.pending`，等 statusline 后到时 flush（pending-flush 模式，沿用 ask-user #M4 修复）。
+- renderer 带数字 `order`，`buildLines` 按 order 升序聚合 statusline 自身行 + 所有外部注册行。
+- **加载顺序无关**：statusline 先到则直接注册；consumer 先到则入 pending 队列由 statusline flush。
+
+### consumer 用法
+
+consumer 端用**纯 globalThis 反射**（不静态 import statusline），定义本地等价的 `FooterLineRenderer` / `FooterLineRegistry` interface（结构匹配即可，TS 结构类型天然兼容）。这样 statusline 作为可选 `peerDep` 未安装时，静态 import 不会破坏 consumer —— 只是在反射时拿不到 registry，silent 降级。
+
+```
+session_start → 读 globalThis[FOOTER_HANDSHAKE_KEY]
+  ├─ slot 已存在 & registry 就绪 → 直接 registry.register(...)
+  └─ 否则 → push 到 slot.pending（statusline 后到时 flush）
+```
+
+详见 [ADR-036](../../docs/adr/036-statusline-footer-aggregation.md) 和 `@zhushanwen/pi-permission` 的 `extensions/permission/src/footer-provider.ts` 作为参考实现。
+
 ## 性能 / 缓存
 
 - provider 数据通过 `cache.ts` 缓存，TTL 5 分钟
