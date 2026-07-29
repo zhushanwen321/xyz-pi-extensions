@@ -82,6 +82,8 @@ export interface ResolvedModelEntry {
 	cost: ModelCost;
 	/** 该 provider 在 models.json 是否配置了 apiKey（auth 可用） */
 	hasApiKey: boolean;
+	/** 该 provider 的 apiKey（用于 streamSimple 调用） */
+	apiKey?: string;
 }
 
 // ──────────────────────── loadModelsJson ────────────────────────
@@ -128,6 +130,7 @@ export function flattenModels(data: ModelsJsonFile): ResolvedModelEntry[] {
 	for (const [providerName, providerDef] of Object.entries(providers)) {
 		if (!providerDef || typeof providerDef !== "object") continue;
 		const hasApiKey = typeof providerDef.apiKey === "string" && providerDef.apiKey.length > 0;
+		const apiKey = hasApiKey ? providerDef.apiKey : undefined;
 		const modelDefs = Array.isArray(providerDef.models) ? providerDef.models : [];
 		for (const m of modelDefs) {
 			if (!m || typeof m.id !== "string") continue;
@@ -141,6 +144,7 @@ export function flattenModels(data: ModelsJsonFile): ResolvedModelEntry[] {
 				baseUrl: typeof m.baseUrl === "string" ? m.baseUrl : typeof providerDef.baseUrl === "string" ? providerDef.baseUrl : undefined,
 				cost: m.cost ?? DEFAULT_COST,
 				hasApiKey,
+				apiKey,
 			});
 		}
 	}
@@ -233,6 +237,7 @@ export interface ResolvedModel {
 	name?: string;
 	baseUrl?: string;
 	inputCost?: number;
+	apiKey?: string;
 }
 
 /**
@@ -264,6 +269,7 @@ export function resolveClassifierModel(
 			name: cheapest.name,
 			baseUrl: cheapest.baseUrl,
 			inputCost: cheapest.cost.input,
+			apiKey: cheapest.apiKey,
 		};
 	}
 
@@ -284,5 +290,6 @@ export function resolveClassifierModel(
 		name: found.name,
 		baseUrl: found.baseUrl,
 		inputCost: found.cost.input,
+		apiKey: found.apiKey,
 	};
 }

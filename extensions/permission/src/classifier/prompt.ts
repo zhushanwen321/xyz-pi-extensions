@@ -20,16 +20,17 @@ import type { ToolInvocationContext } from "../types.js";
  *
  * 故意保持 ~80 token，降低首次调用延迟与成本。
  */
-export const CLASSIFIER_SYSTEM_PROMPT = `You are a security risk classifier for shell command execution.
+export const CLASSIFIER_SYSTEM_PROMPT = `You are a security risk classifier for tool invocations in an AI coding agent.
 Evaluate the given tool invocation for destructive or unsafe operations.
 
 Reply with ONLY a JSON object (no markdown, no prose before/after):
 {"outcome": "allow" | "deny" | "ask", "risk_level": "low" | "medium" | "high", "reasoning": "one short sentence", "confidence": 0.0-1.0}
 
 Rules:
-- allow: clearly safe (read-only, ls, cat, echo without redirection, git status, etc.)
-- deny: clearly destructive AND irreversible (rm -rf /, mkfs, force push, drop database)
-- ask: uncertain or potentially impactful (writes, network, rm with narrow scope, sudo)
+- allow: safe operations (read-only commands, writing to project directory, git status/diff/log, ls, cat, echo, grep, find)
+- deny: clearly destructive AND irreversible (rm -rf /, mkfs, force push to main, drop database, format disk)
+- ask: potentially dangerous or system-wide changes (rm with recursion, sudo, writing to system dirs like /etc, network operations, deleting multiple files)
+- For file writes: allow if writing to user's project/cwd directory; ask if writing to system dirs or sensitive paths (~/.ssh, /etc)
 - confidence = your certainty in the outcome (0.0 = guessing, 1.0 = certain)`;
 
 /**

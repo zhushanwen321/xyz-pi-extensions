@@ -180,28 +180,21 @@ async function rpcAddFlow(
 		const desc = await input("[pi-permission] Description (optional)", "");
 		selections.description = desc || undefined;
 	} else {
-		// 非 custom：选命令
-		const cmdOptions = [...PRESET_COMMANDS.map((c) => c.label), "[Other]"];
-		const cmdChoice = await select("[pi-permission] Select command", cmdOptions);
-		if (cmdChoice === undefined) return undefined;
+		// 非 custom：选命令（带搜索）
+		const cmdResult = await rpcSelectCommand(select, input);
+		if (cmdResult === undefined) return undefined;
+		selections.cmd = cmdResult;
 
-		if (cmdChoice === "[Other]") {
-			const cmd = await input("[pi-permission] Enter command name", "");
-			if (cmd === undefined || cmd.trim().length === 0) return undefined;
-			selections.cmd = cmd.trim();
-		} else {
-			const preset = PRESET_COMMANDS.find((c) => c.label === cmdChoice);
-			selections.cmd = preset?.cmd ?? cmdChoice;
-		}
-
-		// deny-family：还需选子命令
-		if (template.id === "deny-family") {
-			const subChoice = await select("[pi-permission] Deny scope", [
-				"[Any subcommand]",
-				"[Specific subcommand]",
+		// 选择范围：整个命令家族 / 特定子命令
+		if (template.id !== "allow-family" && template.id !== "ask-before") {
+			// deny-family / allow-subcmd：需要选子命令
+			const scopeChoice = await select(`[pi-permission] Select scope for ${cmdResult}`, [
+				`${cmdResult} * (all subcommands)`,
+				`${cmdResult} <subcommand> * (specific)`,
 			]);
-			if (subChoice === undefined) return undefined;
-			if (subChoice === "[Specific subcommand]") {
+			if (scopeChoice === undefined) return undefined;
+
+			if (scopeChoice.includes("<subcommand>")) {
 				const subcmd = await input("[pi-permission] Enter subcommand name", "");
 				if (subcmd === undefined || subcmd.trim().length === 0) return undefined;
 				selections.subcmd = subcmd.trim();
@@ -209,19 +202,46 @@ async function rpcAddFlow(
 				selections.subcmd = "__any__";
 			}
 		}
-
-		// allow-subcmd：还需输入子命令
-		if (template.id === "allow-subcmd") {
-			const subcmd = await input("[pi-permission] Enter subcommand name", "");
-			if (subcmd === undefined || subcmd.trim().length === 0) return undefined;
-			selections.subcmd = subcmd.trim();
-		}
 	}
 
 	const built = template.build(selections);
 	const ruleId = sessionIdCounter(); // G13：立即赋值
 	const rule: Rule = { id: ruleId, ...built };
 	return { kind: "add", rule };
+}
+
+/** RPC 命令选择（带搜索） */
+async function rpcSelectCommand(
+	select: (title: string, options: string[]) => Promise<string | undefined>,
+	input: (title: string, placeholder?: string) => Promise<string | undefined>,
+): Promise<string | undefined> {
+	// 先问用户是否要搜索
+	const modeChoice = await select("[pi-permission] How to select command?", [
+		"[Browse list]",
+		"[Type to search]",
+	]);
+	if (modeChoice === undefined) return undefined;
+
+	if (modeChoice === "[Type to search]") {
+		// 直接输入命令名
+		const cmd = await input("[pi-permission] Enter command name", "");
+		if (cmd === undefined || cmd.trim().length === 0) return undefined;
+		return cmd.trim();
+	}
+
+	// 浏览列表
+	const cmdOptions = [...PRESET_COMMANDS.map((c) => c.label), "[Other]"];
+	const cmdChoice = await select("[pi-permission] Select command", cmdOptions);
+	if (cmdChoice === undefined) return undefined;
+
+	if (cmdChoice === "[Other]") {
+		const cmd = await input("[pi-permission] Enter command name", "");
+		if (cmd === undefined || cmd.trim().length === 0) return undefined;
+		return cmd.trim();
+	}
+
+	const preset = PRESET_COMMANDS.find((c) => c.label === cmdChoice);
+	return preset?.cmd ?? cmdChoice;
 }
 
 /** RPC edit flow：选择 action（edit fields / delete）。 */

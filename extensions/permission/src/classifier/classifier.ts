@@ -182,13 +182,14 @@ export function createClassifier(deps: ClassifierDeps): {
 			return { ...CLASSIFY_FALLBACK_RESULT };
 		}
 
-		// 2. 构造 model/context/options（timeout 秒→毫秒，传 provider 原生 timeoutMs + signal）
+		// 2. 构造 model/context/options（timeout 秒→毫秒，传 provider 原生 timeoutMs + signal + apiKey）
 		const model = buildModel(resolved);
 		const context = buildContext(ctx);
 		const timeoutMs = config.timeout > 0 ? config.timeout * MILLIS_PER_SECOND : undefined;
 		const options: SimpleStreamOptions = {
 			...(timeoutMs !== undefined ? { timeoutMs } : {}),
 			...(signal !== undefined ? { signal } : {}),
+			...(resolved.apiKey !== undefined ? { apiKey: resolved.apiKey } : {}),
 		};
 
 		// 3. 调用 streamSimple（同步返回 EventStream）。包裹 try/catch 防同步抛错。
@@ -226,7 +227,8 @@ export function createClassifier(deps: ClassifierDeps): {
 		// 5. G3 关键修正：显式检查 stopReason。error/aborted → fallback（不能当成功）
 		const message = settled.message;
 		if (message?.stopReason === "error" || message?.stopReason === "aborted") {
-			onLog?.(`[pi-permission] classifier: stream stopReason=${message.stopReason}, returning fallback`);
+			const errorDetail = message?.content?.[0]?.text ?? "unknown error";
+			onLog?.(`[pi-permission] classifier: stream stopReason=${message.stopReason}, error=${errorDetail}, returning fallback`);
 			return { ...CLASSIFY_FALLBACK_RESULT };
 		}
 

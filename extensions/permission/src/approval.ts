@@ -276,13 +276,13 @@ export class ApprovalComponent implements Component {
 
 	handleInput(data: string): void {
 		if (this._resolved) return;
-		// y / Enter → approve
-		if (matchesKey(data, "enter") || matchesKey(data, "y")) {
+		// Enter → approve
+		if (matchesKey(data, "enter")) {
 			this.approve();
 			return;
 		}
-		// n / Esc → deny
-		if (matchesKey(data, "escape") || matchesKey(data, "n")) {
+		// Esc → deny
+		if (matchesKey(data, "escape")) {
 			this.deny();
 			return;
 		}
@@ -335,7 +335,7 @@ export function renderApprovalView(req: ApprovalRequest, width: number): string[
 		inner.push(`  reasoning: ${pc.reasoning}`);
 	}
 	inner.push("");
-	inner.push("[y/Enter] Approve  [n/Esc] Deny");
+	inner.push("[Enter] Approve  [Esc] Deny");
 
 	// 用 box 边框包裹
 	const lines: string[] = [];
