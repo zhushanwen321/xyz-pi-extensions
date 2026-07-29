@@ -449,11 +449,31 @@ function dispatchWorkflowCall(
 
   const postResult = (result: unknown): void => {
     if (run.state.status !== "running") return;
-    run.runtime?.worker.postMessage({
-      type: "workflow-result",
-      callId: msg.callId,
-      result,
-    });
+    // W2 主线程防御：result 是子 workflow 任意返回值，可能含不可克隆成员（function/
+    // Symbol/循环引用）→ postMessage 同步抛 DataCloneError。内部 try/catch + 回发
+    // 纯字符串 fallback result，让 worker 内 workflow() pending Promise resolve。
+    // 注意：错误变量用 err（外层 dispatchWorkflowCall 参数名为 msg，避免遮蔽）。
+    try {
+      run.runtime?.worker.postMessage({
+        type: "workflow-result",
+        callId: msg.callId,
+        result,
+      });
+    } catch (err) {
+      const errMsg = err instanceof Error ? err.message : String(err);
+      console.error(`[workflow] postResult (workflow-call callId=${msg.callId}) failed: ${errMsg}. Sending error fallback.`);
+      // 回发纯字符串 fallback result（必可克隆），让 worker pending resolve
+      try {
+        run.runtime?.worker.postMessage({
+          type: "workflow-result",
+          callId: msg.callId,
+          result: { content: "", error: `Workflow result serialization failed: ${errMsg}` },
+        });
+      } catch {
+        // fallback 也失败——worker 此 callId 的 pending 只能靠 timeout 兜底
+        console.error(`[workflow] postResult fallback also failed (callId=${msg.callId}): worker pending will hang until timeout`);
+      }
+    }
   };
 
   if (!deps.onWorkflowCall) {
@@ -477,6 +497,12 @@ function dispatchWorkflowCall(
 
 /**
  * 回发 agent-result 给 worker（worker 内 pending Promise 据此 resolve）。
+ *
+ * W2 主线程防御：result 是 agent 返回值，含不可克隆成员（function/Symbol/循环引用）时
+ * postMessage 同步抛 DataCloneError。若冒泡到 dispatchAgentCall 的 .then 回调，会中断
+ * 后续 postBudgetUpdate/store.save/budget 检查，run 卡在 running。故内部 try/catch：
+ * 失败时记录诊断 + 回发纯字符串 fallback result（必可克隆），让 worker pending resolve。
+ * 函数签名不变（所有调用点无需改动），仅用 console.error 记日志（deps 不在手边）。
  */
 function postAgentResult(
   run: WorkflowRun,
@@ -484,7 +510,24 @@ function postAgentResult(
   result: AgentResult,
   cached: boolean,
 ): void {
-  run.runtime?.worker.postMessage({ type: "agent-result", callId, result, cached });
+  try {
+    run.runtime?.worker.postMessage({ type: "agent-result", callId, result, cached });
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    console.error(`[workflow] postAgentResult failed (callId=${callId}): ${msg}. Result likely contains non-cloneable value.`);
+    // 回发纯字符串 fallback result（必可克隆），让 worker pending resolve（避免永久挂起）
+    try {
+      run.runtime?.worker.postMessage({
+        type: "agent-result",
+        callId,
+        result: { content: "", error: `Result serialization failed: ${msg}` },
+        cached,
+      });
+    } catch {
+      // fallback 也失败——worker 此 callId 的 pending 只能靠 timeout/exit 兜底
+      console.error(`[workflow] postAgentResult fallback also failed (callId=${callId}): worker pending will hang until timeout`);
+    }
+  }
 }
 
 /**
@@ -496,13 +539,20 @@ function postAgentResult(
  * （dispatch 后同步 worker $BUDGET）——单一实现，避免消息形状漂移。
  */
 export function postBudgetUpdate(run: WorkflowRun): void {
-  run.runtime?.worker.postMessage({
-    type: "budget-update",
-    budget: {
-      usedTokens: run.state.budget.usedTokens,
-      usedCost: run.state.budget.usedCost,
-    },
-  });
+  try {
+    run.runtime?.worker.postMessage({
+      type: "budget-update",
+      budget: {
+        usedTokens: run.state.budget.usedTokens,
+        usedCost: run.state.budget.usedCost,
+      },
+    });
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    // budget 是纯 number 不太可能失败，但防御性兜底——budget 同步非关键（worker 仍可
+    // 基于 $BUDGET.spent() 自行累计），失败仅记日志，不中断调用方流程。
+    console.error(`[workflow] postBudgetUpdate failed: ${msg}. Budget sync to worker skipped (non-critical).`);
+  }
 }
 
 /**
