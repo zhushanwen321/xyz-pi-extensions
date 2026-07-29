@@ -101,7 +101,7 @@ ln -s /path/to/xyz-pi-extensions-workspace/feat-permission-and-auto-mode/extensi
 
 内置规则分两类，均代码硬编码，用户不可改：
 
-- **白名单（builtin-safe）**：50 条无条件安全命令（24 Codex 移植 + 26 本扩展扩充：`cat`/`cd`/`echo`/`ls`/`grep`/`pwd`/`diff`/`jq`/`du`/`file`/`ps` 等）+ 9 条带 flag 子检查的条件安全命令（`base64`/`find`/`rg`/`git`/`sed`/`sort`/`iconv`/`shuf`/`date`）。命中白名单 → 直接 `allow`（不跑规则遍历与 AI）。
+- **白名单（builtin-safe）**：50 条无条件安全命令（24 Codex 移植 + 26 本扩展扩充：`cat`/`cd`/`echo`/`ls`/`grep`/`pwd`/`diff`/`jq`/`du`/`file`/`ps` 等）+ 9 条带 flag 子检查的条件安全命令（`base64`/`find`/`rg`/`git`/`sed`/`sort`/`iconv`/`shuf`/`date`）。规则遍历无 deny/allow 命中时（ask），白名单兜底 allow（不跑 AI）。
 - **危险规则（builtin-danger）**：12 条正则规则（`rm -rf`、`sudo`、`chmod 777`、`curl ... | sh`、`git push --force`、`git reset --hard` 等）。pattern 是 RegExp 源字符串（含 `\b`/`\s`），用 `new RegExp(pattern, 'i')` 编译，`action` 固定 `deny`。
 
 完整清单与每条规则的 pattern/示例见下方「规则系统」第 2、3 节。
@@ -128,15 +128,15 @@ W2 AST 结构分析 → W3 规则匹配 → W4 AI Classifier（仅 auto）
 
 W3 内部评估顺序：
 
-1. **`isKnownSafeCommand(argv)`**：命中 50+9 白名单 → 直接 `allow`（虚拟 `builtin-safe` rule），不进后续遍历
-2. **`[...BUILTIN_DANGER_RULES, ...userRules]`**：按数组顺序遍历，last-match-wins
-3. **无匹配**：返回 `ask`（交下游 W4 AI 或人工审批，不静默 deny）
+1. **`[...BUILTIN_DANGER_RULES, ...userRules]`**：按数组顺序遍历，last-match-wins。deny → 直接 deny；allow → 直接 allow
+2. **无规则匹配（ask）→ 白名单兜底**：`isKnownSafeCommand(argv)` 命中 → `allow`（虚拟 `builtin-safe` rule）
+3. **仍无命中**：返回 `ask`（交下游 W4 AI 或人工审批，不静默 deny）
 
 注意：只有 bash 工具的命令字符串会走规则匹配；非 bash 工具（Read/Write/Edit 等）在 `pipeline.ts` 的 `matchNonBashTool` 中单独评估用户规则（详见第 5 节「tool 字段」）。
 
 ### 2. 内置安全白名单（builtin-safe，不可改）
 
-由 `BUILTIN_UNCONDITIONAL_SAFE` + `CONDITIONAL_SAFE_COMMANDS` 实现（函数判定，不是 `Rule[]`），命中后直接 `allow`，跳过规则遍历与 AI。
+由 `BUILTIN_UNCONDITIONAL_SAFE` + `CONDITIONAL_SAFE_COMMANDS` 实现（函数判定，不是 `Rule[]`），白名单仅在规则遍历无 deny/allow 命中时（ask）作为 allow 兜底，不短路规则遍历。用户 deny 规则可覆盖白名单。
 
 **50 条无条件安全命令**（`BUILTIN_UNCONDITIONAL_SAFE`，仅看 argv[0] basename）：
 

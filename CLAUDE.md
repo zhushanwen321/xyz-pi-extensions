@@ -22,7 +22,7 @@ xyz-pi-extensions/
 │   ├── model-switch/        → @zhushanwen/pi-model-switch
 │   ├── plan/                → @zhushanwen/pi-plan
 │   ├── ask-user/            → @zhushanwen/pi-ask-user
-│   ├── permission/          → @zhushanwen/pi-permission (四档权限模式 yolo/auto/approve/strict + 三层管道 AST+规则+AI Classifier；含 statusline footer 集成 + 12 条内置危险规则 + 24+5 白名单 + Reject-with-Reason)
+│   ├── permission/          → @zhushanwen/pi-permission (四档权限模式 yolo/auto/approve/strict + 三层管道 AST+规则+AI Classifier；含 statusline footer 集成 + 12 条内置危险规则 + 50+9 白名单 + Reject-with-Reason)
 │   └── pending-notifications/ → @zhushanwen/pi-pending-notifications
 ├── shared/                      # 内部共享包（private，不独立发布）
 │   ├── quota-providers/     → @zhushanwen/pi-quota-providers
