@@ -4,7 +4,7 @@ import path from "node:path";
 
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { CONFIG, countAssistantReplies, extractTitle, isEnabled } from "../pure.js";
+import { CONFIG, countAssistantReplies, extractTitle, isEnabled, setSwitch } from "../pure.js";
 
 // ────────────────────────────────────────────────────
 // countAssistantReplies
@@ -115,6 +115,51 @@ describe("isEnabled", () => {
 		} finally {
 			spy.mockRestore();
 		}
+	});
+});
+
+// ────────────────────────────────────────────────────
+// setSwitch
+// ────────────────────────────────────────────────────
+
+describe("setSwitch", () => {
+	let tmpDir: string;
+
+	afterEach(() => {
+		if (tmpDir) {
+			fs.rmSync(tmpDir, { recursive: true, force: true });
+		}
+	});
+
+	it("enabled=true 创建文件（含父目录）", () => {
+		tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "rename-set-"));
+		const switchFile = path.join(tmpDir, "sub", "auto-rename-enabled");
+		const msg = setSwitch(switchFile, true);
+		expect(msg).toContain("已开启");
+		expect(fs.existsSync(switchFile)).toBe(true);
+	});
+
+	it("enabled=false 删除已存在的文件", () => {
+		tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "rename-set-"));
+		const switchFile = path.join(tmpDir, "auto-rename-enabled");
+		fs.writeFileSync(switchFile, "");
+		const msg = setSwitch(switchFile, false);
+		expect(msg).toContain("已关闭");
+		expect(fs.existsSync(switchFile)).toBe(false);
+	});
+
+	it("enabled=false 文件不存在 → 提示已是关闭状态", () => {
+		const switchFile = path.join(os.tmpdir(), "rename-not-exist-" + Date.now());
+		const msg = setSwitch(switchFile, false);
+		expect(msg).toContain("已是关闭状态");
+	});
+
+	it("enabled=true 文件已存在 → 幂等，仍提示已开启", () => {
+		tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "rename-set-"));
+		const switchFile = path.join(tmpDir, "auto-rename-enabled");
+		fs.writeFileSync(switchFile, "");
+		const msg = setSwitch(switchFile, true);
+		expect(msg).toContain("已开启");
 	});
 });
 

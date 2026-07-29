@@ -84,3 +84,24 @@ export function isEnabled(switchFilePath: string): boolean {
 		return false;
 	}
 }
+
+/**
+ * 设置开关状态。enabled=true 创建文件（含父目录），false 删除文件。
+ * 返回操作结果描述（供 command 反馈）。IO 失败时返回错误信息，不抛。
+ */
+export function setSwitch(switchFilePath: string, enabled: boolean): string {
+	try {
+		if (enabled) {
+			fs.mkdirSync(path.dirname(switchFilePath), { recursive: true });
+			fs.writeFileSync(switchFilePath, "", { flag: "a" });
+			return `已开启：自动重命名会话（${switchFilePath}）`;
+		}
+		if (fs.existsSync(switchFilePath)) {
+			fs.unlinkSync(switchFilePath);
+			return "已关闭：自动重命名会话";
+		}
+		return "已是关闭状态，无需操作";
+	} catch (e) {
+		return `设置失败：${e instanceof Error ? e.message : String(e)}`;
+	}
+}

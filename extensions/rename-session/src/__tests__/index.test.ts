@@ -44,6 +44,7 @@ function createMockPi(): MockSetup {
 		on: vi.fn((event: string, handler: MockSetup["turnEndHandler"]) => {
 			if (event === "turn_end") turnEndHandler = handler;
 		}),
+		registerCommand: vi.fn(),
 		setSessionName: setSessionNameMock,
 		getAllTools: getAllToolsMock,
 	} as unknown as ExtensionAPI;

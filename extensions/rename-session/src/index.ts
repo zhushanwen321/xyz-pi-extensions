@@ -1,5 +1,6 @@
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 
+import { registerAutoRenameCommand } from "./commands.js";
 import { callRenameLLM, isSubagentSession } from "./llm.js";
 import { CONFIG, countAssistantReplies, isEnabled } from "./pure.js";
 
@@ -23,6 +24,8 @@ interface ToolInfoLike {
  * 新 session 首 turn 完成后，自动生成会话标题并 setSessionName 落库。
  */
 export default function renameSessionExtension(pi: ExtensionAPI): void {
+	registerAutoRenameCommand(pi);
+
 	pi.on("turn_end", async (_event: TurnEndLikeEvent, ctx: ExtensionContext) => {
 		try {
 			// 1. 开关检查
