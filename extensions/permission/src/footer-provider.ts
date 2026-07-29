@@ -156,22 +156,38 @@ export function requestFooterRender(): void {
 /**
  * 渲染 permission footer 行（纯函数，便于单测）。
  *
- * 精简版：只显示 mode + enabled（classifier model/detail 归 widget，避免 footer 拥挤）。
- *  - enabled=true  → '[permission] <LABEL> · enabled'
+ * 信息密度：mode + enabled + user rule count + classifier model（auto 模式）。
+ *  - enabled=true  → '[permission] <LABEL> · enabled · N user rule(s) [· classifier: <model>]'
  *  - enabled=false → '[permission] disabled'
+ *
+ * classifier model 仅在 auto 模式且非空时显示（其他模式不跑 AI 分类，显示无意义）。
+ * rule(s) 单复数随 count 变化（1→rule，其他→rules）。
  *
  * @param mode 当前权限模式
  * @param enabled 扩展是否启用
+ * @param userRuleCount 用户自定义规则数量
+ * @param classifierModel classifier 模型 id（auto 模式才显示）
  * @param palette 色彩映射（测试可传透传 palette）
  */
 export function renderPermissionFooterLine(
 	mode: PermissionMode,
 	enabled: boolean,
+	userRuleCount: number,
+	classifierModel: string,
 	palette: PermissionPalette,
 ): string {
 	if (!enabled) {
 		return `${palette.dim("[permission]")} ${palette.warning("disabled")}`;
 	}
 	const label = MODE_LABELS[mode];
-	return `${palette.dim("[permission]")} ${palette.accent(label)} ${palette.dim("·")} ${palette.success("enabled")}`;
+	const ruleWord = userRuleCount === 1 ? "rule" : "rules";
+	const parts: string[] = [
+		`${palette.dim("[permission]")} ${palette.accent(label)}`,
+		palette.success("enabled"),
+		`${palette.dim(`${userRuleCount} user ${ruleWord}`)}`,
+	];
+	if (mode === "auto" && classifierModel) {
+		parts.push(`${palette.dim("classifier:")} ${palette.text(classifierModel)}`);
+	}
+	return parts.join(` ${palette.dim("·")} `);
 }

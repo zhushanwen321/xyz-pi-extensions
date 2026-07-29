@@ -11,8 +11,9 @@
  *  - yolo 快速路径：mode=yolo 或 enabled=false → 直接 return undefined（不跑管道）。
  *
  * W6 阶段（footer-provider 重构）：session_start / session_tree 通过握手协议注册 footer
- * line renderer（consumer 端，statusline 是 canonical owner），显示当前 mode + enabled；
- * 同时 setWidget("permission", ...) 显示 rule count + classifier model 的常驻提示。
+ * line renderer（consumer 端，statusline 是 canonical owner），显示当前 mode + enabled +
+ * rule count + classifier model（auto 模式）。所有权限信息聚合到 footer 一行（order=2），
+ * 不再使用 setWidget，避免与 statusline widget 区域重复。
  *  - footer line 不再独占 Pi footer 槽位，而是作为 statusline footer 的一行（order=2），
  *    与 statusline 自身行共存（解决旧 setFooter 单例覆盖问题）。
  *  - session_tree：分支切换后重建 renderer 闭包，避免持有过期 config。
@@ -39,7 +40,6 @@ import {
 	type FooterLineRenderer,
 } from "./footer-provider.js";
 import { paletteFromTheme, type PermissionPalette } from "./statusline-palette.js";
-import { renderPermissionHint } from "./widget.js";
 import type { PermissionConfig } from "./types.js";
 
 // ──────────────────────── tool_call event 最小子集 ────────────────────────
@@ -91,24 +91,22 @@ export default function permissionExtension(pi: ExtensionAPI): void {
 	// 避免持有过期 config 闭包。mode/enabled 切换后调 requestFooterRender() 触发重绘。
 	let disposeFooterLine: () => void = () => {};
 
-	// ──────────────────────── session_start：重载配置 + 注册 footer line + 刷 widget ────────────────────────
+	// ──────────────────────── session_start：重载配置 + 注册 footer line ────────────────────────
 	pi.on("session_start", (_event: unknown, ctx: ExtensionContext) => {
 		refreshConfig();
 		// footer-provider：通过握手协议注册 footer line renderer（consumer 端）。
 		// statusline 是 canonical owner；permission 永不创建 registry，只 push pending 或
 		// 直接 register（owner 已就绪时）。duck typing：headless/mock ctx 无 theme 时跳过。
 		disposeFooterLine = registerFooterLineFor(ctx);
-		refreshWidget(ctx);
 	});
 
-	// ──────────────────────── session_tree：分支切换后重建 renderer 闭包 + 刷 widget ────────────────────────
+	// ──────────────────────── session_tree：分支切换后重建 renderer 闭包 ────────────────────────
 	// 分支切换（worktree/leaf 变化）后，旧 renderer 闭包可能持有过期 config；重建确保读到新值。
 	// 同时重载 config（用户可能在分支里手动改过 permission-config.json）。
 	pi.on("session_tree", (_event: unknown, ctx: ExtensionContext) => {
 		refreshConfig();
 		disposeFooterLine();
 		disposeFooterLine = registerFooterLineFor(ctx);
-		refreshWidget(ctx);
 	});
 
 	// ──────────────────────── /permission 命令 ────────────────────────
@@ -146,8 +144,8 @@ export default function permissionExtension(pi: ExtensionAPI): void {
 							const result = saveConfig(newConfig);
 							if (result.success) {
 								config = newConfig; // 更新闭包状态
-								// userRules 数量变化 → 刷 widget（rule count 提示）。
-								refreshWidget(ctx);
+								// userRules 数量变化 → 请求 statusline 重绘 footer（rule count 部分）。
+								requestFooterRender();
 							}
 							return result;
 						},
@@ -184,9 +182,7 @@ export default function permissionExtension(pi: ExtensionAPI): void {
 							const result = saveConfig(newConfig);
 							if (result.success) {
 								config = newConfig; // 更新闭包状态
-								// classifier model 变化 → 刷 widget（auto 模式显示 model）
-								// + 请求 statusline 重绘（保险，footer 当前不显示 model）。
-								refreshWidget(ctx);
+								// classifier model 变化 → 请求 statusline 重绘 footer（auto 模式显示 model）。
 								requestFooterRender();
 							}
 							return result;
@@ -200,10 +196,8 @@ export default function permissionExtension(pi: ExtensionAPI): void {
 				const result = saveConfig(newConfig);
 				if (result.success) {
 					config = newConfig; // 更新闭包状态
-					// footer 仅显示 mode + enabled；切换成功后请求 statusline 重绘 + 刷 widget，
-					// 避免显示旧 mode 直到 resize/timer。
+					// mode/enabled 切换后请求 statusline 重绘 footer，避免显示旧 mode 直到 resize/timer。
 					requestFooterRender();
-					refreshWidget(ctx);
 				}
 				return result;
 			});
@@ -223,7 +217,7 @@ export default function permissionExtension(pi: ExtensionAPI): void {
 		return approvalChain;
 	});
 
-	// ──────────────────────── footer line / widget 辅助（闭包内，捕获 config） ────────────────────────
+	// ──────────────────────── footer line 辅助（闭包内，捕获 config） ────────────────────────
 
 	/**
 	 * 从 ctx.ui.theme 构造 palette 并注册 permission footer line renderer。
@@ -238,30 +232,20 @@ export default function permissionExtension(pi: ExtensionAPI): void {
 	}
 
 	/**
-	 * 构造 footer line renderer。render 闭包读最新 config.mode/enabled，
-	 * 故 session 内 mode 切换后 statusline 重绘即可见新值（无需重建 renderer）。
+	 * 构造 footer line renderer。render 闭包读最新 config.mode/enabled/userRules/classifier，
+	 * 故 session 内任意字段切换后 statusline 重绘即可见新值（无需重建 renderer）。
 	 */
 	function makePermissionFooterRenderer(palette: PermissionPalette): FooterLineRenderer {
 		return {
 			order: 2,
-			render: () => renderPermissionFooterLine(config.mode, config.enabled, palette),
+			render: () => renderPermissionFooterLine(
+				config.mode,
+				config.enabled,
+				config.userRules.length,
+				config.classifier.model,
+				palette,
+			),
 		};
-	}
-
-	/**
-	 * 刷新 permission widget。headless/mock ctx 无 setWidget 时跳过（不抛异常）。
-	 * widget 显示 rule count + classifier model（auto 模式）。
-	 */
-	function refreshWidget(ctx: ExtensionContext): void {
-		if (typeof ctx.ui.setWidget !== "function") return;
-		ctx.ui.setWidget(
-			"permission",
-			renderPermissionHint({
-				mode: config.mode,
-				userRuleCount: config.userRules.length,
-				classifierModel: config.classifier.model,
-			}),
-		);
 	}
 }
 

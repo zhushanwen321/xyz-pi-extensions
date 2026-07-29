@@ -585,18 +585,17 @@ describe("回归：边界百分比和 reset 时间对齐", () => {
 // ════════════════════════════════════════════════════════
 
 describe("formatSpeedPart", () => {
-	it("TC5 current + day 都有 → 仅显示 current（去 day 标记）", () => {
+	it("TC5 current + day 都有 → 显示 current · day（双值并列）", () => {
 		const result = formatSpeedPart({ current: 127, day: 85 }, plainPallet);
-		expect(result).toBe("│ speed 127t/s");
+		expect(result).toBe("│ speed 127t/s · day 85t/s");
 	});
 
-	it("TC5 只有 current（day=0）→ 显示 current", () => {
+	it("TC5 只有 current（day=0）→ 仅显示 current", () => {
 		const result = formatSpeedPart({ current: 50, day: 0 }, plainPallet);
 		expect(result).toBe("│ speed 50t/s");
 	});
 
-	it("TC5 day 标记移除：current=0 但 day>0 → 返回空串（不再渲染 day）", () => {
-		// day 数据保留在结构中，但 render 不再用——current=0 即无速度展示
+	it("current=0 但 day>0 → 返回空串（无当前速度时单显 day 易误导）", () => {
 		const result = formatSpeedPart({ current: 0, day: 30 }, plainPallet);
 		expect(result).toBe("");
 	});
@@ -614,17 +613,17 @@ describe("formatSpeedPart", () => {
 // ════════════════════════════════════════════════════════
 
 describe("formatCacheRatioPart", () => {
-	it("TC6 current + day 都有 → 仅显示 current（去 day 标记）", () => {
+	it("TC6 current + day 都有 → 显示 current · day（双值并列）", () => {
 		const result = formatCacheRatioPart({ current: 85, day: 72 }, plainPallet);
-		expect(result).toBe("│ cache 85%");
+		expect(result).toBe("│ cache 85% · day 72%");
 	});
 
-	it("TC6 只有 current（day=null）→ 显示 current", () => {
+	it("TC6 只有 current（day=null）→ 仅显示 current", () => {
 		const result = formatCacheRatioPart({ current: 50, day: null }, plainPallet);
 		expect(result).toBe("│ cache 50%");
 	});
 
-	it("TC6 day 标记移除：current=null 但 day 有值 → 返回空串（不再渲染 day）", () => {
+	it("current=null 但 day 有值 → 返回空串（无当前缓存时单显 day 易误导）", () => {
 		const result = formatCacheRatioPart({ current: null, day: 30 }, plainPallet);
 		expect(result).toBe("");
 	});

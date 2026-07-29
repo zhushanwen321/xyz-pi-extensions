@@ -250,34 +250,61 @@ describe("TC13：dispose 幂等（重复调用安全）", () => {
 
 // ──────────────────────── renderPermissionFooterLine 渲染 ────────────────────────
 
-describe("renderPermissionFooterLine（四档模式 + enabled/disabled）", () => {
+describe("renderPermissionFooterLine（mode + enabled + rule count + classifier）", () => {
 	const ALL_MODES: PermissionMode[] = ["yolo", "auto", "approve", "strict"];
 
-	it("enabled=true → '[permission] <LABEL> · enabled'", () => {
+	it("enabled=true 非 auto → '[permission] <LABEL> · enabled · N user rules'", () => {
 		const palette = passthroughPalette();
-		for (const mode of ALL_MODES) {
-			const line = renderPermissionFooterLine(mode, true, palette);
+		for (const mode of ALL_MODES.filter((m) => m !== "auto")) {
+			const line = renderPermissionFooterLine(mode, true, 3, "gpt-4", palette);
 			expect(line).toContain("[permission]");
 			expect(line).toContain(MODE_LABELS[mode]);
-			expect(line).toContain("·");
 			expect(line).toContain("enabled");
-			expect(line).not.toContain("disabled");
+			expect(line).toContain("3 user rules");
+			// 非 auto 模式不显示 classifier
+			expect(line).not.toContain("classifier");
 		}
 	});
 
-	it("enabled=false → '[permission] disabled'（不含 LABEL）", () => {
+	it("enabled=true + auto 模式 + 有 model → 含 classifier model", () => {
+		const palette = passthroughPalette();
+		const line = renderPermissionFooterLine("auto", true, 2, "zhipu/glm-4-flash", palette);
+		expect(line).toContain("[permission]");
+		expect(line).toContain(MODE_LABELS["auto"]);
+		expect(line).toContain("enabled");
+		expect(line).toContain("2 user rules");
+		expect(line).toContain("classifier: zhipu/glm-4-flash");
+	});
+
+	it("enabled=true + auto 模式 + model 为空 → 不显示 classifier 段", () => {
+		const palette = passthroughPalette();
+		const line = renderPermissionFooterLine("auto", true, 0, "", palette);
+		expect(line).toContain("0 user rules");
+		expect(line).not.toContain("classifier");
+	});
+
+	it("enabled=true + ruleCount=1 → 'rule'（单数）", () => {
+		const palette = passthroughPalette();
+		const line = renderPermissionFooterLine("strict", true, 1, "", palette);
+		expect(line).toContain("1 user rule");
+		expect(line).not.toContain("1 user rules");
+	});
+
+	it("enabled=false → '[permission] disabled'（不含 LABEL/rule/classifier）", () => {
 		const palette = passthroughPalette();
 		for (const mode of ALL_MODES) {
-			const line = renderPermissionFooterLine(mode, false, palette);
+			const line = renderPermissionFooterLine(mode, false, 3, "gpt-4", palette);
 			expect(line).toContain("[permission]");
 			expect(line).toContain("disabled");
-			// disabled 时不显示具体 mode label（精简）
+			// disabled 时精简：不显示 mode label / rule count / classifier
 			expect(line).not.toContain(MODE_LABELS[mode]);
+			expect(line).not.toContain("rule");
+			expect(line).not.toContain("classifier");
 		}
 	});
 
 	it("返回单行字符串（非数组）", () => {
-		const line = renderPermissionFooterLine("auto", true, passthroughPalette());
+		const line = renderPermissionFooterLine("auto", true, 1, "gpt-4", passthroughPalette());
 		expect(typeof line).toBe("string");
 	});
 });

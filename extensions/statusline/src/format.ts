@@ -92,12 +92,14 @@ export interface SpeedLike {
 	day: number;
 }
 
-/** 渲染速度部分：speed 123t/s（无速度返回空串）
- *  day 标记已移除（footer 宽度有限，数据保留在 SpeedLike 结构中供后续查询）。 */
+/** 渲染速度部分：speed 123t/s · day 70t/s（current + day 双值并列）。
+ *  current<=0 时整体不显示（即使 day>0 也省略，避免无当前速度时单显 day 误导）。 */
 export function formatSpeedPart(sp: SpeedLike, p: PlainPallet): string {
-	return sp.current > 0
-		? `│ ${p.d("speed")} ${p.g(`${sp.current}`)}${p.d("t/s")}`
-		: "";
+	if (sp.current <= 0) return "";
+	const cur = `${p.d("speed")} ${p.g(`${sp.current}`)}${p.d("t/s")}`;
+	return sp.day > 0
+		? `│ ${cur} ${p.d("·")} ${p.d("day")} ${p.g(`${sp.day}`)}${p.d("t/s")}`
+		: `│ ${cur}`;
 }
 
 // ── 缓存命中率渲染 ─────────────────────────────────────
@@ -107,12 +109,14 @@ export interface CacheRatioLike {
 	day: number | null;
 }
 
-/** 渲染缓存命中率部分：cache 85%（无数据返回空串）
- *  day 标记已移除（footer 宽度有限，数据保留在 CacheRatioLike 结构中供后续查询）。 */
+/** 渲染缓存命中率部分：cache 96% · day 91%（current + day 双值并列）。
+ *  current=null 时整体不显示（即使 day 有值也省略，避免无当前缓存时单显 day 误导）。 */
 export function formatCacheRatioPart(cr: CacheRatioLike, p: PlainPallet): string {
-	return cr.current !== null
-		? `│ ${p.d("cache")} ${p.g(`${cr.current}`)}${p.d("%")}`
-		: "";
+	if (cr.current === null) return "";
+	const cur = `${p.d("cache")} ${p.g(`${cr.current}`)}${p.d("%")}`;
+	return cr.day !== null
+		? `│ ${cur} ${p.d("·")} ${p.d("day")} ${p.g(`${cr.day}`)}${p.d("%")}`
+		: `│ ${cur}`;
 }
 
 // ── 路径工具 ─────────────────────────────────────────
