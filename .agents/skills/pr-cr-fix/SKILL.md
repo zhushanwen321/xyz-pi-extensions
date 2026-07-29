@@ -174,7 +174,7 @@ task:      "按 ~/.agents/skills/pull-request/SKILL.md 完成；
 
 | 层 | 判定 | 数据来源 |
 |----|------|---------|
-| **硬 gate**（pr-status.sh 可查）| `stage0_pr.pr_exists && stage0_pr.push_state == "in_sync" && stage2_premerge.result == "PASS"` | `pr-status.sh` 的 `ready_to_submit` 字段 |
+| **硬 gate**（pr-status.sh 可查）| `stage0_pr.pr_exists && stage0_pr.local_ahead_of_origin == 0 && stage2_premerge.result == "PASS"` | `pr-status.sh` 的 `ready_to_submit` 字段（其判定公式直接用 `stage0["local_ahead_of_origin"] == 0`；与 `push_state == "in_sync"` 等价——后者是前者的派生展示字段，二者一一对应） |
 | **软 gate**（主 agent 编排判定）| 阶段 3a 所有 worker 回执 `commit_sha` 非空 + `skipped` 为空（即全部 must-fix 已闭合，无遗漏）| 阶段 3a worker 回执 + 主 agent 抽验 `git show <sha> --stat` |
 
 两层都满足 = Gate-3 通过。**注意 `stage1_review.clean` 不再是 gate 硬条件**：「单轮不循环」下 aggregated.md 的 must_fix 数字是修复前快照，修复是否到位由 worker 回执（软 gate）保证，不由快照数字保证。

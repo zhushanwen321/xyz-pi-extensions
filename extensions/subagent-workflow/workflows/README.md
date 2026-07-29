@@ -30,6 +30,8 @@ workflow run parallel --args target="..." --args 'perspectives=["security","read
 
 `perspectives` 默认 `["security","performance","maintainability"]`。每个视角一个并行 agent，各自返回评分+发现的问题，最后纯代码拼接各视角的 findings。
 
+> **Note (breaking)**: `outcome.aggregate` is now a concatenated string of each perspective's findings (format: `[perspective] finding1; finding2`, joined by newlines). Previously it was an LLM-produced object `{overallScore, topIssues, consensus}`. If you have generated workflows or downstream tools parsing the old object shape, update them to read `outcome.per_perspective` for structured per-perspective scores/findings, or treat `outcome.aggregate` as plain text.
+
 ### scatter-gather — 分发-收集
 
 ```
