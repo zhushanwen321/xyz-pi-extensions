@@ -1,5 +1,5 @@
 /**
- * 内置规则：安全白名单（Codex 24+5）+ 危险规则（permission-gate 12）。
+ * 内置规则：安全白名单（50+9）+ 危险规则（permission-gate 12）。
  *
  * ── G3 修正 ──
  * Codex 的 base64/find/rg/git/sed 有 argv 级 flag 子检查，单条 wildcard 无法表达
@@ -30,43 +30,74 @@ import type { Rule } from "../types.js";
 // ──────────────────────── Codex 安全白名单 ────────────────────────
 
 /**
- * Codex 无条件安全命令（24 个，is_safe_to_call_with_exec 的 match 分支）。
+ * Codex 无条件安全命令（50 个，is_safe_to_call_with_exec 的 match 分支）。
+ * 前 24 条移植自 Codex safelist，后 26 条是本扩展在验证无写入 flag 后扩充。
  * numfmt/tac 仅 linux 安全，跨平台不加入。
  */
 export const BUILTIN_UNCONDITIONAL_SAFE: ReadonlySet<string> = new Set([
+	"arch",
+	"basename",
 	"cat",
 	"cd",
+	"cksum",
+	"cmp",
+	"column",
+	"comm",
 	"cut",
+	"diff",
+	"dirname",
+	"du",
+	"df",
 	"echo",
+	"expand",
 	"expr",
 	"false",
+	"file",
+	"fold",
 	"grep",
+	"groups",
 	"head",
 	"id",
+	"jq",
 	"ls",
+	"md5sum",
 	"nl",
 	"paste",
+	"printenv",
+	"ps",
 	"pwd",
+	"readlink",
+	"realpath",
 	"rev",
 	"seq",
+	"sha256sum",
+	"shasum",
 	"stat",
 	"tail",
 	"tr",
 	"true",
-	"uname",
+	"tsort",
 	"uniq",
+	"uname",
+	"uptime",
 	"wc",
-	"which",
+	"whereis",
+	"who",
 	"whoami",
+	"which",
 ]);
 
-/** 5 个带 flag 子检查的条件安全命令。 */
+/** 9 个带 flag 子检查的条件安全命令。 */
 const CONDITIONAL_SAFE_COMMANDS: ReadonlySet<string> = new Set([
 	"base64",
 	"find",
 	"rg",
 	"git",
 	"sed",
+	"sort",
+	"iconv",
+	"shuf",
+	"date",
 ]);
 
 // ── executable_name_lookup_key（取 basename，非 win32 不转小写/不去后缀） ──
@@ -378,6 +409,61 @@ function isSafeSed(command: string[]): boolean {
 	);
 }
 
+// ── sort ──
+
+const UNSAFE_SORT_OPTIONS: ReadonlySet<string> = new Set(["-o", "--output"]);
+
+function isSafeSort(argv: string[]): boolean {
+	return !argv.slice(1).some((arg) => {
+		return (
+			UNSAFE_SORT_OPTIONS.has(arg) ||
+			arg.startsWith("--output=") ||
+			(arg.startsWith("-o") && arg !== "-o")
+		);
+	});
+}
+
+// ── iconv ──
+
+const UNSAFE_ICONV_OPTIONS: ReadonlySet<string> = new Set(["-o", "--output"]);
+
+function isSafeIconv(argv: string[]): boolean {
+	return !argv.slice(1).some((arg) => {
+		return (
+			UNSAFE_ICONV_OPTIONS.has(arg) ||
+			arg.startsWith("--output=") ||
+			(arg.startsWith("-o") && arg !== "-o")
+		);
+	});
+}
+
+// ── shuf ──
+
+const UNSAFE_SHUF_OPTIONS: ReadonlySet<string> = new Set(["-o", "--output"]);
+
+function isSafeShuf(argv: string[]): boolean {
+	return !argv.slice(1).some((arg) => {
+		return (
+			UNSAFE_SHUF_OPTIONS.has(arg) ||
+			arg.startsWith("--output=") ||
+			(arg.startsWith("-o") && arg !== "-o")
+		);
+	});
+}
+
+// ── date ──
+
+const UNSAFE_DATE_OPTIONS: ReadonlySet<string> = new Set(["-s", "--set"]);
+
+function isSafeDate(argv: string[]): boolean {
+	return !argv.slice(1).some((arg) => {
+		return (
+			UNSAFE_DATE_OPTIONS.has(arg) ||
+			arg.startsWith("--set=")
+		);
+	});
+}
+
 // ── is_safe_to_call_with_exec（单条 argv 判定）──
 
 function isSafeToCallWithExec(command: string[]): boolean {
@@ -386,7 +472,7 @@ function isSafeToCallWithExec(command: string[]): boolean {
 	const key = executableNameLookupKey(cmd0);
 	if (key === undefined) return false;
 
-	// 无条件 24 安全命令
+	// 无条件 50 安全命令
 	if (BUILTIN_UNCONDITIONAL_SAFE.has(key)) return true;
 
 	switch (key) {
@@ -400,13 +486,21 @@ function isSafeToCallWithExec(command: string[]): boolean {
 			return isSafeGitCommand(command);
 		case "sed":
 			return isSafeSed(command);
+		case "sort":
+			return isSafeSort(command);
+		case "iconv":
+			return isSafeIconv(command);
+		case "shuf":
+			return isSafeShuf(command);
+		case "date":
+			return isSafeDate(command);
 		default:
 			return false;
 	}
 }
 
 /**
- * 判断 argv 是否命中 Codex 已知安全白名单（24 无条件 + 5 条件）。
+ * 判断 argv 是否命中 Codex 已知安全白名单（50 无条件 + 9 条件）。
  *
  * 对 argv[0]=='zsh' 归一化为 'bash'（与源码一致；但本扩展不实现 bash -lc 复合解析，
  * 故 'bash' 作为 argv[0] 时只走单条 argv 判定，不会被误判为安全——除非 argv[0]

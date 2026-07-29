@@ -7,7 +7,7 @@ Pi permission 扩展 — 四档权限模式（yolo / auto / approve / strict）+
 - **四档权限模式**：从「完全放行」到「全部审批」的渐进式安全策略
 - **三层管道**（auto 模式）：AST 结构分析 → 规则匹配 → AI 风险分类 + 用户审批竞速
 - **内置危险规则**：12 条 builtin-danger 规则（rm -rf、curl|sh、chmod 777 等高危模式）
-- **白名单快速放行**：24+5 条 Codex 安全命令白名单（ls/git status/echo 等）
+- **白名单快速放行**：50+9 条安全命令白名单（24 Codex 原始 + 26 扩充 + 9 条件安全）
 - **用户自定义规则**：OpenCode wildcard 语法，last-match-wins 语义
 - **AI Classifier**：auto 模式下用 LLM 评估未知命令风险（low/medium/high）
 - **用户审批 UI**：TUI（自定义 Component）/ RPC（select 对话框）/ headless（fail-closed deny）
@@ -101,7 +101,7 @@ ln -s /path/to/xyz-pi-extensions-workspace/feat-permission-and-auto-mode/extensi
 
 内置规则分两类，均代码硬编码，用户不可改：
 
-- **白名单（builtin-safe）**：Codex safelist 移植，24 条无条件安全命令（`cat`/`cd`/`echo`/`ls`/`grep`/`pwd` 等）+ 5 条带 flag 子检查的条件安全命令（`base64`/`find`/`rg`/`git`/`sed`）。命中白名单 → 直接 `allow`（不跑规则遍历与 AI）。
+- **白名单（builtin-safe）**：50 条无条件安全命令（24 Codex 移植 + 26 本扩展扩充：`cat`/`cd`/`echo`/`ls`/`grep`/`pwd`/`diff`/`jq`/`du`/`file`/`ps` 等）+ 9 条带 flag 子检查的条件安全命令（`base64`/`find`/`rg`/`git`/`sed`/`sort`/`iconv`/`shuf`/`date`）。命中白名单 → 直接 `allow`（不跑规则遍历与 AI）。
 - **危险规则（builtin-danger）**：12 条正则规则（`rm -rf`、`sudo`、`chmod 777`、`curl ... | sh`、`git push --force`、`git reset --hard` 等）。pattern 是 RegExp 源字符串（含 `\b`/`\s`），用 `new RegExp(pattern, 'i')` 编译，`action` 固定 `deny`。
 
 完整清单与每条规则的 pattern/示例见下方「规则系统」第 2、3 节。
@@ -116,7 +116,7 @@ ln -s /path/to/xyz-pi-extensions-workspace/feat-permission-and-auto-mode/extensi
 
 | 来源 | source 字段 | 数量 | 形态 | 可改 |
 |------|-------------|------|------|------|
-| 内置安全白名单 | `builtin-safe` | 24 无条件 + 5 条件 | 函数实现（`isKnownSafeCommand`），不进 `Rule[]` 数组 | 不可改 |
+| 内置安全白名单 | `builtin-safe` | 50 无条件 + 9 条件 | 函数实现（`isKnownSafeCommand`），不进 `Rule[]` 数组 | 不可改 |
 | 内置危险规则 | `builtin-danger` | 12 条正则 | `BUILTIN_DANGER_RULES` 常量，代码硬编码 | 不可改 |
 | 用户自定义规则 | `user` | 任意 | `permission-config.json` 的 `userRules` 数组 | 可改 |
 
@@ -128,7 +128,7 @@ W2 AST 结构分析 → W3 规则匹配 → W4 AI Classifier（仅 auto）
 
 W3 内部评估顺序：
 
-1. **`isKnownSafeCommand(argv)`**：命中 24+5 白名单 → 直接 `allow`（虚拟 `builtin-safe` rule），不进后续遍历
+1. **`isKnownSafeCommand(argv)`**：命中 50+9 白名单 → 直接 `allow`（虚拟 `builtin-safe` rule），不进后续遍历
 2. **`[...BUILTIN_DANGER_RULES, ...userRules]`**：按数组顺序遍历，last-match-wins
 3. **无匹配**：返回 `ask`（交下游 W4 AI 或人工审批，不静默 deny）
 
@@ -138,17 +138,20 @@ W3 内部评估顺序：
 
 由 `BUILTIN_UNCONDITIONAL_SAFE` + `CONDITIONAL_SAFE_COMMANDS` 实现（函数判定，不是 `Rule[]`），命中后直接 `allow`，跳过规则遍历与 AI。
 
-**24 条无条件安全命令**（`BUILTIN_UNCONDITIONAL_SAFE`，仅看 argv[0] basename）：
+**50 条无条件安全命令**（`BUILTIN_UNCONDITIONAL_SAFE`，仅看 argv[0] basename）：
 
 ```
-cat / cd / cut / echo / expr / false / grep / head / id / ls /
-nl / paste / pwd / rev / seq / stat / tail / tr / true / uname /
-uniq / wc / which / whoami
+arch / basename / cat / cd / cksum / cmp / column / comm / cut /
+diff / dirname / du / df / echo / expand / expr / false / file /
+fold / grep / groups / head / id / jq / ls / md5sum / nl / paste /
+printenv / ps / pwd / readlink / realpath / rev / seq / sha256sum /
+shasum / stat / tail / tr / true / tsort / uniq / uname / uptime /
+wc / whereis / who / whoami / which
 ```
 
-注：Codex 源码里的 `numfmt`/`tac` 仅在 linux 安全，本扩展面向跨平台 agent，统一不加入。
+注：前 24 条（cat/cd/cut/echo/expr/false/grep/head/id/ls/nl/paste/pwd/rev/seq/stat/tail/tr/true/uname/uniq/wc/which/whoami）移植自 Codex safelist。后 26 条（arch/basename/cksum/cmp/column/comm/diff/dirname/du/df/expand/file/fold/groups/jq/md5sum/printenv/ps/readlink/realpath/sha256sum/shasum/tsort/uptime/whereis/who）是本扩展在验证无写入 flag 后扩充。Codex 源码里的 `numfmt`/`tac` 仅在 linux 安全，本扩展面向跨平台 agent，统一不加入。
 
-**5 条带 flag 子检查的条件安全命令**（`CONDITIONAL_SAFE_COMMANDS`，argv 级判定）：
+**9 条带 flag 子检查的条件安全命令**（`CONDITIONAL_SAFE_COMMANDS`，argv 级判定）：
 
 | 命令 | 安全条件 | 命中危险即不放行 |
 |------|----------|------------------|
@@ -157,6 +160,10 @@ uniq / wc / which / whoami
 | `rg` | 不含执行外部工具 flag | 禁 `--pre` / `--pre=*` / `--hostname-bin` / `--hostname-bin=*` / `--search-zip` / `-z` |
 | `git` | 子命令属于 `status`/`log`/`diff`/`show`/`branch` 且只读 | 见下文 git 子表 |
 | `sed` | 仅 `sed -n {N\|M,N}p [file]`（argv 长度 ≤ 4） | 其余形式不放行 |
+| `sort` | 不含写文件 flag | 禁 `-o` / `--output` / `--output=*` / `-o*`（合并 flag） |
+| `iconv` | 不含写文件 flag | 禁 `-o` / `--output` / `--output=*` |
+| `shuf` | 不含写文件 flag | 禁 `-o` / `--output` / `--output=*` |
+| `date` | 不含设置时间 flag | 禁 `-s` / `--set` / `--set=*`（`-s` 设置系统时间需 root） |
 
 **git 子命令安全判定细则**：
 

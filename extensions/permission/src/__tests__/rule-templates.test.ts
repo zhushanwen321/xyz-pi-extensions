@@ -39,8 +39,8 @@ function makeRule(overrides: Partial<Rule> = {}): Rule {
 // ──────────────────────── PRESET_COMMANDS ────────────────────────
 
 describe("RT1: PRESET_COMMANDS", () => {
-	it("共 31 个命令", () => {
-		expect(PRESET_COMMANDS).toHaveLength(31);
+	it("共 53 个命令", () => {
+		expect(PRESET_COMMANDS).toHaveLength(53);
 	});
 
 	it("每个命令有 cmd / label / category", () => {
@@ -52,9 +52,9 @@ describe("RT1: PRESET_COMMANDS", () => {
 		}
 	});
 
-	it("涵盖 7 个 category", () => {
+	it("涵盖 9 个 category", () => {
 		const categories = new Set(PRESET_COMMANDS.map((c) => c.category));
-		expect(categories.size).toBe(7);
+		expect(categories.size).toBe(9);
 		expect(categories.has("Package Managers")).toBe(true);
 		expect(categories.has("Containers & Cloud")).toBe(true);
 		expect(categories.has("Version Control")).toBe(true);
@@ -62,6 +62,8 @@ describe("RT1: PRESET_COMMANDS", () => {
 		expect(categories.has("Network & Download")).toBe(true);
 		expect(categories.has("Filesystem")).toBe(true);
 		expect(categories.has("Runtime")).toBe(true);
+		expect(categories.has("Text Processing")).toBe(true);
+		expect(categories.has("System & Info")).toBe(true);
 	});
 
 	it("cmd 不含空格（单 token）", () => {

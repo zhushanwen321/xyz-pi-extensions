@@ -21,6 +21,6 @@ describe("IT: rules barrel 导出", () => {
 	it("导出常量数据（BUILTIN_DANGER_RULES / BUILTIN_UNCONDITIONAL_SAFE）", () => {
 		expect(Array.isArray(rulesApi.BUILTIN_DANGER_RULES)).toBe(true);
 		expect(rulesApi.BUILTIN_DANGER_RULES.length).toBe(12);
-		expect(rulesApi.BUILTIN_UNCONDITIONAL_SAFE.size).toBe(24);
+		expect(rulesApi.BUILTIN_UNCONDITIONAL_SAFE.size).toBe(50);
 	});
 });

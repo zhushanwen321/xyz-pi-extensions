@@ -2,7 +2,7 @@
  * BT 系列：builtins.ts 单元测试。
  *
  * 三组：
- *  - BT-safe-*：Codex 24 无条件 + 5 条件安全命令（isKnownSafeCommand）
+ *  - BT-safe-*：Codex 50 无条件 + 9 条件安全命令（isKnownSafeCommand）
  *  - BT-danger-*：permission-gate 12 危险规则（BUILTIN_DANGER_RULES）
  *  - BT-misc：getDefaultRules / findGitSubcommand
  *
@@ -24,7 +24,7 @@ import { matchRulesForArgv } from "../matcher.js";
 
 // ──────────────────────── BT-safe: Codex 白名单 ────────────────────────
 
-describe("BT-safe-24: Codex 24 无条件安全命令", () => {
+describe("BT-safe-50: 无条件安全命令（24 Codex + 26 扩充）", () => {
 	// 与 is_safe_command.rs `is_safe_to_call_with_exec` 的 match 分支一致
 	const cases: string[][] = [
 		["cat", "file"],
@@ -51,16 +51,43 @@ describe("BT-safe-24: Codex 24 无条件安全命令", () => {
 		["wc", "file"],
 		["which", "node"],
 		["whoami"],
+		// ── 本扩展扩充（26 条，字母序）──
+		["arch"],
+		["basename", "/tmp/file.txt"],
+		["cksum", "file"],
+		["cmp", "a", "b"],
+		["column", "-t"],
+		["comm", "a", "b"],
+		["diff", "a", "b"],
+		["dirname", "/tmp/file.txt"],
+		["du", "-sh", "."],
+		["df", "-h"],
+		["expand", "file"],
+		["file", "file.txt"],
+		["fold", "-w", "80", "file"],
+		["groups"],
+		["jq", ".", "file.json"],
+		["md5sum", "file"],
+		["printenv", "PATH"],
+		["ps", "aux"],
+		["readlink", "link"],
+		["realpath", "file"],
+		["sha256sum", "file"],
+		["shasum", "file"],
+		["tsort", "file"],
+		["uptime"],
+		["whereis", "node"],
+		["who"],
 	];
 
 	for (const argv of cases) {
-		it(`BT-safe-24: ${argv.join(" ")} → safe`, () => {
+		it(`BT-safe-50: ${argv.join(" ")} → safe`, () => {
 			expect(isKnownSafeCommand(argv)).toBe(true);
 		});
 	}
 
-	it("BT-safe-24: 白名单恰好 24 个命令", () => {
-		expect(BUILTIN_UNCONDITIONAL_SAFE.size).toBe(24);
+	it("BT-safe-50: 白名单恰好 50 个命令", () => {
+		expect(BUILTIN_UNCONDITIONAL_SAFE.size).toBe(50);
 	});
 });
 
@@ -172,6 +199,51 @@ describe("BT-safe-sed: sed -n {N|M,N}p", () => {
 	it("sed argv > 4 → unsafe", () => {
 		// sed -n 1p a b c d（5 参数）超长
 		expect(isKnownSafeCommand(["sed", "-n", "1p", "a", "b", "c", "d"])).toBe(false);
+	});
+});
+
+describe("BT-safe-sort: sort flag 子检查", () => {
+	it("sort 无 -o → safe", () => {
+		expect(isKnownSafeCommand(["sort", "file.txt"])).toBe(true);
+		expect(isKnownSafeCommand(["sort", "-n", "-r"])).toBe(true);
+	});
+	it("sort -o → unsafe", () => {
+		expect(isKnownSafeCommand(["sort", "-o", "out.txt", "in.txt"])).toBe(false);
+		expect(isKnownSafeCommand(["sort", "--output", "out.txt"])).toBe(false);
+		expect(isKnownSafeCommand(["sort", "--output=out.txt"])).toBe(false);
+		expect(isKnownSafeCommand(["sort", "-oout.txt"])).toBe(false);
+	});
+});
+
+describe("BT-safe-iconv: iconv flag 子检查", () => {
+	it("iconv 无 -o → safe", () => {
+		expect(isKnownSafeCommand(["iconv", "-f", "UTF-8", "-t", "GBK"])).toBe(true);
+	});
+	it("iconv -o → unsafe", () => {
+		expect(isKnownSafeCommand(["iconv", "-o", "out.txt"])).toBe(false);
+		expect(isKnownSafeCommand(["iconv", "--output", "out.txt"])).toBe(false);
+	});
+});
+
+describe("BT-safe-shuf: shuf flag 子检查", () => {
+	it("shuf 无 -o → safe", () => {
+		expect(isKnownSafeCommand(["shuf", "-i", "1-10"])).toBe(true);
+	});
+	it("shuf -o → unsafe", () => {
+		expect(isKnownSafeCommand(["shuf", "-o", "out.txt"])).toBe(false);
+		expect(isKnownSafeCommand(["shuf", "--output=out.txt"])).toBe(false);
+	});
+});
+
+describe("BT-safe-date: date flag 子检查", () => {
+	it("date 无 -s → safe", () => {
+		expect(isKnownSafeCommand(["date"])).toBe(true);
+		expect(isKnownSafeCommand(["date", "+%Y-%m-%d"])).toBe(true);
+	});
+	it("date -s → unsafe（设置系统时间）", () => {
+		expect(isKnownSafeCommand(["date", "-s", "2025-01-01"])).toBe(false);
+		expect(isKnownSafeCommand(["date", "--set", "2025-01-01"])).toBe(false);
+		expect(isKnownSafeCommand(["date", "--set=2025-01-01"])).toBe(false);
 	});
 });
 

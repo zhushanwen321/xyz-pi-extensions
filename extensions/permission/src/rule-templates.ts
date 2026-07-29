@@ -11,7 +11,7 @@
 
 import type { PermissionAction, Rule, RuleSource } from "./types.js";
 
-// ──────────────────────── PRESET_COMMANDS（31 命令 + Other） ────────────────────────
+// ──────────────────────── PRESET_COMMANDS（53 命令 + Other） ────────────────────────
 
 export interface PresetCommand {
 	cmd: string;
@@ -19,7 +19,7 @@ export interface PresetCommand {
 	category: string;
 }
 
-/** 包管理器 6 + 容器云 5 + VCS 3 + 构建任务 6 + 网络下载 5 + 文件系统 4 + 运行时 2 = 31 */
+/** 包管理器 6 + 容器云 5 + VCS 3 + 构建任务 6 + 网络下载 8 + 文件系统 9 + 运行时 2 + 文本处理 6 + 系统信息 8 = 53 */
 export const PRESET_COMMANDS: readonly PresetCommand[] = [
 	// 包管理器
 	{ cmd: "npm", label: "npm (Node package manager)", category: "Package Managers" },
@@ -51,14 +51,38 @@ export const PRESET_COMMANDS: readonly PresetCommand[] = [
 	{ cmd: "ssh", label: "ssh (remote shell)", category: "Network & Download" },
 	{ cmd: "scp", label: "scp (secure copy)", category: "Network & Download" },
 	{ cmd: "rsync", label: "rsync (file sync)", category: "Network & Download" },
+	{ cmd: "ping", label: "ping (network probe)", category: "Network & Download" },
+	{ cmd: "dig", label: "dig (DNS lookup)", category: "Network & Download" },
+	{ cmd: "ssh-keygen", label: "ssh-keygen (SSH key generation)", category: "Network & Download" },
 	// 文件系统
 	{ cmd: "rm", label: "rm (remove files)", category: "Filesystem" },
 	{ cmd: "cp", label: "cp (copy files)", category: "Filesystem" },
 	{ cmd: "mv", label: "mv (move files)", category: "Filesystem" },
 	{ cmd: "chmod", label: "chmod (change permissions)", category: "Filesystem" },
+	{ cmd: "ls", label: "ls (list directory)", category: "Filesystem" },
+	{ cmd: "cat", label: "cat (concatenate files)", category: "Filesystem" },
+	{ cmd: "find", label: "find (search files)", category: "Filesystem" },
+	{ cmd: "grep", label: "grep (search text)", category: "Filesystem" },
+	{ cmd: "tree", label: "tree (directory tree)", category: "Filesystem" },
 	// 运行时
 	{ cmd: "node", label: "node (Node.js runtime)", category: "Runtime" },
 	{ cmd: "python", label: "python (Python runtime)", category: "Runtime" },
+	// 文本处理
+	{ cmd: "jq", label: "jq (JSON processor)", category: "Text Processing" },
+	{ cmd: "sed", label: "sed (stream editor)", category: "Text Processing" },
+	{ cmd: "awk", label: "awk (text processing)", category: "Text Processing" },
+	{ cmd: "sort", label: "sort (sort lines)", category: "Text Processing" },
+	{ cmd: "diff", label: "diff (compare files)", category: "Text Processing" },
+	{ cmd: "iconv", label: "iconv (encoding converter)", category: "Text Processing" },
+	// 系统信息
+	{ cmd: "ps", label: "ps (process list)", category: "System & Info" },
+	{ cmd: "top", label: "top (process monitor)", category: "System & Info" },
+	{ cmd: "du", label: "du (disk usage)", category: "System & Info" },
+	{ cmd: "df", label: "df (disk free)", category: "System & Info" },
+	{ cmd: "uname", label: "uname (system info)", category: "System & Info" },
+	{ cmd: "whoami", label: "whoami (current user)", category: "System & Info" },
+	{ cmd: "env", label: "env (environment variables)", category: "System & Info" },
+	{ cmd: "date", label: "date (system date)", category: "System & Info" },
 ] as const;
 
 /** PRESET_COMMANDS 按 category 分组（UI 展示用）。 */
