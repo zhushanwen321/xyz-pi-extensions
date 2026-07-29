@@ -40,8 +40,8 @@ describe("U1: workflow tool prompt mentions built-in workflows", () => {
   });
 
   it("tool-workflow.ts promptGuidelines 含 run action 的正例", () => {
-    // 给出 workflow run <name> 的调用示例，LLM 才知道参数格式。
-    expect(TOOL_WORKFLOW_SRC).toMatch(/workflow run .+--args/i);
+    // 给出 run 调用的 JSON 示例，LLM 才知道参数格式（action/name/args 嵌套）。
+    expect(TOOL_WORKFLOW_SRC).toContain('{"action":"run","name":"');
   });
 
   it("promptGuidelines 含 JSON 调用正例（run/status/lifecycle）", () => {
@@ -68,5 +68,26 @@ describe("U1: workflow tool prompt mentions built-in workflows", () => {
   it("tool-workflow-script.ts list action 的 promptGuidelines 含 workflow run 交叉引用", () => {
     // 反向交叉引用：list 的指引里要提到用 workflow tool 的 run action 启动脚本。
     expect(TOOL_WORKFLOW_SCRIPT_SRC).toMatch(/workflow.*tool.*run|run.*workflow.*tool/i);
+  });
+
+  it("tool-workflow.ts promptGuidelines 含 W3 新增 aggregate 参数", () => {
+    // W3：parallel/scatter-gather/map-reduce 新增 aggregate 选项，提示词须同步说明。
+    expect(TOOL_WORKFLOW_SRC).toContain("aggregate");
+  });
+
+  it("tool-workflow.ts promptGuidelines 含 aggregate='concat'|'llm' 取值说明", () => {
+    expect(TOOL_WORKFLOW_SRC).toContain("concat");
+    expect(TOOL_WORKFLOW_SRC).toContain("'llm'");
+  });
+
+  it("tool-workflow.ts promptGuidelines 强化 anti-generate（直接 run，不要 generate）", () => {
+    // session 证据：弱模型看到 workflow list 后倾向 workflow-script generate 而非直接 run。
+    // 提示词必须显式禁止对内置编排使用 generate。
+    expect(TOOL_WORKFLOW_SRC).toContain("NEVER use workflow-script action:generate");
+  });
+
+  it("tool-workflow-script.ts promptGuidelines 强化 anti-generate（CRITICAL ANTI-PATTERN）", () => {
+    expect(TOOL_WORKFLOW_SCRIPT_SRC).toContain("CRITICAL ANTI-PATTERN");
+    expect(TOOL_WORKFLOW_SCRIPT_SRC).toContain("NEVER generate");
   });
 });

@@ -235,12 +235,13 @@ export function registerWorkflowTool(
     promptSnippet: "Run, pause, resume, abort, or check workflow status",
     promptGuidelines: [
       "PRIORITY: When user says 'workflow', 'run workflow', try run action FIRST.",
-      "BUILT-IN workflows (ready to use, no script generation needed): " +
-      "chain (analyze→transform→synthesize sequential; args: task), " +
-      "parallel (multi-perspective analysis; args: target, optional perspectives), " +
-      "scatter-gather (split→parallel process→merge; args: task), " +
-      "map-reduce (parallel map→reduce; args: items/itemsJson + operation). " +
-      "Example: workflow run chain --args task=\"<description>\".",
+      "BUILT-IN workflows — run DIRECTLY with action:run, do NOT use workflow-script generate for these: " +
+      "chain (sequential 3-step: analyze→transform→synthesize; args: task), " +
+      "parallel (multi-perspective analysis; args: target, optional perspectives, optional aggregate='concat'|'llm' default concat), " +
+      "scatter-gather (split→parallel→merge; args: task, optional aggregate), " +
+      "map-reduce (parallel map→reduce; args: items/itemsJson + operation, optional aggregate). " +
+      "aggregate='concat' (default) = pure code merge (fast, no extra tokens); aggregate='llm' = LLM synthesis. " +
+      "Example: {\"action\":\"run\",\"name\":\"parallel\",\"args\":{\"target\":\"src/auth.ts\"}}.",
       "DISCOVERY: If unsure what workflows exist, call the workflow-script tool with " +
       "action:list first — it returns all available scripts (built-in + user-generated) " +
       "with source tags and descriptions. Then use this tool's run action to start one.",
@@ -251,6 +252,9 @@ export function registerWorkflowTool(
       "- status: {\"action\":\"status\"}. " +
       "- pause/resume/abort: {\"action\":\"pause\",\"runId\":\"<id>\"} (abort optional: ,\"error\":\"<reason>\"}).",
       "Anti-patterns: Flattening args sub-fields (task/items/...) to the top level — they belong inside args. Calling {\"action\":\"run\"} without name.",
+      "CRITICAL: For chain/parallel/scatter-gather/map-reduce orchestration, ALWAYS use action:run with the built-in name. " +
+      "NEVER use workflow-script action:generate to create these patterns — they already exist. " +
+      "workflow-script generate is ONLY for novel patterns not covered by built-ins.",
     ],
     parameters: WorkflowParams,
 
