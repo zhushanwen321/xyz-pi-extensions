@@ -105,6 +105,22 @@ vi.mock("../finalized-marker.ts", () => ({
   readFinalized: vi.fn(() => false),
 }));
 
+// manifest-store mock：writeManifest 用真实 fs.promises 写盘，但本文件 fs 同步方法已 mock
+// （目录从不真实创建）→ open/rename/unlink 全 ENOENT → bestEffort 异步 console.debug。
+// 这些延迟 console 通过 worker RPC（onUserConsoleLog）回流，与 vitest teardown 形成 race：
+// "Closing rpc while onUserConsoleLog was pending" → unhandled rejection / exit 1（flaky）。
+// 本组用例测编排逻辑（pool / depth / throttle），不测 manifest 持久化（有 manifest-store.test.ts
+// 独立覆盖）。故 mock 成 no-op，消除 teardown race 的根因——异步 console 输出。
+vi.mock("../manifest-store.ts", () => {
+  class FakeManifestStore {
+    writeManifest = vi.fn(async () => {});
+    readManifest = vi.fn(async () => null);
+    listAllSync = vi.fn(() => []);
+    recoverTmpFiles = vi.fn(async () => []);
+  }
+  return { ManifestStore: FakeManifestStore };
+});
+
 // temp-prompt：mock 掉真实 fs.promises I/O，消除 fake-timers 下的 flaky 竞态
 // （详见 run-spawn-integration.test.ts 同名 mock 的注释）。
 vi.mock("../temp-prompt.ts", () => ({
