@@ -428,6 +428,19 @@ function dispatchAgentCall(
 }
 
 /**
+ * postMessage 序列化失败时回发的 fallback result（必可克隆），让 worker pending resolve。
+ *
+ * postResult（workflow-call）与 postAgentResult（agent-call）各自前缀不同，故 prefix 参数化，
+ * 共享返回类型与构造逻辑，避免字面量重复导致形状漂移。
+ */
+function makeSerializeFailedResult(
+  prefix: string,
+  errMsg: string,
+): { content: string; error: string } {
+  return { content: "", error: `${prefix}: ${errMsg}` };
+}
+
+/**
  * 派发 workflow 嵌套调用：调 deps.onWorkflowCall 获取子 workflow 结果，
  * 异步 postMessage(workflow-result) 回 worker。
  *
@@ -467,7 +480,7 @@ function dispatchWorkflowCall(
         run.runtime?.worker.postMessage({
           type: "workflow-result",
           callId: msg.callId,
-          result: { content: "", error: `Workflow result serialization failed: ${errMsg}` },
+          result: makeSerializeFailedResult("Workflow result serialization failed", errMsg),
         });
       } catch {
         // fallback 也失败——worker 此 callId 的 pending 只能靠 timeout 兜底
@@ -520,8 +533,9 @@ function postAgentResult(
       run.runtime?.worker.postMessage({
         type: "agent-result",
         callId,
-        result: { content: "", error: `Result serialization failed: ${msg}` },
-        cached,
+        result: makeSerializeFailedResult("Result serialization failed", msg),
+        // 原 result 不可克隆时 cached 透传原值含义失真（fallback result 非缓存命中）→ 固定 false
+        cached: false,
       });
     } catch {
       // fallback 也失败——worker 此 callId 的 pending 只能靠 timeout/exit 兜底

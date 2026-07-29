@@ -270,9 +270,11 @@ describe("W2c: postAgentResult 防御（源码结构断言）", () => {
     const match = ERROR_RECOVERY_SRC.match(/function postAgentResult\([\s\S]*?\n\}/);
     expect(match, "postAgentResult 函数定义应存在").toBeTruthy();
     expect(hasTryCatchAroundPostMessage(match![0])).toBe(true);
-    // fallback 回发纯字符串 result（必可克隆）
-    expect(match![0]).toContain('result: { content: "", error:');
+    // fallback 通过共享工厂 makeSerializeFailedResult 构造纯字符串 result（必可克隆）
+    expect(match![0]).toContain('result: makeSerializeFailedResult("Result serialization failed"');
     expect(match![0]).toContain("Result serialization failed");
+    // 原 result 不可克隆时 cached 透传原值含义失真 → fallback 固定 cached: false
+    expect(match![0]).toContain("cached: false");
   });
 
   it("postBudgetUpdate 包含 try/catch", () => {
