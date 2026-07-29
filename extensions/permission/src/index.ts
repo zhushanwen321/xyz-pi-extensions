@@ -112,6 +112,19 @@ export default function permissionExtension(pi: ExtensionAPI): void {
 	// ──────────────────────── /permission 命令 ────────────────────────
 	pi.registerCommand("permission", {
 		description: "View or switch permission mode. Usage: /permission [mode|status|rule|model]",
+		getArgumentCompletions(prefix: string) {
+			const trimmed = prefix.trimStart().toLowerCase();
+			const opts = [
+				{ label: "status", value: "status", description: "查看详细权限配置" },
+				{ label: "rule", value: "rule", description: "编辑用户规则（overlay）" },
+				{ label: "model", value: "model", description: "选择 classifier 模型（overlay）" },
+				{ label: "yolo", value: "yolo", description: "无保护，允许全部" },
+				{ label: "auto", value: "auto", description: "规则 + AI 分类器" },
+				{ label: "approve", value: "approve", description: "规则，非安全→手动批准" },
+				{ label: "strict", value: "strict", description: "全部需批准" },
+			];
+			return trimmed === "" ? opts : opts.filter((o) => o.label.startsWith(trimmed));
+		},
 		handler: async (args: string, ctx: ExtensionCommandContext): Promise<void> => {
 			// 命令执行前重载配置（确保最新，用户可能手动改过文件）
 			refreshConfig();

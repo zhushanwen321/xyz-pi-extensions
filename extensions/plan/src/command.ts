@@ -18,6 +18,17 @@ export function registerPlanCommand(
       "Enter plan mode: /plan [description]. " +
       "Subcommands: /plan abort, /plan status. " +
       "With no args, show status or detect existing plan.",
+    getArgumentCompletions(prefix: string) {
+      const parts = prefix.trimStart().split(/\s+/).filter(Boolean);
+      // More than 1 token means the user is typing a free-text requirement, no completion.
+      if (parts.length > 1) return null;
+      const trimmed = (parts[0] ?? "").toLowerCase();
+      const opts = [
+        { label: "abort", value: "abort", description: "取消活跃的 plan mode" },
+        { label: "status", value: "status", description: "查看 plan mode 状态" },
+      ];
+      return trimmed === "" ? opts : opts.filter((o) => o.label.startsWith(trimmed));
+    },
     handler: async (args: string, ctx: ExtensionContext) => {
       const trimmed = args.trim();
       const sessionId = ctx.sessionManager.getSessionId();

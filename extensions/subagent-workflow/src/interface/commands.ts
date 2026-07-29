@@ -66,6 +66,36 @@ export function registerWorkflowsCommand(
 ): void {
   api.registerCommand("workflows", {
     description: "Open workflow panel. /workflows [runId] | /workflows pause|resume|abort <runId>",
+    getArgumentCompletions(prefix: string) {
+      const trimmed = prefix.trimStart();
+      const parts = trimmed.split(/\s+/).filter(Boolean);
+
+      // 第一级：lifecycle 动词（带尾随空格，选中后继续补 runId）
+      if (parts.length <= 1) {
+        return [
+          { label: "pause", value: "pause ", description: "Pause a workflow run" },
+          { label: "resume", value: "resume ", description: "Resume a paused workflow run" },
+          { label: "abort", value: "abort ", description: "Abort a workflow run" },
+        ].filter((opt) => opt.label.startsWith(trimmed.toLowerCase()));
+      }
+
+      // 第二级：lifecycle 动词后补全当前 session 的 runId
+      if (parts[0] === "pause" || parts[0] === "resume" || parts[0] === "abort") {
+        try {
+          const runs = sortedRuns(getRuns());
+          if (runs.length === 0) return null;
+          return runs.map((r) => ({
+            label: r.runId,
+            value: r.runId,
+            description: `${r.spec.scriptName} [${r.state.status}]`,
+          }));
+        } catch {
+          // 拿不到运行时数据（getRuns 抛错）→ 静默降级，补全失败不影响 command
+          return null;
+        }
+      }
+      return null;
+    },
     handler: async (args: string, ctx: ExtensionCommandContext) => {
       // ── RPC 模式（xyz-agent GUI）：解析 lifecycle action 直接执行，不打开 TUI ──
       // hasUI 在 TUI 和 RPC 都为 true，不能用于区分；用 ctx.mode === "rpc" 判定 GUI 通道。
