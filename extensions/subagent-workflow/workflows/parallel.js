@@ -28,6 +28,9 @@ if (!target) {
 const perspectives = Array.isArray($ARGS.perspectives) && $ARGS.perspectives.length > 0
   ? $ARGS.perspectives
   : ["security", "performance", "maintainability"];
+if (perspectives.some((p) => typeof p !== "string")) {
+  throw new Error("parallel 参数 perspectives 必须是字符串数组，实际含非字符串元素");
+}
 
 log("parallel 开始，target=" + target + " perspectives=" + JSON.stringify(perspectives));
 
@@ -68,15 +71,20 @@ try {
   let failedCount = 0;
   for (let i = 0; i < perPerspectiveRaw.length; i++) {
     const r = perPerspectiveRaw[i];
-    if (!r || r.error) {
+    if (!r || r.status === "failed" || r.error) {
       perPerspective.push({
         perspective: perspectives[i],
         status: "failed",
-        error: r ? r.error : "agent 无返回",
+        error: r ? (r.error || "agent 返回 failed 状态") : "agent 无返回",
       });
       failedCount++;
     } else {
-      perPerspective.push({ perspective: perspectives[i], status: "ok", ...r });
+      perPerspective.push({
+        perspective: perspectives[i],
+        status: "ok",
+        score: typeof r.score === "number" ? r.score : undefined,
+        findings: Array.isArray(r.findings) ? r.findings : [],
+      });
     }
   }
   if (failedCount === perspectives.length) {
@@ -87,36 +95,18 @@ try {
   // ── 段 2：aggregate（汇总多视角结果）────────────────────────────
   phase("aggregate");
   currentPhase = "aggregate";
-  const aggregate = await agent({
-    prompt:
-      "以下是多视角分析结果，请综合出总体评分、top 问题和共识：\n\n" +
-      JSON.stringify(perPerspective, null, 2),
-    schema: {
-      type: "object",
-      properties: {
-        overallScore: { type: "number", description: "综合评分 0-10" },
-        topIssues: {
-          type: "array",
-          items: { type: "string" },
-          description: "最关键的问题（按严重度排序）",
-        },
-        consensus: { type: "string", description: "多视角共识总结" },
-      },
-      required: ["overallScore", "topIssues", "consensus"],
-    },
-    description: "parallel-aggregate",
-  });
+
+  // 纯代码合并：拼接各视角发现的问题（不调用 LLM）
+  const aggregateResult = perPerspective
+    .map((p) => "[" + (p.perspective || "?") + "] " + (p.findings ? p.findings.join("; ") : "(no findings)"))
+    .join("\n");
 
   outcome = {
     status: failedCount > 0 ? "partial" : "ok",
     phases_run: ["parallel-analyze", "aggregate"],
     perspectives_analyzed: perspectives.length,
     per_perspective: perPerspective,
-    aggregate: {
-      overallScore: (aggregate?.overallScore ?? "(聚合无结果)"),
-      topIssues: (aggregate?.topIssues ?? []),
-      consensus: (aggregate?.consensus ?? "(聚合无结果)"),
-    },
+    aggregate: aggregateResult,
     message: "parallel 完成：" + perspectives.length + " 视角（失败 " + failedCount + "）→ 聚合",
   };
 } catch (err) {

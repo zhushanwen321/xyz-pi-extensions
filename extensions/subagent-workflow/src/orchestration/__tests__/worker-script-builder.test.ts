@@ -55,3 +55,77 @@ describe("buildWorkerScript — agent() skill field in task/agent branch", () =>
     expect(taskAgentBranch![0]).toContain("skill: firstArg.skill");
   });
 });
+
+// ── W1: postMessage 防御 + parallel() 降级类型安全 ──
+
+describe("buildWorkerScript — W1 postMessage defense & parallel degrade", () => {
+  const script = buildWorkerScript("// noop user script");
+
+  describe("_safePost wrapper", () => {
+    it("injects _safePost function", () => {
+      expect(script).toContain("function _safePost(msg, context)");
+    });
+
+    it("_safePost wraps postMessage in try/catch", () => {
+      expect(script).toMatch(/_safePost[\s\S]*?try \{ parentPort\.postMessage\(msg\)/);
+    });
+
+    it("_safePost logs failure with context to workerLogs", () => {
+      expect(script).toContain('_pushWorkerLog("error"');
+      expect(script).toContain('"[postMessage failed:" + context + "]"');
+    });
+  });
+
+  describe("agent() uses _safePost", () => {
+    it("agent-call postMessage guarded by _safePost", () => {
+      expect(script).toContain("_safePost({ type: \"agent-call\"");
+      expect(script).toContain('"agent-call"');
+    });
+
+    it("agent() throws on postMessage failure", () => {
+      expect(script).toContain("postMessage failed for agent-call");
+    });
+  });
+
+  describe("workflow() uses _safePost", () => {
+    it("workflow-call postMessage guarded by _safePost", () => {
+      expect(script).toContain("_safePost({ type: \"workflow-call\"");
+    });
+  });
+
+  describe("return/error use _safePost", () => {
+    it("return postMessage uses _safePost", () => {
+      expect(script).toContain('_safePost({ type: "return"');
+    });
+
+    it("error postMessage uses _safePost", () => {
+      expect(script).toContain('_safePost({ type: "error"');
+    });
+  });
+
+  describe("parallel() degrade returns object", () => {
+    it("rejected results become {status:failed,error} objects", () => {
+      expect(script).toContain('status: "failed"');
+      expect(script).toMatch(/parallel[\s\S]*?status: "failed"/);
+    });
+
+    it("non-object fulfilled values wrapped as failed", () => {
+      expect(script).toContain("agent returned non-object result");
+    });
+
+    it("object fulfilled values pass through unchanged", () => {
+      expect(script).toContain("!Array.isArray(v)");
+    });
+  });
+
+  describe("pipeline() error observability", () => {
+    it("single-arg mode logs stage errors before re-throwing", () => {
+      expect(script).toContain("[pipeline stage ");
+      expect(script).toContain("_pushWorkerLog(\"error\"");
+    });
+
+    it("cartesian mode logs stage errors instead of silent swallow", () => {
+      expect(script).toContain("[pipeline cartesian stage failed");
+    });
+  });
+});

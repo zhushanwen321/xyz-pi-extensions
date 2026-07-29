@@ -111,10 +111,16 @@ latest_aggregated = ""
 must_fix = suggestion = info = 0
 
 if review_dir.is_dir():
-    # 优先找 run-<id>/round-*（按 round 号排序取最大）
+    # 找最新 run 的最新 round：排序 key = (runId, round) 双键，runId 优先（最新 run 优先）
+    # run-<id> 的 id 是 unix timestamp 秒数，大的更新；round 同理。
+    def _run_round_key(p):
+        run_m = re.search(r"run-(\d+)", p.parent.name)
+        round_m = re.search(r"round-(\d+)", p.name)
+        return (int(run_m.group(1)) if run_m else 0,
+                int(round_m.group(1)) if round_m else 0)
     rounds = sorted(
         (p for p in review_dir.glob("run-*/round-*")),
-        key=lambda p: int(re.search(r"round-(\d+)", p.name).group(1)) if re.search(r"round-(\d+)", p.name) else 0,
+        key=_run_round_key,
         reverse=True,
     )
     if not rounds:
@@ -158,7 +164,10 @@ stage1 = {
     "must_fix": must_fix,
     "suggestion": suggestion,
     "info": info,
+    # clean = 修复前快照的 must_fix==0。单轮不循环下 aggregated.md 数字不反映修复后状态，
+    # 故 clean 不再是 ready_to_submit 的硬条件（见 ready 公式）。保留供诊断。
     "clean": (must_fix == 0),
+    "clean_note": "snapshot before fix; gate closure verified by worker receipts (pr-cr-fix SKILL.md Gate-3 软 gate)",
 }
 
 # ── Stage 2: Pre-merge 状态
@@ -191,10 +200,12 @@ stage2 = {
 }
 
 # ── 综合 ready_to_submit
+# stage1.clean 不作为硬条件：「单轮不循环」下 aggregated.md 的 must_fix 是修复前快照，
+# 修复闭合由 pr-cr-fix 主 agent 校验 worker 回执保证（软 gate），不由本脚本读快照数字保证。
+# 硬 gate = PR 存在 + 本地已同步 + pre-merge PASS。
 ready = (
     stage0["pr_exists"] is True
     and stage0["local_ahead_of_origin"] == 0
-    and stage1["clean"] is True
     and stage2["result"] == "PASS"
 )
 

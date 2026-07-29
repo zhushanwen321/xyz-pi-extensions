@@ -82,12 +82,12 @@ try {
   let mapFailed = 0;
   for (let i = 0; i < mappedRaw.length; i++) {
     const r = mappedRaw[i];
-    if (!r || r.error) {
+    if (!r || r.status === "failed" || r.error) {
       mapped.push({
         itemIndex: i,
         item: items[i],
         status: "failed",
-        error: r ? r.error : "agent 无返回",
+        error: r ? (r.error || "agent 返回 failed 状态") : "agent 无返回",
       });
       mapFailed++;
     } else {
@@ -95,7 +95,7 @@ try {
         itemIndex: i,
         item: items[i],
         status: "ok",
-        mapped: r.mapped,
+        mapped: (typeof r.mapped === "string" ? r.mapped : "(无结果)"),
       });
     }
   }
@@ -104,10 +104,11 @@ try {
   }
   log("map 完成：ok=" + (items.length - mapFailed) + " failed=" + mapFailed);
 
-  // ── 段 2：reduce（agent 聚合所有 map 结果）──────────────────────
+  // ── 段 2：reduce（agent 归约所有 map 结果）──────────────────────
   phase("reduce");
   currentPhase = "reduce";
-  const reduced = await agent({
+
+  const reducedResult = await agent({
     prompt:
       "以下是对 " + items.length + " 个 item 执行「" + operation + "」的结果，请归约成单一结论：\n\n" +
       JSON.stringify(mapped, null, 2),
@@ -127,7 +128,10 @@ try {
     phases_run: ["map", "reduce"],
     items_total: items.length,
     items_mapped: items.length - mapFailed,
-    reduced: { reduced: (reduced?.reduced ?? "(归约无结果)"), stats: (reduced?.stats ?? "(归约无结果)") },
+    reduced: {
+      reduced: (reducedResult?.reduced ?? "(归约无结果)"),
+      stats: (reducedResult?.stats ?? "(归约无结果)"),
+    },
     message: "map-reduce 完成：map " + items.length + " 项（失败 " + mapFailed + "）→ reduce",
   };
 } catch (err) {

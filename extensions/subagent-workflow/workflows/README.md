@@ -28,7 +28,9 @@ workflow run parallel --args target="src/auth/login.ts"
 workflow run parallel --args target="..." --args 'perspectives=["security","readability"]'
 ```
 
-`perspectives` 默认 `["security","performance","maintainability"]`。每个视角一个并行 agent，各自返回评分+发现的问题；最后再一个 agent 汇总成总体评分+top 问题+共识。
+`perspectives` 默认 `["security","performance","maintainability"]`。每个视角一个并行 agent，各自返回评分+发现的问题，最后纯代码拼接各视角的 findings。
+
+> **Note (breaking)**: `outcome.aggregate` is now a concatenated string of each perspective's findings (format: `[perspective] finding1; finding2`, joined by newlines). Previously it was an LLM-produced object `{overallScore, topIssues, consensus}`. If you have generated workflows or downstream tools parsing the old object shape, update them to read `outcome.per_perspective` for structured per-perspective scores/findings, or treat `outcome.aggregate` as plain text.
 
 ### scatter-gather — 分发-收集
 
@@ -36,7 +38,7 @@ workflow run parallel --args target="..." --args 'perspectives=["security","read
 workflow run scatter-gather --args task="重构认证模块，涉及 session/jwt/oauth 三块"
 ```
 
-三段：第一个 agent 把大任务拆成 2-4 个可并行子任务 → `parallel()` 并行处理每个子任务 → 最后一个 agent 合并所有结果。
+三段：第一个 agent 把大任务拆成 2-4 个可并行子任务 → `parallel()` 并行处理每个子任务 → gather 阶段用 `agent()` 把各子任务结果合并成最终结论（LLM 合并，非纯代码拼接）。
 
 ### map-reduce — 映射-归约
 
@@ -45,7 +47,7 @@ workflow run map-reduce --args 'items=["file1.ts","file2.ts","file3.ts"]' --args
 workflow run map-reduce --args itemsJson=/path/to/items.json --args operation="..."
 ```
 
-`items` 直接传 JSON 数组，或 `itemsJson` 传 JSON 文件路径（二选一）。`parallel()` 对每个 item 并行执行 `operation` → 一个 agent 把所有结果归约成单一结论。
+`items` 直接传 JSON 数组，或 `itemsJson` 传 JSON 文件路径（二选一）。`parallel()` 对每个 item 并行执行 `operation` → reduce 阶段用 `agent()` 把各 item 的 map 结果归约成单一结论（LLM 归约，非纯代码拼接）。
 
 ## 编排 API
 

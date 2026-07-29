@@ -19,8 +19,8 @@ const meta = {
 
 // ── 入参（$ARGS）──────────────────────────────────────────────────
 const task = $ARGS.task;
-if (!task) {
-  throw new Error("chain 缺少必需参数 task。用法：workflow run chain --args task=\"<任务描述>\"");
+if (typeof task !== "string" || task.trim() === "") {
+  throw new Error("chain 缺少必需参数 task（非空字符串）。用法：workflow run chain --args task=\"<描述>\"");
 }
 
 log("chain 开始，task=" + task);
