@@ -1,5 +1,6 @@
 /* eslint-disable taste/no-unsafe-cast */
 
+import { completeSimple } from "@earendil-works/pi-ai/compat";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -10,6 +11,13 @@ vi.mock("../pure.js", async (importActual) => {
 	return { ...actual, isEnabled: vi.fn() };
 });
 
+// mock completeSimple：callRenameLLM 内部动态 import("@earendil-works/pi-ai/compat")，
+// vitest 会把该 mock 注入到动态 import 的解析结果。LTC8/10/11/12 通过 vi.mocked 控制其行为。
+// vi.mock 被提升到文件顶部执行，故此处 import 拿到的是 mock 后的 completeSimple，与 import 位置无关。
+vi.mock("@earendil-works/pi-ai/compat", () => ({
+	completeSimple: vi.fn(),
+}));
+
 // 被测模块须在 vi.mock 之后 import：vi.mock 被 vitest 提升到文件顶部，被测模块才能拿到 mock 后的依赖。
 import renameSessionExtension from "../index";
 import { isEnabled } from "../pure.js";
@@ -19,27 +27,55 @@ import { isEnabled } from "../pure.js";
 interface MockSetup {
 	pi: ExtensionAPI;
 	setSessionNameMock: ReturnType<typeof vi.fn>;
+	getAllToolsMock: ReturnType<typeof vi.fn>;
 	turnEndHandler: (event: unknown, ctx: ExtensionContext) => void | Promise<void>;
 }
 
+/** getAllTools 返回的固定非空 ToolInfo[]（callRenameLLM 不读工具内容，占位即可） */
+const STUB_TOOLS = [
+	{ name: "read", description: "read file", parameters: { type: "object" } },
+];
+
 function createMockPi(): MockSetup {
 	const setSessionNameMock = vi.fn();
+	const getAllToolsMock = vi.fn(() => STUB_TOOLS);
 	let turnEndHandler!: MockSetup["turnEndHandler"];
 	const pi = {
 		on: vi.fn((event: string, handler: MockSetup["turnEndHandler"]) => {
 			if (event === "turn_end") turnEndHandler = handler;
 		}),
 		setSessionName: setSessionNameMock,
+		getAllTools: getAllToolsMock,
 	} as unknown as ExtensionAPI;
-	return { pi, setSessionNameMock, get turnEndHandler() { return turnEndHandler; } };
+	return { pi, setSessionNameMock, getAllToolsMock, get turnEndHandler() { return turnEndHandler; } };
 }
 
-function createMockCtx(entries: unknown[] = []): ExtensionContext {
+/** 扩展 ctx 的可选字段：未传则用主 session 默认值（getSessionDir 返回非 subagents 路径、model/auth 均就绪） */
+interface MockCtxOptions {
+	entries?: unknown[];
+	sessionDir?: string;
+	model?: unknown;
+	auth?: { ok: true; apiKey?: string } | { ok: false; error: string };
+}
+
+function createMockCtx(opts: MockCtxOptions = {}): ExtensionContext {
+	const entries = opts.entries ?? [];
+	const sessionDir = opts.sessionDir ?? "/home/u/.pi/agent/sessions";
+	// 用 in 判断区分「未传字段」（用默认 stub）与「显式传 undefined」（保留 undefined，LTC9 依赖此语义）。
+	const model = "model" in opts ? opts.model : { id: "stub-model" };
+	const auth = opts.auth ?? { ok: true, apiKey: "stub-key" };
 	return {
 		sessionManager: {
 			getEntries: () => entries,
 			getSessionId: () => "test-session-id",
+			getSessionDir: () => sessionDir,
 		},
+		model,
+		modelRegistry: {
+			getApiKeyAndHeaders: async () => auth,
+		},
+		getSystemPrompt: () => "stub system prompt",
+		signal: new AbortController().signal,
 	} as unknown as ExtensionContext;
 }
 
@@ -47,6 +83,14 @@ const ONE_ASSISTANT = [
 	{ type: "message", message: { role: "user" } },
 	{ type: "message", message: { role: "assistant" } },
 ];
+
+/** 触发 turn_end handler 的便捷封装（事件载荷在测试中不被读取，固定即可） */
+function fire(setup: MockSetup, ctx: ExtensionContext): Promise<void> {
+	return setup.turnEndHandler(
+		{ type: "turn_end", turnIndex: 0, message: null, toolResults: [] },
+		ctx,
+	) as Promise<void>;
+}
 
 // ────────────────────────────────────────────────────
 // renameSessionExtension 工厂 + hook 注册
@@ -58,6 +102,7 @@ describe("renameSessionExtension", () => {
 	beforeEach(() => {
 		vi.clearAllMocks();
 		vi.mocked(isEnabled).mockReset();
+		vi.mocked(completeSimple).mockReset();
 		setup = createMockPi();
 		renameSessionExtension(setup.pi);
 	});
@@ -71,10 +116,7 @@ describe("renameSessionExtension", () => {
 	it("TC14: 开关关闭时 handler 触发后不调 setSessionName", async () => {
 		vi.mocked(isEnabled).mockReturnValue(false);
 
-		await setup.turnEndHandler(
-			{ type: "turn_end", turnIndex: 0, message: null, toolResults: [] },
-			createMockCtx(ONE_ASSISTANT),
-		);
+		await fire(setup, createMockCtx({ entries: ONE_ASSISTANT }));
 
 		expect(isEnabled).toHaveBeenCalled();
 		expect(setup.setSessionNameMock).not.toHaveBeenCalled();
@@ -88,14 +130,93 @@ describe("renameSessionExtension", () => {
 			sessionManager: {
 				getEntries: () => { throw new Error("boom"); },
 				getSessionId: () => "test-session-id",
+				getSessionDir: () => "/home/u/.pi/agent/sessions",
 			},
+			model: { id: "stub-model" },
+			modelRegistry: { getApiKeyAndHeaders: async () => ({ ok: true }) },
+			getSystemPrompt: () => "stub system prompt",
+			signal: new AbortController().signal,
 		} as unknown as ExtensionContext;
 
-		await expect(
-			setup.turnEndHandler({ type: "turn_end", turnIndex: 0, message: null, toolResults: [] }, ctx),
-		).resolves.toBeUndefined();
+		await expect(fire(setup, ctx)).resolves.toBeUndefined();
 
 		expect(errorSpy).toHaveBeenCalled();
+		expect(setup.setSessionNameMock).not.toHaveBeenCalled();
+		errorSpy.mockRestore();
+	});
+
+	// ────────────────────────────────────────────────────
+	// rename-llm wave：callRenameLLM 集成覆盖（LTC7-LTC12）
+	// ────────────────────────────────────────────────────
+
+	it("LTC7: subagents 子 session 路径 → isSubagentSession 早退，不调 setSessionName", async () => {
+		vi.mocked(isEnabled).mockReturnValue(true);
+
+		await fire(setup, createMockCtx({
+			entries: ONE_ASSISTANT,
+			sessionDir: "/home/u/.pi/agent/subagents/--proj--/sessions",
+		}));
+
+		// isSubagentSession 在首 turn 判定之前早退，不应触达 LLM
+		expect(completeSimple).not.toHaveBeenCalled();
+		expect(setup.setSessionNameMock).not.toHaveBeenCalled();
+	});
+
+	it("LTC8: getApiKeyAndHeaders resolve {ok:false} → callRenameLLM 返回 null，不调 setSessionName", async () => {
+		vi.mocked(isEnabled).mockReturnValue(true);
+
+		await fire(setup, createMockCtx({
+			entries: ONE_ASSISTANT,
+			auth: { ok: false, error: "no api key" },
+		}));
+
+		// auth 未通过，不应发起 LLM 调用
+		expect(completeSimple).not.toHaveBeenCalled();
+		expect(setup.setSessionNameMock).not.toHaveBeenCalled();
+	});
+
+	it("LTC9: ctx.model = undefined → callRenameLLM 早退返回 null，不调 setSessionName", async () => {
+		vi.mocked(isEnabled).mockReturnValue(true);
+
+		await fire(setup, createMockCtx({ entries: ONE_ASSISTANT, model: undefined }));
+
+		expect(completeSimple).not.toHaveBeenCalled();
+		expect(setup.setSessionNameMock).not.toHaveBeenCalled();
+	});
+
+	it("LTC10: completeSimple 返回 text → extractTitle 去空白后 setSessionName 落库", async () => {
+		vi.mocked(isEnabled).mockReturnValue(true);
+		vi.mocked(completeSimple).mockResolvedValue({
+			content: [{ type: "text", text: "  修复登录bug  " }],
+		});
+
+		await fire(setup, createMockCtx({ entries: ONE_ASSISTANT }));
+
+		expect(completeSimple).toHaveBeenCalledTimes(1);
+		expect(setup.setSessionNameMock).toHaveBeenCalledWith("修复登录bug");
+	});
+
+	it("LTC11: completeSimple 返回无 text（仅 toolCall）→ extractTitle 空串 → 不调 setSessionName", async () => {
+		vi.mocked(isEnabled).mockReturnValue(true);
+		vi.mocked(completeSimple).mockResolvedValue({
+			content: [{ type: "toolCall", name: "x", arguments: {} }],
+		});
+
+		await fire(setup, createMockCtx({ entries: ONE_ASSISTANT }));
+
+		expect(completeSimple).toHaveBeenCalledTimes(1);
+		// extractTitle 返回空串 → callRenameLLM 返回 null → 不落库
+		expect(setup.setSessionNameMock).not.toHaveBeenCalled();
+	});
+
+	it("LTC12: completeSimple reject → handler 不抛，setSessionName 未调用", async () => {
+		vi.mocked(isEnabled).mockReturnValue(true);
+		vi.mocked(completeSimple).mockRejectedValue(new Error("llm down"));
+		const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+
+		await expect(fire(setup, createMockCtx({ entries: ONE_ASSISTANT }))).resolves.toBeUndefined();
+
+		expect(completeSimple).toHaveBeenCalledTimes(1);
 		expect(setup.setSessionNameMock).not.toHaveBeenCalled();
 		errorSpy.mockRestore();
 	});
