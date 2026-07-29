@@ -36,7 +36,7 @@ workflow run parallel --args target="..." --args 'perspectives=["security","read
 workflow run scatter-gather --args task="重构认证模块，涉及 session/jwt/oauth 三块"
 ```
 
-三段：第一个 agent 把大任务拆成 2-4 个可并行子任务 → `parallel()` 并行处理每个子任务 → gather 阶段纯代码拼接各子任务结果。
+三段：第一个 agent 把大任务拆成 2-4 个可并行子任务 → `parallel()` 并行处理每个子任务 → gather 阶段用 `agent()` 把各子任务结果合并成最终结论（LLM 合并，非纯代码拼接）。
 
 ### map-reduce — 映射-归约
 
@@ -45,7 +45,7 @@ workflow run map-reduce --args 'items=["file1.ts","file2.ts","file3.ts"]' --args
 workflow run map-reduce --args itemsJson=/path/to/items.json --args operation="..."
 ```
 
-`items` 直接传 JSON 数组，或 `itemsJson` 传 JSON 文件路径（二选一）。`parallel()` 对每个 item 并行执行 `operation` → reduce 阶段纯代码拼接各 item 的 map 结果。
+`items` 直接传 JSON 数组，或 `itemsJson` 传 JSON 文件路径（二选一）。`parallel()` 对每个 item 并行执行 `operation` → reduce 阶段用 `agent()` 把各 item 的 map 结果归约成单一结论（LLM 归约，非纯代码拼接）。
 
 ## 编排 API
 
