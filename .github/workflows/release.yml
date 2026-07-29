@@ -41,6 +41,9 @@ jobs:
         run: |
           for pkg_json in extensions/*/package.json shared/*/package.json; do
             [ -f "$pkg_json" ] || continue
+            # Skip private packages (internal shared/* packages marked private:true)
+            private=$(node -p "require('./$pkg_json').private || false" 2>/dev/null)
+            [ "$private" = "true" ] && continue
             name=$(node -p "require('./$pkg_json').name" 2>/dev/null)
             version=$(node -p "require('./$pkg_json').version" 2>/dev/null)
             [ -n "$name" ] || continue
