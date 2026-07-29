@@ -104,21 +104,34 @@ try {
   }
   log("map 完成：ok=" + (items.length - mapFailed) + " failed=" + mapFailed);
 
-  // ── 段 2：reduce（合并所有 map 结果）────────────────────────────
+  // ── 段 2：reduce（agent 归约所有 map 结果）──────────────────────
   phase("reduce");
   currentPhase = "reduce";
 
-  // 纯代码合并：拼接各 item 的 map 结果（不调用 LLM）
-  const reducedResult = mapped
-    .map((m) => "[" + (m.itemIndex !== undefined ? "item " + m.itemIndex : "?") + "] " + (m.mapped || "(no result)"))
-    .join("\n");
+  const reducedResult = await agent({
+    prompt:
+      "以下是对 " + items.length + " 个 item 执行「" + operation + "」的结果，请归约成单一结论：\n\n" +
+      JSON.stringify(mapped, null, 2),
+    schema: {
+      type: "object",
+      properties: {
+        reduced: { type: "string", description: "归约后的最终结果" },
+        stats: { type: "string", description: "统计摘要（成功率/共性发现等）" },
+      },
+      required: ["reduced", "stats"],
+    },
+    description: "map-reduce-reduce",
+  });
 
   outcome = {
     status: mapFailed > 0 ? "partial" : "ok",
     phases_run: ["map", "reduce"],
     items_total: items.length,
     items_mapped: items.length - mapFailed,
-    reduced: reducedResult,
+    reduced: {
+      reduced: (reducedResult?.reduced ?? "(归约无结果)"),
+      stats: (reducedResult?.stats ?? "(归约无结果)"),
+    },
     message: "map-reduce 完成：map " + items.length + " 项（失败 " + mapFailed + "）→ reduce",
   };
 } catch (err) {
