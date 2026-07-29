@@ -191,6 +191,9 @@ describe("renameSessionExtension", () => {
 		});
 
 		await fire(setup, createMockCtx({ entries: ONE_ASSISTANT }));
+		// handler 内 callRenameLLM 是 detached promise（fire-and-forget），fire 立即 resolve；
+		// 需等 detached promise settle 后再断言落库结果。
+		await vi.waitFor(() => expect(setup.setSessionNameMock).toHaveBeenCalledWith("修复登录bug"));
 
 		expect(completeSimple).toHaveBeenCalledTimes(1);
 		expect(setup.setSessionNameMock).toHaveBeenCalledWith("修复登录bug");
@@ -203,6 +206,9 @@ describe("renameSessionExtension", () => {
 		});
 
 		await fire(setup, createMockCtx({ entries: ONE_ASSISTANT }));
+		// handler 内 callRenameLLM 是 detached promise（fire-and-forget），fire 立即 resolve；
+		// 需等 detached promise settle（completeSimple 被调用）后再断言不落库。
+		await vi.waitFor(() => expect(completeSimple).toHaveBeenCalledTimes(1));
 
 		expect(completeSimple).toHaveBeenCalledTimes(1);
 		// extractTitle 返回空串 → callRenameLLM 返回 null → 不落库
@@ -215,6 +221,9 @@ describe("renameSessionExtension", () => {
 		const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
 
 		await expect(fire(setup, createMockCtx({ entries: ONE_ASSISTANT }))).resolves.toBeUndefined();
+		// handler 内 callRenameLLM 是 detached promise（fire-and-forget），fire 立即 resolve；
+		// reject 由 detached promise 的 catch 兜底，需等其 settle 后再断言。
+		await vi.waitFor(() => expect(completeSimple).toHaveBeenCalledTimes(1));
 
 		expect(completeSimple).toHaveBeenCalledTimes(1);
 		expect(setup.setSessionNameMock).not.toHaveBeenCalled();

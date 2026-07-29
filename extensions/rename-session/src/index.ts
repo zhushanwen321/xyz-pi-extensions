@@ -36,15 +36,17 @@ export default function renameSessionExtension(pi: ExtensionAPI): void {
 			const assistantCount = countAssistantReplies(entries);
 			if (assistantCount !== 1) return;
 
-			// 4. LLM 生成标题（复用主 turn 上下文 → 命中 kvcache）
+			// 4. LLM 生成标题并落库。pi 运行时的事件链是 await 的（runner.emit → await handler），
+			// 若 await callRenameLLM 会阻塞 agent 进入下一次迭代。这里用 detached promise 脱离 await 链，
+			// 真正实现 fire-and-forget：handler 立即 resolve，LLM 调用与 setSessionName 在后台异步完成。
 			// pi.getAllTools() 的 .d.ts 因 pi-ai 泛型未完全解析而被降级，经 unknown 收窄到宽松 ToolInfoLike。
-			const title = await callRenameLLM(ctx, pi.getAllTools() as unknown as ReadonlyArray<ToolInfoLike>);
-			if (!title) return;
-
-			// 5. 落库（fire-and-forget，不进 session history）
-			pi.setSessionName(title);
-			// fire-and-forget 降级：turn_end handler 失败绝不能阻断 agent 循环。
-			// rename 是 best-effort，任何失败（LLM 调用/提取/auth/读取）都静默跳过保留原 label。
+			void callRenameLLM(ctx, pi.getAllTools() as unknown as ReadonlyArray<ToolInfoLike>)
+				.then((title) => {
+					if (title) pi.setSessionName(title);
+				})
+				.catch((e) => console.error("[pi-rename-session] rename LLM failed:", e));
+			// rename 是 best-effort，任何 LLM 失败（网络/提取/auth）都静默跳过保留原 label，不进 session history。
+			// 同步部分（开关/子 session/首 turn 判定）的错误兜底：绝不阻断 agent 循环。
 			// eslint-disable-next-line taste/no-silent-catch
 		} catch (e) {
 			console.error("[pi-rename-session] failed:", e);
