@@ -35,6 +35,27 @@ jobs:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
           NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
 
+      # Fallback: changeset publish skips brand-new packages (npm 404 on info).
+      # For any workspace package not yet on npm, publish it with --access public.
+      - name: Publish new packages (changeset fallback)
+        run: |
+          for pkg_json in extensions/*/package.json shared/*/package.json; do
+            [ -f "$pkg_json" ] || continue
+            name=$(node -p "require('./$pkg_json').name" 2>/dev/null)
+            version=$(node -p "require('./$pkg_json').version" 2>/dev/null)
+            [ -n "$name" ] || continue
+            # Check if this version exists on npm
+            if npm view "$name@$version" version >/dev/null 2>&1; then
+              echo "✓ $name@$version already on npm"
+            else
+              echo "→ Publishing $name@$version (new package or version)"
+              (cd "$(dirname "$pkg_json")" && npm publish --access public)
+            fi
+          done
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+          NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
+
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v3
         with:
