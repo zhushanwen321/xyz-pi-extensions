@@ -7,9 +7,13 @@
 | workflow | 模式 | 必需参数 | 适用场景 |
 |----------|------|----------|----------|
 | `chain.js` | analyze → transform → synthesize 顺序链 | `task` | 多阶段处理：先分析、再变换、最后综合 |
-| `parallel.js` | 多视角并行分析 → 聚合汇总 | `target`（可选 `perspectives`） | 多维度评估同一目标（安全/性能/可维护性等） |
-| `scatter-gather.js` | scatter 拆分 → parallel 处理 → gather 合并 | `task` | 大任务先拆成子任务再并行处理 |
-| `map-reduce.js` | parallel map → reduce 归约 | `items`/`itemsJson` + `operation` | 对已知数组批量变换后归约成单一结果 |
+| `parallel.js` | 多视角并行分析 → 聚合汇总 | `target`（可选 `perspectives`、`aggregate`） | 多维度评估同一目标（安全/性能/可维护性等） |
+| `scatter-gather.js` | scatter 拆分 → parallel 处理 → gather 合并 | `task`（可选 `aggregate`） | 大任务先拆成子任务再并行处理 |
+| `map-reduce.js` | parallel map → reduce 归约 | `items`/`itemsJson` + `operation`（可选 `aggregate`） | 对已知数组批量变换后归约成单一结果 |
+
+> **聚合模式 `aggregate`**：`parallel` / `scatter-gather` / `map-reduce` 都支持 `--args aggregate=...` 参数。
+> - 默认 `concat`：聚合阶段用纯代码拼接结果数组（不调用 LLM，省 tokens、快、可预测）。
+> - `llm`：保留原行为，用一个 `agent()` 做 LLM 聚合/归约。
 
 ## 用法
 
@@ -26,26 +30,32 @@ workflow run chain --args task="把这段需求文档拆成技术任务：..."
 ```
 workflow run parallel --args target="src/auth/login.ts"
 workflow run parallel --args target="..." --args 'perspectives=["security","readability"]'
+# 可选 aggregate='llm' 用 LLM 聚合（默认 concat 纯代码合并）
+workflow run parallel --args target="..." --args aggregate=llm
 ```
 
-`perspectives` 默认 `["security","performance","maintainability"]`。每个视角一个并行 agent，各自返回评分+发现的问题；最后再一个 agent 汇总成总体评分+top 问题+共识。
+`perspectives` 默认 `["security","performance","maintainability"]`。每个视角一个并行 agent，各自返回评分+发现的问题。聚合阶段默认 `concat`（纯代码拼接各视角的 findings），设 `aggregate=llm` 时再用一个 agent 汇总成总体评分+top 问题+共识。
 
 ### scatter-gather — 分发-收集
 
 ```
 workflow run scatter-gather --args task="重构认证模块，涉及 session/jwt/oauth 三块"
+# 可选 aggregate='llm' 用 LLM 聚合（默认 concat 纯代码合并）
+workflow run scatter-gather --args task="..." --args aggregate=llm
 ```
 
-三段：第一个 agent 把大任务拆成 2-4 个可并行子任务 → `parallel()` 并行处理每个子任务 → 最后一个 agent 合并所有结果。
+三段：第一个 agent 把大任务拆成 2-4 个可并行子任务 → `parallel()` 并行处理每个子任务 → gather 阶段默认 `concat`（纯代码拼接各子任务结果），设 `aggregate=llm` 时再用一个 agent 合并所有结果。
 
 ### map-reduce — 映射-归约
 
 ```
 workflow run map-reduce --args 'items=["file1.ts","file2.ts","file3.ts"]' --args operation="审查代码风格"
 workflow run map-reduce --args itemsJson=/path/to/items.json --args operation="..."
+# 可选 aggregate='llm' 用 LLM 归约（默认 concat 纯代码合并）
+workflow run map-reduce --args 'items=[...]' --args operation="..." --args aggregate=llm
 ```
 
-`items` 直接传 JSON 数组，或 `itemsJson` 传 JSON 文件路径（二选一）。`parallel()` 对每个 item 并行执行 `operation` → 一个 agent 把所有结果归约成单一结论。
+`items` 直接传 JSON 数组，或 `itemsJson` 传 JSON 文件路径（二选一）。`parallel()` 对每个 item 并行执行 `operation` → reduce 阶段默认 `concat`（纯代码拼接各 item 的 map 结果），设 `aggregate=llm` 时再用一个 agent 把所有结果归约成单一结论。
 
 ## 编排 API
 

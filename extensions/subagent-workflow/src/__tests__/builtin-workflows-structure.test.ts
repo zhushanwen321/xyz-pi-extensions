@@ -68,22 +68,22 @@ describe("U2: 内置脚本 agent() 返回值属性访问含 null guard", () => {
 
   it("parallel.js 的 aggregate 属性访问含 null guard", () => {
     const src = readScript("parallel.js");
-    expect(src).toContain("aggregate?.overallScore");
-    expect(src).toContain("aggregate?.topIssues");
-    expect(src).toContain("aggregate?.consensus");
+    expect(src).toContain("aggregateResult?.overallScore");
+    expect(src).toContain("aggregateResult?.topIssues");
+    expect(src).toContain("aggregateResult?.consensus");
   });
 
   it("scatter-gather.js 的 split/gathered 属性访问含 null guard", () => {
     const src = readScript("scatter-gather.js");
     expect(src).toContain("split?.subtasks");
-    expect(src).toContain("gathered?.mergedResult");
-    expect(src).toContain("gathered?.completeness");
+    expect(src).toContain("gatheredResult?.mergedResult");
+    expect(src).toContain("gatheredResult?.completeness");
   });
 
   it("map-reduce.js 的 reduced 属性访问含 null guard", () => {
     const src = readScript("map-reduce.js");
-    expect(src).toContain("reduced?.reduced");
-    expect(src).toContain("reduced?.stats");
+    expect(src).toContain("reducedResult?.reduced");
+    expect(src).toContain("reducedResult?.stats");
   });
 
   it.each(SCRIPTS)("%s 不含裸 analysis.insights/plan.plan 等无 guard 访问", (filename) => {
@@ -91,7 +91,7 @@ describe("U2: 内置脚本 agent() 返回值属性访问含 null guard", () => {
     // 检查不存在 "变量.属性" 形式的裸访问（不含 ?. 的）
     // 排除 schema 对象定义里的 properties.xxx 和 JSON.stringify 等合法用法
     // 只检查 agent() 返回值变量名后的裸属性访问
-    const agentVars = ["analysis", "plan", "final", "aggregate", "split", "gathered", "reduced"];
+    const agentVars = ["analysis", "plan", "final", "aggregateResult", "split", "gatheredResult", "reducedResult"];
     for (const v of agentVars) {
       // 匹配 `变量.属性`（非 `变量?.属性`），但排除变量声明和赋值左侧
       const bareAccess = new RegExp(`[^?\\w.]${v}\\.[a-zA-Z]`);

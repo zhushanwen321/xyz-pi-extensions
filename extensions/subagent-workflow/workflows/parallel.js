@@ -28,8 +28,10 @@ if (!target) {
 const perspectives = Array.isArray($ARGS.perspectives) && $ARGS.perspectives.length > 0
   ? $ARGS.perspectives
   : ["security", "performance", "maintainability"];
+// aggregate 模式：'concat'（默认，纯代码合并）或 'llm'（agent LLM 聚合）
+const aggregate = $ARGS.aggregate === "llm" ? "llm" : "concat";
 
-log("parallel 开始，target=" + target + " perspectives=" + JSON.stringify(perspectives));
+log("parallel 开始，target=" + target + " perspectives=" + JSON.stringify(perspectives) + " aggregate=" + aggregate);
 
 let currentPhase = "init";
 let outcome;
@@ -87,37 +89,46 @@ try {
   // ── 段 2：aggregate（汇总多视角结果）────────────────────────────
   phase("aggregate");
   currentPhase = "aggregate";
-  const aggregate = await agent({
-    prompt:
-      "以下是多视角分析结果，请综合出总体评分、top 问题和共识：\n\n" +
-      JSON.stringify(perPerspective, null, 2),
-    schema: {
-      type: "object",
-      properties: {
-        overallScore: { type: "number", description: "综合评分 0-10" },
-        topIssues: {
-          type: "array",
-          items: { type: "string" },
-          description: "最关键的问题（按严重度排序）",
+
+  let aggregateResult;
+  if (aggregate === "llm") {
+    aggregateResult = await agent({
+      prompt:
+        "以下是多视角分析结果，请综合出总体评分、top 问题和共识：\n\n" +
+        JSON.stringify(perPerspective, null, 2),
+      schema: {
+        type: "object",
+        properties: {
+          overallScore: { type: "number", description: "综合评分 0-10" },
+          topIssues: {
+            type: "array",
+            items: { type: "string" },
+            description: "最关键的问题（按严重度排序）",
+          },
+          consensus: { type: "string", description: "多视角共识总结" },
         },
-        consensus: { type: "string", description: "多视角共识总结" },
+        required: ["overallScore", "topIssues", "consensus"],
       },
-      required: ["overallScore", "topIssues", "consensus"],
-    },
-    description: "parallel-aggregate",
-  });
+      description: "parallel-aggregate",
+    });
+  } else {
+    // concat 模式：纯代码合并，不调用 LLM
+    aggregateResult = perPerspective
+      .map((p) => "[" + (p.perspective || "?") + "] " + (p.findings ? p.findings.join("; ") : "(no findings)"))
+      .join("\n");
+  }
 
   outcome = {
     status: failedCount > 0 ? "partial" : "ok",
     phases_run: ["parallel-analyze", "aggregate"],
     perspectives_analyzed: perspectives.length,
     per_perspective: perPerspective,
-    aggregate: {
-      overallScore: (aggregate?.overallScore ?? "(聚合无结果)"),
-      topIssues: (aggregate?.topIssues ?? []),
-      consensus: (aggregate?.consensus ?? "(聚合无结果)"),
-    },
-    message: "parallel 完成：" + perspectives.length + " 视角（失败 " + failedCount + "）→ 聚合",
+    aggregate: aggregate === "llm" ? {
+      overallScore: (aggregateResult?.overallScore ?? "(聚合无结果)"),
+      topIssues: (aggregateResult?.topIssues ?? []),
+      consensus: (aggregateResult?.consensus ?? "(聚合无结果)"),
+    } : aggregateResult, // concat 模式直接放拼接字符串
+    message: "parallel 完成：" + perspectives.length + " 视角（失败 " + failedCount + "）→ 聚合(" + aggregate + ")",
   };
 } catch (err) {
   outcome = {
