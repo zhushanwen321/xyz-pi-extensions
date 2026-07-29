@@ -1,5 +1,10 @@
 import path from "node:path";
 
+import type {
+	AssistantMessage,
+	Context as LlmContext,
+	SimpleStreamOptions,
+} from "@earendil-works/pi-ai/compat";
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 
 import { CONFIG, extractTitle } from "./pure.js";
@@ -45,26 +50,6 @@ export function mapToolsToAiFormat(tools: ReadonlyArray<ToolInfoLike>): ToolInfo
 	}));
 }
 
-/** Auth 的判别联合宽松类型（对应 pi 的 ResolvedRequestAuth，getApiKeyAndHeaders 返回值）。 */
-type AuthLike =
-	| { ok: true; apiKey?: string; headers?: Record<string, string>; env?: Record<string, string> }
-	| { ok: false; error: string };
-
-/** completeSimple 的 options 参数形状（与 pi compaction.ts/branch-summarization.ts 同款，对应 pi-ai 的 SimpleStreamOptions）。 */
-interface CompleteOptions {
-	apiKey?: string;
-	headers?: Record<string, string>;
-	env?: Record<string, string>;
-	sessionId?: string;
-	signal?: AbortSignal;
-	maxTokens?: number;
-}
-
-/** completeSimple 返回的 AssistantMessage 的宽松形状（extractTitle 只读 content）。 */
-interface CompleteResponse {
-	content: ReadonlyArray<{ type: string; text?: string }>;
-}
-
 /**
  * 发起 rename LLM 调用，返回提取的标题（空串/异常时返回 null 表示应跳过 rename）。
  *
@@ -78,13 +63,8 @@ export async function callRenameLLM(
 	const model = ctx.model;
 	if (!model) return null;
 
-	// ctx.modelRegistry 的 .d.ts 因 pi-ai 类型未完全解析而被降级（缺 getApiKeyAndHeaders），
-	// 此处用宽松 ModelRegistryLike 收窄，运行时方法存在（pi 的 ModelRegistry 已实现）。
-	const modelRegistry = ctx.modelRegistry as unknown as {
-		getApiKeyAndHeaders(m: unknown): Promise<AuthLike>;
-	};
 	// getApiKeyAndHeaders 返回判别联合，必须显式检查 .ok 才能取 apiKey/headers
-	const auth = await modelRegistry.getApiKeyAndHeaders(model);
+	const auth = await ctx.modelRegistry.getApiKeyAndHeaders(model);
 	if (!auth.ok) return null;
 
 	const sessionId = ctx.sessionManager.getSessionId();
@@ -95,26 +75,19 @@ export async function callRenameLLM(
 	);
 	const mappedTools = mapToolsToAiFormat(tools);
 
-	// 说明符断言为非字面量字符串：避免 TS 静态解析子路径 @earendil-works/pi-ai/compat
-	// （tsconfig 仅映射了裸包名，子路径无 path mapping）。运行时由 loader 注册的 compat 模块解析。
-	const moduleSpecifier: string = "@earendil-works/pi-ai/compat";
-	const { completeSimple } = (await import(moduleSpecifier)) as {
-		completeSimple: (model: unknown, context: unknown, options: CompleteOptions) => Promise<CompleteResponse>;
-	};
+	const { completeSimple } = await import("@earendil-works/pi-ai/compat");
 
-	const resp = await completeSimple(
-		model,
-		{ systemPrompt, messages, tools: mappedTools },
-		{
-			apiKey: auth.apiKey,
-			headers: auth.headers,
-			env: auth.env,
-			sessionId,
-			signal: ctx.signal,
-			// 标题只需几个词，64 token 足够且省 quota
-			maxTokens: 64,
-		},
-	);
+	const options: SimpleStreamOptions = {
+		apiKey: auth.apiKey,
+		headers: auth.headers,
+		env: auth.env,
+		sessionId,
+		signal: ctx.signal,
+		// 标题只需几个词，64 token 足够且省 quota
+		maxTokens: 64,
+	};
+	const context: LlmContext = { systemPrompt, messages, tools: mappedTools };
+	const resp: AssistantMessage = await completeSimple(model, context, options);
 
 	const title = extractTitle(resp, CONFIG.maxTitleLength);
 	return title || null;

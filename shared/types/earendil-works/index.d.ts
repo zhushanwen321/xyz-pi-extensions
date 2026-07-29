@@ -27,6 +27,10 @@ declare module "@earendil-works/pi-coding-agent" {
 			getAvailable(): Array<{ id: string; provider: string; name: string; reasoning: boolean; thinkingLevelMap?: Record<string, string | null>; contextWindow?: number }>;
 			find(provider: string, modelId: string): { id: string; provider: string; name: string; reasoning: boolean; thinkingLevelMap?: Record<string, string | null>; contextWindow?: number } | undefined;
 			hasConfiguredAuth(model: unknown): boolean;
+			getApiKeyAndHeaders(model: unknown): Promise<
+				| { ok: true; apiKey?: string; headers?: Record<string, string>; env?: Record<string, string> }
+				| { ok: false; error: string }
+			>;
 		};
 		getContextUsage(): ContextUsage | undefined;
 		/** Current run mode. Use "tui" to guard terminal-only UI such as custom components. */
@@ -377,6 +381,30 @@ declare module "@earendil-works/pi-tui" {
 declare module "@earendil-works/pi-ai" {
 	export * from "@earendil-works/pi-ai";
 	export type Message = any;
+}
+
+declare module "@earendil-works/pi-ai/compat" {
+	export interface Context {
+		systemPrompt?: string;
+		messages: unknown[];
+		tools?: unknown[];
+	}
+	export interface SimpleStreamOptions {
+		apiKey?: string;
+		headers?: Record<string, string>;
+		env?: Record<string, string>;
+		sessionId?: string;
+		signal?: AbortSignal;
+		maxTokens?: number;
+	}
+	export interface AssistantMessage {
+		content: ReadonlyArray<{ type: string; text?: string }>;
+	}
+	export function completeSimple(
+		model: unknown,
+		context: Context,
+		options?: SimpleStreamOptions,
+	): Promise<AssistantMessage>;
 }
 
 declare module "typebox" {
