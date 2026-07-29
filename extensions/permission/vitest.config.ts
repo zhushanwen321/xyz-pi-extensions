@@ -11,24 +11,20 @@ export default defineConfig({
 		root: __dirname,
 	},
 	resolve: {
-		// 与 ask-user 一致：把 @mariozechner/* 别名到本地 @earendil-works/* 真实包，
+		// 与 ask-user 一致：把 @earendil-works/* 别名到本地真实包，
 		// 让 vitest（node 解析，不走 tsconfig paths）能 import pi-tui 的真实实现。
 		alias: {
-			"@mariozechner/pi-tui": path.resolve(
+			"@earendil-works/pi-tui": path.resolve(
 				__dirname,
 				"./node_modules/@earendil-works/pi-tui/dist/index.js",
-			),
-			"@mariozechner/pi-ai": path.resolve(
-				__dirname,
-				"./node_modules/@earendil-works/pi-ai/dist/index.js",
-			),
-			"@mariozechner/pi-coding-agent": path.resolve(
-				__dirname,
-				"../../shared/types/mariozechner/index.ts",
 			),
 			"@earendil-works/pi-ai": path.resolve(
 				__dirname,
 				"./node_modules/@earendil-works/pi-ai/dist/index.js",
+			),
+			"@earendil-works/pi-coding-agent": path.resolve(
+				__dirname,
+				"../../shared/types/earendil-works/index.ts",
 			),
 		},
 	},

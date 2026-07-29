@@ -14,12 +14,9 @@ export default defineConfig({
   },
   resolve: {
     alias: {
-      "@mariozechner/pi-coding-agent": path.resolve(__dirname, "mocks/pi-coding-agent.ts"),
-      "@mariozechner/pi-ai": path.resolve(__dirname, "mocks/pi-ai.ts"),
-      "@mariozechner/pi-tui": path.resolve(__dirname, "mocks/pi-tui.ts"),
-      "@earendil-works/pi-tui": path.resolve(__dirname, "mocks/pi-tui.ts"),
+      "@earendil-works/pi-coding-agent": path.resolve(__dirname, "mocks/pi-coding-agent.ts"),
       "@earendil-works/pi-ai": path.resolve(__dirname, "mocks/pi-ai.ts"),
-      "@earendil-works/pi-coding-agent": path.resolve(__dirname, "../../shared/types/mariozechner/index.d.ts"),
+      "@earendil-works/pi-tui": path.resolve(__dirname, "mocks/pi-tui.ts"),
       "typebox": path.resolve(__dirname, "mocks/typebox.ts"),
       "@sinclair/typebox": path.resolve(__dirname, "mocks/typebox.ts"),
       "@zhushanwen/pi-structured-output": path.resolve(__dirname, "../structured-output/src/index.ts"),

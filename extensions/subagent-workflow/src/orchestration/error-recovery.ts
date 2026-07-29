@@ -492,8 +492,8 @@ function postAgentResult(
  * 更新 spent()/remaining()）。每次 agent 调用消费 usage 后发送，保持 worker 内 $BUDGET
  * 与主线程 Budget 值对象同步。
  *
- * D-12 regression fix (round-2 #1)：重建 budget-update 发送方。被 error-recovery（dispatch
- * 后）和 node-ops（retry/skip 后）共用——单一实现，避免消息形状漂移。
+ * D-12 regression fix (round-2 #1)：重建 budget-update 发送方。被 error-recovery 主路径调用
+ * （dispatch 后同步 worker $BUDGET）——单一实现，避免消息形状漂移。
  */
 export function postBudgetUpdate(run: WorkflowRun): void {
   run.runtime?.worker.postMessage({

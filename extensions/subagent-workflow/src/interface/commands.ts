@@ -19,7 +19,7 @@
  * - spec.md UC-3（用户输入 /workflows，打开三级导航 TUI 面板）
  */
 
-import type { ExtensionAPI, ExtensionCommandContext, Theme } from "@mariozechner/pi-coding-agent";
+import type { ExtensionAPI, ExtensionCommandContext, Theme } from "@earendil-works/pi-coding-agent";
 
 import type { LauncherDeps } from "../orchestration/launcher.ts";
 import { abortRun, pauseRun, resumeRun } from "../orchestration/lifecycle.ts";

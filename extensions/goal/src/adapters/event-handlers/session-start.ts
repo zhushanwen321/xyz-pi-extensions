@@ -4,7 +4,7 @@
  * 调 reconstructGoalState 重建持久化状态 + updateWidget。
  */
 
-import type { ExtensionAPI, ExtensionContext } from "@mariozechner/pi-coding-agent";
+import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 
 import { updateWidget } from "../../projection/widget";
 import type { GoalSession } from "../../session";

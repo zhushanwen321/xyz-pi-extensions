@@ -7,39 +7,14 @@
 // literal string alive.
 //
 // Covers the detectors added in the weak-model-robustness PR:
-//   - subagent hasFlattenedStartFields (startParam envelope missing)
 //   - workflow findFlattenedArgKeys (args sub-fields flattened to top level — P0)
+//
+// NOTE: subagent hasFlattenedStartFields detector 已随 wave 3 拍平删除——
+// startParam envelope 不再存在，task/slug 平铺到顶层是合法形态，原 detector 无意义。
 
 import { describe, expect, it } from "vitest";
 
-import { hasFlattenedStartFields } from "../subagent-tool";
 import { findFlattenedArgKeys } from "../tool-workflow";
-
-describe("hasFlattenedStartFields (subagent startParam flatten detector)", () => {
-  it("triggers when task/slug flattened to top level (the original failure mode)", () => {
-    expect(hasFlattenedStartFields({ action: "start", task: "x", slug: "s" })).toBe(true);
-    expect(hasFlattenedStartFields({ action: "start", task: "x" })).toBe(true);
-    expect(hasFlattenedStartFields({ action: "start", slug: "s" })).toBe(true);
-  });
-
-  it("does NOT trigger when startParam envelope is present (correct nesting)", () => {
-    expect(
-      hasFlattenedStartFields({ action: "start", startParam: { task: "x", slug: "s" } }),
-    ).toBe(false);
-  });
-
-  it("does NOT trigger when neither task nor slug is present", () => {
-    expect(hasFlattenedStartFields({ action: "start" })).toBe(false);
-    expect(hasFlattenedStartFields({ action: "list" })).toBe(false);
-  });
-
-  it("returns false for non-object input", () => {
-    expect(hasFlattenedStartFields(null)).toBe(false);
-    expect(hasFlattenedStartFields(undefined)).toBe(false);
-    expect(hasFlattenedStartFields("start")).toBe(false);
-    expect(hasFlattenedStartFields(42)).toBe(false);
-  });
-});
 
 describe("findFlattenedArgKeys (workflow args flatten detector — P0)", () => {
   it("triggers when args sub-fields flattened to top level", () => {

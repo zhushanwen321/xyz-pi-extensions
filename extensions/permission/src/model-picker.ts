@@ -19,7 +19,7 @@
  *  - _resolved 守卫防二次 done（switchToModelStage 等异步路径可能重复触发）。
  */
 
-import { type Component, Container, type SelectItem, SelectList, type SelectListTheme, truncateToWidth } from "@mariozechner/pi-tui";
+import { type Component, Container, type SelectItem, SelectList, type SelectListTheme, truncateToWidth } from "@earendil-works/pi-tui";
 
 import type { ResolvedModelEntry } from "./classifier/model-resolver.js";
 

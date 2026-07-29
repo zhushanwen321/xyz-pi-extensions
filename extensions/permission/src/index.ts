@@ -18,7 +18,7 @@ import type {
 	ExtensionAPI,
 	ExtensionCommandContext,
 	ExtensionContext,
-} from "@mariozechner/pi-coding-agent";
+	} from "@earendil-works/pi-coding-agent";
 
 import { listAvailableModels } from "./classifier/model-resolver.js";
 import { handlePermissionCommand, handlePermissionModelCommand, handlePermissionRuleCommand } from "./commands.js";

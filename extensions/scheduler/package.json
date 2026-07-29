@@ -1,0 +1,43 @@
+{
+  "name": "@zhushanwen/pi-scheduler",
+  "version": "0.0.5",
+  "type": "module",
+  "main": "index.ts",
+  "pi": {
+    "extensions": [
+      "./index.ts"
+    ],
+    "skills": []
+  },
+  "keywords": [
+    "pi-package"
+  ],
+  "scripts": {
+    "test": "vitest run",
+    "test:watch": "vitest"
+  },
+  "devDependencies": {
+    "vitest": "^4.1.8"
+  },
+  "files": [
+    "index.ts",
+    "src/**/*.ts",
+    "vitest.config.ts"
+  ],
+  "peerDependencies": {
+    "@earendil-works/pi-coding-agent": "*",
+    "@sinclair/typebox": "*",
+    "croner": "^9.0.0"
+  },
+  "peerDependenciesMeta": {
+    "@earendil-works/pi-coding-agent": {
+      "optional": true
+    },
+    "@sinclair/typebox": {
+      "optional": true
+    },
+    "croner": {
+      "optional": true
+    }
+  }
+}

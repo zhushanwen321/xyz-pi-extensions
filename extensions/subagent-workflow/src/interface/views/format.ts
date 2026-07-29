@@ -5,7 +5,7 @@
  * All functions are pure: no Pi runtime, no side effects.
  */
 
-import { truncateToWidth, visibleWidth } from "@mariozechner/pi-tui";
+import { truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
 
 import type { AgentEventLogEntry } from "../../execution/types.ts";
 import type { ExecutionTraceNode, ToolCallEntry } from "../../orchestration/models/types.ts";

@@ -1,6 +1,6 @@
 // src/index.ts
 import { Box, Text, TruncatedText, truncateToWidth } from "@earendil-works/pi-tui";
-import type { AgentToolResult, AgentToolUpdateCallback, ExtensionAPI, ExtensionContext, ToolRenderResultOptions } from "@mariozechner/pi-coding-agent";
+import type { AgentToolResult, AgentToolUpdateCallback, ExtensionAPI, ExtensionContext, ToolRenderResultOptions } from "@earendil-works/pi-coding-agent";
 import { type Static } from "@sinclair/typebox";
 import {
 	type AskUserAnswers,

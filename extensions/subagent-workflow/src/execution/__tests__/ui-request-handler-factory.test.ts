@@ -9,7 +9,7 @@
 // realHandler 路由：channel 命中 → channelHandler（经 coerceUiResponse 形变）；未命中 → defaultDialogForward（cancelled）。
 // 测接口契约，不测实现细节。
 
-import type { ExtensionContext, ExtensionMode } from "@mariozechner/pi-coding-agent";
+import type { ExtensionContext, ExtensionMode } from "@earendil-works/pi-coding-agent";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { DialogGlobalQueue, type UiRequest } from "../dialog-queue.ts";

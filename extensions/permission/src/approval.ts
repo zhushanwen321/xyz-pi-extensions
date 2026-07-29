@@ -20,7 +20,7 @@
  * TUI 分支因 pi-tui Input 组件集成成本较高，暂保留简化 deny（TODO 后续迭代）。
  */
 
-import { type Component, matchesKey, type SelectItem, truncateToWidth } from "@mariozechner/pi-tui";
+import { type Component, matchesKey, type SelectItem, truncateToWidth } from "@earendil-works/pi-tui";
 
 import type { ApprovalRequest } from "./pipeline.js";
 import type { ToolInvocationContext, UserDecision } from "./types.js";

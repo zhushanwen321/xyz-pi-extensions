@@ -20,7 +20,7 @@
  * model 层纯函数返回 Result 对象（合法），dispatcher 拿到 error 时 throw。
  */
 
-import type { ExtensionAPI, ExtensionContext } from "@mariozechner/pi-coding-agent";
+import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 
 import { registerTodosCommand } from "./commands";
 import { registerTodoEventHandlers } from "./handlers";

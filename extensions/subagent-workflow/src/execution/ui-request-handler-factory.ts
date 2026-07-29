@@ -18,7 +18,7 @@
 // SR-3：调用方（index.ts session_start）无论 new 还是 existing SubagentService 都必须调
 //   setUiRequestHandler——/resume /fork 复用 existingService 时旧 handler 可能已失效。
 
-import type { ExtensionContext } from "@mariozechner/pi-coding-agent";
+import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 
 import { DialogGlobalQueue, type UiRequest, type UiRequestHandler, type UiResponse } from "./dialog-queue.ts";
 import { type HostMode, resolveHostMode } from "./host-mode.ts";
@@ -117,7 +117,7 @@ function coerceUiResponse(raw: unknown, reqId: string): UiResponse {
  *  select 请求转发为普通 select（title 可能含 marker，主 agent 会忽略或当普通 select 渲染）。
  *
  *  实现依据（SDK ExtensionUIContext 真实签名，read from
- *  @mariozechner/pi-coding-agent dist/core/extensions/types.d.ts）：
+ *  @earendil-works/pi-coding-agent dist/core/extensions/types.d.ts）：
  *    select(title: string, options: string[], opts?): Promise<string | undefined>
  *    confirm(title: string, message: string, opts?): Promise<boolean>
  *    input(title: string, placeholder?: string, opts?): Promise<string | undefined>

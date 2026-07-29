@@ -9,7 +9,7 @@
 import { type ChildProcess,execFileSync, spawn } from "node:child_process";
 import * as fs from "node:fs";
 
-import type { ExtensionMode } from "@mariozechner/pi-coding-agent";
+import type { ExtensionMode } from "@earendil-works/pi-coding-agent";
 
 import { type MirrorFlags, mirrorMainProcessFlags } from "./argv-mirror.ts";
 import { writeAliveMarker } from "./alive-store.ts";

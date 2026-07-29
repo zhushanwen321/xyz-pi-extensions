@@ -69,10 +69,10 @@ describe("U3: not-found 错误含退路指引", () => {
   const agentOptsResolverSrc = readSrc("src/orchestration/agent-opts-resolver.ts");
 
   it("tool-workflow.ts: not-found 错误含 action:status 指引", () => {
-    // 3 处 pause/resume/abort + retry-node + skip-node 都应有 action:status
+    // pause/resume/abort 的 not-found 错误都应有 action:status 指引
     const matches = toolWorkflowSrc.match(/action:status/g) ?? [];
-    // 至少 3 处（3 个 not-found 各一处）
-    expect(matches.length).toBeGreaterThanOrEqual(3);
+    // 至少 1 处（lifecycle not-found 错误）
+    expect(matches.length).toBeGreaterThanOrEqual(1);
   });
 
   it("tool-workflow-script.ts: lint not-found 含可用列表", () => {

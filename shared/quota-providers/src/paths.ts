@@ -6,7 +6,7 @@
  * - resolveEnvRef 支持 ${ENV_VAR} 占位符，无环境变量时静默返回空串
  */
 
-import { getAgentDir } from "@mariozechner/pi-coding-agent";
+import { getAgentDir } from "@earendil-works/pi-coding-agent";
 import { join } from "node:path";
 
 /** 状态栏扩展的配置根目录（~/.pi/agent/config/） */

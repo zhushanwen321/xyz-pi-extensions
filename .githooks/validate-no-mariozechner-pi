@@ -1,0 +1,117 @@
+#!/usr/bin/env bash
+# validate-no-mariozechner-pi — 禁止仓库内出现已废弃的 @mariozechner/pi-* namespace 引用
+#
+# 历史背景：Pi 团队已将 SDK 从 @mariozechner/pi-* 重命名为 @earendil-works/pi-*
+# （详见 .changeset/migrate-pi-namespace-to-earendil-works.md）。
+# 旧 namespace 已被 npmjs 标记为 deprecated，引用会导致 pnpm install 报
+# 5 个 warning（4 个 deprecation + 1 个 peer dep）。本脚本作为 pre-commit
+# gate 阻止旧 namespace 再次潜入。
+#
+# 跳过方式：紧急 hotfix 可 SKIP_NAMESPACE_CHECK=1 git commit -m "..."
+#   但需在 PR 描述中说明原因，并提 issue 跟踪
+#
+# 用法：
+#   bash .githooks/validate-no-mariozechner-pi           # 检查整个仓库
+#   bash .githooks/validate-no-mariozechner-pi <files...> # 检查指定文件
+set -euo pipefail
+
+C_RED='\033[0;31m'
+C_GREEN='\033[0;32m'
+C_YELLOW='\033[0;33m'
+C_RESET='\033[0m'
+
+if [[ "${SKIP_NAMESPACE_CHECK:-}" == "1" ]]; then
+  echo "[validate-no-mariozechner-pi] SKIP_NAMESPACE_CHECK=1, 跳过检查"
+  exit 0
+fi
+
+cd "$(git rev-parse --show-toplevel 2>/dev/null || echo ".")"
+
+FORBIDDEN='@mariozechner/pi-'
+
+# ── 1. 路径白名单检查（仓库内不应有 mariozechner 目录残留）────
+LEGACY_DIRS=(
+  "shared/types/mariozechner"
+)
+LEGACY_DIR_HIT=0
+for d in "${LEGACY_DIRS[@]}"; do
+  if [[ -d "$d" ]]; then
+    echo -e "${C_RED}[FAIL]${C_RESET} 遗留目录存在: $d"
+    echo "          Pi namespace 已迁移至 @earendil-works/pi-*（见 .changeset/migrate-pi-namespace-to-earendil-works.md）"
+    echo "          请用 git rm -r $d 移除，或在 review 时确认不需要清理"
+    LEGACY_DIR_HIT=1
+  fi
+done
+
+# ── 2. 文件内容检查（staged + 仓库扫描）────────────────────
+# 决定扫描模式：
+#   - 如果有参数（文件列表）→ 只检查这些文件
+#   - 否则 → 扫描整个仓库
+if [[ $# -gt 0 ]]; then
+  TARGETS=("$@")
+else
+  # 全仓库扫描：extensions + shared + tsconfig.json
+  TARGETS=()
+  while IFS= read -r f; do
+    TARGETS+=("$f")
+  done < <(find extensions shared -type f \( -name '*.ts' -o -name '*.json' -o -name '*.d.ts' \) 2>/dev/null \
+            | grep -v '/node_modules/' \
+            | grep -v '/.xyz-harness/' || true)
+  TARGETS+=("tsconfig.json")
+fi
+
+CONTENT_HIT=0
+TOTAL_FILES=0
+TOTAL_HITS=0
+
+for f in "${TARGETS[@]}"; do
+  [[ -f "$f" ]] || continue
+  # 跳过 .xyz-harness（历史归档）/ node_modules / docs
+  case "$f" in
+    */node_modules/*|*/.xyz-harness/*|*/docs/*) continue ;;
+  esac
+  TOTAL_FILES=$((TOTAL_FILES + 1))
+
+  # 抓取含 @mariozechner/pi- 的行（行号 + 内容）
+  hits=$(grep -nE "$FORBIDDEN" "$f" 2>/dev/null || true)
+  if [[ -n "$hits" ]]; then
+    CONTENT_HIT=1
+    while IFS= read -r line; do
+      TOTAL_HITS=$((TOTAL_HITS + 1))
+      # 截断长行输出（前 120 字符），保持可读
+      printf "  %s:%s\n" "$f" "${line:0:200}"
+    done <<< "$hits"
+  fi
+done
+
+# ── 3. 报告 ───────────────────────────────────────────────
+if [[ $CONTENT_HIT -eq 1 || $LEGACY_DIR_HIT -eq 1 ]]; then
+  echo ""
+  echo "============================================"
+  echo -e "${C_RED}[FAIL]${C_RESET} 禁止使用已废弃的 ${FORBIDDEN} namespace"
+  echo "============================================"
+  echo ""
+  echo "发现 $TOTAL_HITS 处引用（扫描 $TOTAL_FILES 个文件）"
+  echo ""
+  echo "Pi SDK 已迁移至 @earendil-works/pi-*。"
+  echo "修复方式："
+  echo "  1. import / declare module / 动态 import：替换 namespace"
+  echo "  2. peerDependencies / devDependencies：替换 namespace"
+  echo "  3. tsconfig.json paths：删除 mariozechner 条目"
+  echo "  4. vitest.config.ts alias：删除 mariozechner alias"
+  echo "  5. stub 文件：迁移至 shared/types/earendil-works/"
+  echo ""
+  echo "批量替换命令："
+  echo "  find extensions shared tsconfig.json \\"
+  echo "    -type f \\( -name '*.ts' -o -name '*.json' \\) \\"
+  echo "    -exec sed -i '' 's|@mariozechner/pi-|@earendil-works/pi-|g' {} +"
+  echo ""
+  echo "可手动运行本脚本验证：bash .githooks/validate-no-mariozechner-pi"
+  echo "紧急 hotfix 跳过：SKIP_NAMESPACE_CHECK=1 git commit -m '...'"
+  exit 1
+fi
+
+if [[ $# -eq 0 ]]; then
+  echo "[validate-no-mariozechner-pi] 扫描 $TOTAL_FILES 个文件，0 处旧 namespace 引用 ✓"
+fi
+exit 0

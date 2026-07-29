@@ -11,8 +11,8 @@
  * WR8：focusIndex 模 5（Custom form 5 项 Tab 循环）。
  */
 
-import { type Component, Container, Input, type SelectItem, SelectList, type SelectListTheme, truncateToWidth } from "@mariozechner/pi-tui";
-import { matchesKey } from "@mariozechner/pi-tui";
+import { type Component, Container, Input, type SelectItem, SelectList, type SelectListTheme, truncateToWidth } from "@earendil-works/pi-tui";
+import { matchesKey } from "@earendil-works/pi-tui";
 
 import {
 	ALL_TEMPLATES,

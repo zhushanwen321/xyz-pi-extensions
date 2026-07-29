@@ -1,7 +1,7 @@
 // src/__tests__/tool-error-handler.test.ts
 import { describe, expect, it, vi } from "vitest";
 
-import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
+import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 
 import { setupToolErrorHandler, type HookContext } from "../hooks/tool-error-handler.ts";
 

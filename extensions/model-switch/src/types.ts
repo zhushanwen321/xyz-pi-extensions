@@ -4,7 +4,7 @@
  * 所有跨文件的类型、常量集中管理。
  */
 
-import type { ExtensionContext } from "@mariozechner/pi-coding-agent";
+import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 
 // ── 模型条目（v2：内嵌在 ProviderConfig 中）─────────────
 

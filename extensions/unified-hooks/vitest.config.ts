@@ -16,9 +16,9 @@ export default defineConfig({
 	},
 	resolve: {
 		alias: {
-			"@mariozechner/pi-coding-agent": path.resolve(
+			"@earendil-works/pi-coding-agent": path.resolve(
 				workspaceRoot,
-				"shared/types/mariozechner/index",
+				"shared/types/earendil-works/index",
 			),
 		},
 	},

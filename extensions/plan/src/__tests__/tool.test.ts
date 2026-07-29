@@ -10,7 +10,7 @@ vi.mock("typebox", () => ({
   Static: class {},
 }));
 
-vi.mock("@mariozechner/pi-ai", () => ({
+vi.mock("@earendil-works/pi-ai", () => ({
   StringEnum: (values: readonly string[]) => ({ type: "string", enum: [...values] }),
 }));
 

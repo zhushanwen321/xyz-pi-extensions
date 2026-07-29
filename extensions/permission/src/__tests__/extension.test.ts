@@ -5,7 +5,7 @@
  */
 import { describe, expect, it } from "vitest";
 
-// Mock Pi SDK 模块（extension.ts import 的 @mariozechner/pi-coding-agent 类型在 node_modules 有完整定义，
+// Mock Pi SDK 模块（extension.ts import 的 @earendil-works/pi-coding-agent 类型在 node_modules 有完整定义，
 // 这里 import 工厂函数，用 mock pi 调用它）
 import permissionExtension from "../index.js";
 

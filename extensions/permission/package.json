@@ -33,14 +33,14 @@
   },
   "peerDependencies": {
     "@earendil-works/pi-ai": "*",
-    "@mariozechner/pi-coding-agent": "*",
-    "@mariozechner/pi-tui": "*"
+    "@earendil-works/pi-coding-agent": "*",
+    "@earendil-works/pi-tui": "*"
   },
   "peerDependenciesMeta": {
     "@earendil-works/pi-ai": {
       "optional": true
     },
-    "@mariozechner/pi-tui": {
+    "@earendil-works/pi-tui": {
       "optional": true
     }
   },

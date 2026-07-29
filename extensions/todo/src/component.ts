@@ -2,7 +2,7 @@
  * /todos 命令的 TUI 组件 — 独立可关闭的 todo 列表视图（双列布局）。
  */
 
-import type { Theme } from "@mariozechner/pi-coding-agent";
+import type { Theme } from "@earendil-works/pi-coding-agent";
 import { matchesKey, truncateToWidth } from "@earendil-works/pi-tui";
 
 import type { Todo } from "./model";

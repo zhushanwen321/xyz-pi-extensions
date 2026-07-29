@@ -9,7 +9,7 @@
  * - session: ctx.sessionManager.getEntries + ctx.getContextUsage + ctx.signal
  */
 
-import type { ExtensionAPI, ExtensionContext } from "@mariozechner/pi-coding-agent";
+import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 
 import { ENTRY_TYPE, HISTORY_ENTRY_TYPE } from "../persistence";
 import type { MessagingPort, PersistencePort, SessionPort, UiPort } from "../ports";
