@@ -67,9 +67,9 @@ describe("buildWorkerScript — W1 postMessage defense & parallel degrade", () =
     });
 
     it("_safePost wraps postMessage in try/catch", () => {
-      // _safePost 在 module scope（parentPort 解析为 _moduleParentPort），
+      // _safePost 在 module scope（parentPort 解析为 _parentPort），
       // 用宽松正则匹配「try { <something>.postMessage(msg)」避免绑死变量名。
-      expect(script).toMatch(/_safePost[\s\S]*?try \{ _moduleParentPort\.postMessage\(msg\)/);
+      expect(script).toMatch(/_safePost[\s\S]*?try \{ _parentPort\.postMessage\(msg\)/);
     });
 
     it("_safePost logs failure with context to workerLogs", () => {
