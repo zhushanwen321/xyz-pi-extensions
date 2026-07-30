@@ -87,6 +87,21 @@ export default function goalExtension(pi: ExtensionAPI) {
 		handler: async (args: string | undefined, ctx: ExtensionCommandContext) => {
 			await handleGoalCommand(pi, session, args, ctx);
 		},
+		getArgumentCompletions(prefix: string) {
+			// 只补全一级静态子命令；update 后跟自由文本（目标描述），其他自由文本作为新目标，均不补全
+			const parts = prefix.trimStart().split(/\s+/).filter(Boolean);
+			if (parts.length > 1) return null;
+			const trimmed = (parts[0] ?? "").toLowerCase();
+			const opts = [
+				{ label: "status", value: "status", description: "查看当前 goal 状态" },
+				{ label: "resume", value: "resume", description: "恢复暂停/阻塞的 goal" },
+				{ label: "pause", value: "pause", description: "暂停活跃的 goal" },
+				{ label: "clear", value: "clear", description: "强制清除当前 goal" },
+				{ label: "history", value: "history", description: "查看历史 goal" },
+				{ label: "update", value: "update ", description: "重设目标（reshape）" },
+			];
+			return trimmed === "" ? opts : opts.filter((o) => o.label.startsWith(trimmed));
+		},
 	});
 
 	// ── Tool: goal_control（complete / report_blocked，#3 替代已删 goal_manager）──

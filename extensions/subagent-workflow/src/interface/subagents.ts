@@ -9,12 +9,45 @@ import type { ExtensionAPI, ExtensionCommandContext } from "@earendil-works/pi-c
 
 import { getSubagentService } from "../execution/subagent-service.ts";
 import { parseSubagentRpcCommand } from "./command-actions.ts";
+import { LIST_LIMIT } from "./list-shared.ts";
 import { createSubagentsView } from "./list-view.ts";
 
 /** 注册 /subagents 命令（= list overlay）。 */
 export function registerSubagentsCommand(pi: ExtensionAPI): void {
   pi.registerCommand("subagents", {
     description: "Subagents: /subagents [<id>] | /subagents cancel <id>",
+    getArgumentCompletions(prefix: string) {
+      const trimmed = prefix.trimStart();
+      const parts = trimmed.split(/\s+/).filter(Boolean);
+
+      // 第一级：cancel 动词（带尾随空格，选中后继续补 record id）
+      if (parts.length <= 1) {
+        return [
+          { label: "cancel", value: "cancel ", description: "Cancel a running subagent" },
+        ].filter((opt) => opt.label.startsWith(trimmed.toLowerCase()));
+      }
+
+      // 第二级：cancel 后补全当前 session 的 record id
+      if (parts[0] === "cancel") {
+        try {
+          const service = getSubagentService();
+          if (!service) return null;
+          // collectRecords 合并内存(running) + 磁盘重建 record，按 session 过滤。
+          // cancel 只对 running 有效，但全部列出便于用户辨认（终态 record 会被 service 拒绝）。
+          const records = service.collectRecords(LIST_LIMIT);
+          if (records.length === 0) return null;
+          return records.map((r) => ({
+            label: r.id,
+            value: r.id,
+            description: `${r.agent} [${r.status}]`,
+          }));
+        } catch {
+          // 拿不到运行时数据（service disposed 等）→ 静默降级，补全失败不影响 command
+          return null;
+        }
+      }
+      return null;
+    },
     handler: async (argsStr: string, ctx: ExtensionCommandContext) => {
       const service = getSubagentService();
       if (!service) {

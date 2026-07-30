@@ -1,0 +1,43 @@
+{
+  "name": "@zhushanwen/pi-rename-session",
+  "version": "0.1.0",
+  "type": "module",
+  "main": "index.ts",
+  "pi": {
+    "extensions": [
+      "./index.ts"
+    ],
+    "skills": []
+  },
+  "keywords": [
+    "pi-package"
+  ],
+  "scripts": {
+    "test": "vitest run",
+    "test:watch": "vitest"
+  },
+  "devDependencies": {
+    "vitest": "^4.1.8"
+  },
+  "files": [
+    "index.ts",
+    "src/**/*.ts",
+    "vitest.config.ts"
+  ],
+  "peerDependencies": {
+    "@earendil-works/pi-coding-agent": "*",
+    "@earendil-works/pi-ai": "*",
+    "@sinclair/typebox": "*"
+  },
+  "peerDependenciesMeta": {
+    "@earendil-works/pi-coding-agent": {
+      "optional": true
+    },
+    "@earendil-works/pi-ai": {
+      "optional": true
+    },
+    "@sinclair/typebox": {
+      "optional": true
+    }
+  }
+}

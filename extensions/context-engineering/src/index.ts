@@ -96,6 +96,33 @@ export default function contextEngineeringExtension(pi: ExtensionAPI): void {
 
   pi.registerCommand("context-engineering", {
     description: "View/modify context compression settings",
+    getArgumentCompletions(prefix: string) {
+      const parts = prefix.trimStart().split(/\s+/).filter(Boolean);
+      // 第一级：target 选择
+      if (parts.length <= 1) {
+        const trimmed = (parts[0] ?? "").toLowerCase();
+        const targets = [
+          { label: "global", value: "global ", description: "整个插件开关" },
+          { label: "mc", value: "mc ", description: "微压缩（microcompact）" },
+          { label: "budget", value: "budget ", description: "工具结果预算" },
+          { label: "l0", value: "l0 ", description: "零成本清理" },
+          { label: "l1", value: "l1 ", description: "规则压缩" },
+          { label: "l2", value: "l2 ", description: "紧急压缩" },
+        ];
+        return trimmed === "" ? targets : targets.filter((t) => t.label.startsWith(trimmed));
+      }
+      // 第二级：on/off（仅当 parts[0] 是合法 target 时）
+      const validTargets = ["global", "l0", "l1", "l2", "mc", "budget"];
+      if (validTargets.includes(parts[0]!.toLowerCase())) {
+        const trimmed = (parts[1] ?? "").toLowerCase();
+        const actions = [
+          { label: "on", value: "on", description: "开启" },
+          { label: "off", value: "off", description: "关闭" },
+        ];
+        return trimmed === "" ? actions : actions.filter((a) => a.label.startsWith(trimmed));
+      }
+      return null;
+    },
     handler: async (_args: string, ctx: ExtensionCommandContext) => {
       ctx.ui.notify(handleContextEngineeringCommand(_args || undefined, config, cumulativeStats), "info");
     },
