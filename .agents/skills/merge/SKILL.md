@@ -135,16 +135,49 @@ gh run watch --workflow=ci.yml --branch main
 
 本项目使用 changeset 独立版本模式，每个 extension 版本号各不相同。**不能委托全局 4-publish.sh**——需要 AI 逐步执行，精确控制每个子包的版本号。
 
-#### 4.1 检查 changeset 文件
+#### 4.0 同步本地 main（bump 前置条件）
+
+阶段 2 的 `gh pr merge` 只更新了**远程** main；本地 `/main` worktree 不会自动同步。必须在 bump 之前先拉取，否则 changeset 文件不在本地、`pnpm changeset version` 无东西可消费：
 
 ```bash
 cd /Users/zhushanwen/Code/xyz-pi-extensions-workspace/main
-find .changeset -name '*.md' ! -name README.md ! -name config.json
+git fetch origin main
+git merge --ff-only origin/main
+```
+
+`--ff-only` 失败说明本地 main 与远程分叉（通常是本地混入了未推送的提交），**必须人工排查**，禁止用 `|| true` 吞掉错误后继续 bump。
+
+#### 4.1 检查 changeset 文件
+
+```bash
+find .changeset -name '*.md'
 ```
 
 确认本次 PR 包含的 changeset 文件，以及每个文件对应的子包和版本类型。
 
 ⚠️ 如果无 changeset 文件 → 子包不会 bump → `pnpm changeset publish` 无新包可发。必须回 feature 分支创建 changeset。
+
+**changeset 文件格式**（key 必须是 `package.json` 的 `name` 全名，不是目录名；版本类型 `patch`/`minor`/`major`）：
+
+```markdown
+---
+"@zhushanwen/pi-<name>": minor
+---
+
+一句话描述本次变更。
+```
+
+示例（`@zhushanwen/pi-rename-session` 的首次发布 changeset）：
+
+```markdown
+---
+"@zhushanwen/pi-rename-session": minor
+---
+
+New extension: auto-rename sessions after the first turn.
+```
+
+写错包名 key 会静默不 bump —— 创建后务必用 `pnpm changeset version` 验证该包版本号确实变化。
 
 #### 4.2 消费 changeset
 
@@ -175,19 +208,15 @@ echo "根版本: $CURRENT_ROOT → $NEW_VER"
 
 #### 4.4 commit + tag + push
 
+⚠️ **不要依赖上一个 bash 块的 `CURRENT_ROOT`/`NEW_VER` 变量** —— 每个独立的 bash 执行是独立 shell，环境变量不跨块持久。下面的脚本从 `package.json` 重新读取版本号，自包含：
+
 ```bash
-git add -A
-git commit -m "chore: bump versions (root $CURRENT_ROOT → $NEW_VER)" 2>/dev/null || echo "无变更需提交"
+NEW_VER=$(node -p "require('./package.json').version")
 TAG="v$NEW_VER"
+git add -A
+git commit -m "chore: bump versions (root → $NEW_VER)" 2>/dev/null || echo "无变更需提交"
 git tag "$TAG" 2>/dev/null || echo "Tag $TAG 已存在"
 git push origin HEAD:refs/heads/main --tags
-```
-
-#### 4.5 同步远程
-
-```bash
-git fetch origin main
-git merge --ff-only origin/main 2>&1 || true
 ```
 
 ### 阶段 5: 等待 CI 发布完成
@@ -199,7 +228,14 @@ git merge --ff-only origin/main 2>&1 || true
 2. CI 自动执行 `pnpm changeset publish`（通过 `NPM_TOKEN` secret 认证）
 3. CI 自动创建 GitHub Release（`softprops/action-gh-release`）
 
-等待 CI 完成后，进入阶段 6 验证。
+**阻塞等待 release.yml 跑完**（release.yml 是 tag 触发，不在 branch 上，所以不能像 ci.yml 那样按 branch watch；用下面命令拿最近一次 run 并 watch）：
+
+```bash
+RUN_ID=$(gh run list --workflow=release.yml --limit=1 --json databaseId -q '.[0].databaseId')
+gh run watch "$RUN_ID"
+```
+
+`gh run watch` 阻塞直到该 run 结束。必须等它成功后再进阶段 6 —— 否则 `npm view` 会因 npm registry 最终一致性延迟拿到 404，误判为发布失败。
 
 ⚠️ **新包首次发布**：`pnpm changeset publish` 配合根目录 `.npmrc` 的 `access=public`，能正确发布全新的 scoped 包（`@zhushanwen/*`），**无需手动 `npm publish`**。已验证案例：`@zhushanwen/pi-rename-session` 首次发布（0.2.0）完全由 changeset publish 完成。唯一前置条件是 `NPM_TOKEN` 对应的 npm 账号在 `@zhushanwen` scope 下有发布权限——这是 npm 账号层面的配置，与发布机制无关，权限缺失时 CI 会报 E403 Forbidden（而非 E403 "cannot publish over"）。
 
@@ -261,7 +297,7 @@ done
 - **版本管理**：changeset 独立版本，子包版本各不同
 - **发布方式**：push tag `v*` → GitHub Actions (`release.yml`) 自动 `pnpm changeset publish` + GitHub Release
 - **禁止本地发布**：`pnpm changeset publish` 和 `npm publish` 均由 CI 执行，本地只做 bump + tag + push
-- **新包首次发布**：需确认 npm scope 权限，可能需要手动 `npm login` + `npm publish --access public` 初始化
+- **新包首次发布**：由 CI 的 `pnpm changeset publish` + 根 `.npmrc access=public` 自动完成，**无需本地 `npm publish`**（详见阶段 5）。唯一前置条件是 `NPM_TOKEN` 账号在 `@zhushanwen` scope 有发布权限
 - **交付物**：npm registry 包 + GitHub Release（自动生成 release notes）
 - **Dev-Link 清理 [MANDATORY]**：merge 前必须清理指向当前 worktree 的 symlink（阶段 1.5）。跳过会导致阶段 7 删除 worktree 后 symlink dangling，Pi 启动失败。使用 dev-link skill 的 `link-npm.sh` 恢复已有 extension；全新 extension 直接删除 symlink
 
