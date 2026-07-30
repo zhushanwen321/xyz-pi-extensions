@@ -137,9 +137,20 @@ gh pr merge <PR_NUM> --merge --delete-branch
 git -C /Users/zhushanwen/Code/xyz-pi-extensions-workspace/main fetch origin main
 # 拿到合并后 main 的最新 commit SHA（用于精确过滤本次触发的 CI run）
 MAIN_SHA=$(git -C /Users/zhushanwen/Code/xyz-pi-extensions-workspace/main rev-parse origin/main)
-# GitHub 对新触发的 run 有数秒传播延迟，短暂等待后查询
-sleep 5
-RUN_ID=$(gh run list --workflow=ci.yml --branch main --commit "$MAIN_SHA" --limit=1 --json databaseId -q '.[0].databaseId')
+# 轮询等待本次 push 触发的 ci run 出现（GitHub API 有传播延迟，与阶段 5 同类问题）。
+# 不做无过滤 fallback——会拿到上一次 main 的旧 ci run，watch 立即退出 → 误判通过。
+RUN_ID=""
+for i in $(seq 1 15); do
+  RUN_ID=$(gh run list --workflow=ci.yml --branch main --commit "$MAIN_SHA" --limit=1 --json databaseId -q '.[0].databaseId' 2>/dev/null)
+  [ -n "$RUN_ID" ] && break
+  echo "等待 post-merge ci run 出现...（$((i*2))s）"
+  sleep 2
+done
+if [ -z "$RUN_ID" ]; then
+  echo "❌ 30 秒内未发现 commit $MAIN_SHA 对应的 post-merge ci run，请到 GitHub Actions 页面人工检查"
+  exit 1
+fi
+echo "Watching post-merge ci run: $RUN_ID (sha=$MAIN_SHA)"
 gh run watch "$RUN_ID" --exit-status
 ```
 
@@ -234,8 +245,14 @@ git add -A
 if git diff --cached --quiet; then
   echo "无变更需提交（版本已是 $NEW_VER 或 changeset 无改动）"
 else
-  # 有变更则提交；保留 stderr，让 pre-commit hook 错误可见
-  git commit -m "chore: bump versions (root → $NEW_VER)"
+  # 有变更则提交；保留 stderr，让 pre-commit hook 错误可见。
+  # commit 失败（如 pre-commit hook 跑全量 lint+typecheck 拒绝）必须中止，禁止继续 tag/push
+  # —— 否则 bump commit 没进 main，tag 却指向旧 commit，release.yml 在旧 main 上跑。
+  if ! git commit -m "chore: bump versions (root → $NEW_VER)"; then
+    echo "❌ git commit 失败（pre-commit hook 可能拒绝了提交），中止发布流程"
+    echo "如需跳过 hook 重试：SKIP_LINT=1 git commit -m \"chore: bump versions (root → $NEW_VER)\"（仅限紧急情况，且后续补跑 pnpm -r typecheck && pnpm -r lint）"
+    exit 1
+  fi
 fi
 git tag "$TAG" 2>/dev/null || echo "Tag $TAG 已存在（如非预期请人工核对）"
 git push origin HEAD:refs/heads/main --tags
@@ -258,8 +275,10 @@ git push origin HEAD:refs/heads/main --tags
 # ⚠️ 本块为独立 shell，$TAG 不跨块持久——必须从 package.json 重读版本号自行构造
 NEW_VER=$(node -p "require('/Users/zhushanwen/Code/xyz-pi-extensions-workspace/main/package.json').version")
 TAG="v$NEW_VER"
-# 拿到刚推送的 tag 对应的 commit SHA，用于精确匹配本次触发的 release run
-TAG_SHA=$(git -C /Users/zhushanwen/Code/xyz-pi-extensions-workspace/main rev-parse "$TAG" 2>/dev/null \
+# 拿到刚推送的 tag 对应的 commit SHA，用于精确匹配本次触发的 release run。
+# 必须用 --verify + ^{commit}：裸 rev-parse 在参数无法解析时会把 tag 名原样打到 stdout
+# （错误进 stderr 被吞），导致 TAG_SHA 拿到字面 tag 名而非空串，[ -z ] 判断失效。
+TAG_SHA=$(git -C /Users/zhushanwen/Code/xyz-pi-extensions-workspace/main rev-parse --verify "$TAG^{commit}" 2>/dev/null \
   || echo "")
 if [ -z "$TAG_SHA" ]; then
   echo "❌ 无法解析 tag $TAG 的 commit SHA，请人工核对 tag 是否已推送"
