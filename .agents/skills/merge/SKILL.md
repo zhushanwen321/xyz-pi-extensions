@@ -10,6 +10,11 @@ description: >-
 > **范围与命名区分**：本 skill 是 xyz-pi-extensions 的**纯手动 8 阶段合并流程**，所有命令直接可执行，**不依赖任何外部脚本**。
 > 另有一个随仓库分发的工具 `skills/merge-worktree/merge-and-publish.sh`（单体自动化脚本，一条命令跑完全程），那是**不同的执行方式**，不要与本 skill 混淆。本 skill 的价值在阶段 1.5（dev-link symlink 清理）、阶段 4（changeset 独立版本）等项目特化步骤——这些自动化脚本不覆盖。
 
+> **执行约定（cwd 与 bash 块）**：
+> - 阶段 4（bump + 发布）的所有命令默认在 `main` worktree（`/Users/zhushanwen/Code/xyz-pi-extensions-workspace/main`）下执行。阶段 4.0 会执行一次 `cd` 确认进入该目录，后续 4.1-4.4 的脚本使用相对路径（`./package.json`、`.changeset`）。
+> - **每个独立的 bash 代码块是一个独立 shell**——环境变量和 cwd **都不跨块持久**。因此：阶段 4.4 的脚本从 `package.json` 重新读版本号（不依赖 4.3 的变量）；如果执行环境的 bash 工具不持久化 cwd，需在每个使用相对路径的块开头补 `cd /Users/zhushanwen/Code/xyz-pi-extensions-workspace/main`。
+> - 阶段 3/5 的 `gh run watch` 命令用绝对路径 `git -C <path>` 读取 SHA，不依赖 cwd。
+
 ## 8 阶段流程
 
 ### 阶段 0: 前置确认
@@ -127,9 +132,15 @@ gh pr merge <PR_NUM> --merge --delete-branch
 合并后 `ci.yml` 在 main 上再跑一次（触发：`push: branches:[main]`）。等它通过再 bump 版本，避免发布基于未绿的 main：
 
 ```bash
-# 等 main 上最近一次 ci.yml 完成
-gh run watch --workflow=ci.yml --branch main
+# 拿到合并后 main 的最新 commit SHA（用于精确过滤本次触发的 CI run）
+MAIN_SHA=$(git -C /Users/zhushanwen/Code/xyz-pi-extensions-workspace/main rev-parse origin/main)
+# GitHub 对新触发的 run 有数秒传播延迟，短暂等待后查询
+sleep 5
+RUN_ID=$(gh run list --workflow=ci.yml --branch main --commit "$MAIN_SHA" --limit=1 --json databaseId -q '.[0].databaseId')
+gh run watch "$RUN_ID" --exit-status
 ```
+
+⚠️ `gh run watch` 默认只要 run 结束就退出 0，**必须加 `--exit-status`** 才会在 CI 失败时返回非 0。用 `--commit "$MAIN_SHA"` 过滤是为了避免拿到上一次 main 的 CI run（run list 有传播延迟，见阶段 5 的同类说明）。
 
 ### 阶段 4: 版本 bump + 发布（项目特化）
 
@@ -155,7 +166,7 @@ find .changeset -name '*.md'
 
 确认本次 PR 包含的 changeset 文件，以及每个文件对应的子包和版本类型。
 
-⚠️ 如果无 changeset 文件 → 子包不会 bump → `pnpm changeset publish` 无新包可发。必须回 feature 分支创建 changeset。
+⚠️ 如果无 changeset 文件 → 子包不会 bump → `pnpm changeset publish` 无新包可发。此时 feature 分支已被阶段 2 删除，补救方式：在当前本地 main 上用 `pnpm changeset`（交互式）或手写 `.changeset/<slug>.md`（格式见下方）创建 changeset，然后再跑 4.2 的 `pnpm changeset version`。创建后务必验证目标子包版本号确实变化。
 
 **changeset 文件格式**（key 必须是 `package.json` 的 `name` 全名，不是目录名；版本类型 `patch`/`minor`/`major`）：
 
@@ -208,16 +219,26 @@ echo "根版本: $CURRENT_ROOT → $NEW_VER"
 
 #### 4.4 commit + tag + push
 
-⚠️ **不要依赖上一个 bash 块的 `CURRENT_ROOT`/`NEW_VER` 变量** —— 每个独立的 bash 执行是独立 shell，环境变量不跨块持久。下面的脚本从 `package.json` 重新读取版本号，自包含：
+⚠️ **不要依赖上一个 bash 块的 `CURRENT_ROOT`/`NEW_VER` 变量** —— 每个独立的 bash 执行是独立 shell，环境变量不跨块持久。下面的脚本从 `package.json` 重新读取版本号，自包含。
+
+⚠️ **不要用 `git commit ... 2>/dev/null || echo` 吞掉错误** —— 本仓库 `.githooks/pre-commit` 会跑全量 lint + typecheck（`core.hooksPath=.githooks`），hook 失败时 `git commit` 退出非 0。如果用 `2>/dev/null` 把 stderr 吞掉，agent 会看到"无变更需提交"而误以为提交成功，但实际 bump commit 没进 main，tag 却推了上去 → release.yml 在旧 main 上跑，发的是旧版本。
 
 ```bash
 NEW_VER=$(node -p "require('./package.json').version")
 TAG="v$NEW_VER"
 git add -A
-git commit -m "chore: bump versions (root → $NEW_VER)" 2>/dev/null || echo "无变更需提交"
-git tag "$TAG" 2>/dev/null || echo "Tag $TAG 已存在"
+# 先检查是否有变更：无变更时 git commit 退出 1，这是正常情况
+if git diff --cached --quiet; then
+  echo "无变更需提交（版本已是 $NEW_VER 或 changeset 无改动）"
+else
+  # 有变更则提交；保留 stderr，让 pre-commit hook 错误可见
+  git commit -m "chore: bump versions (root → $NEW_VER)"
+fi
+git tag "$TAG" 2>/dev/null || echo "Tag $TAG 已存在（如非预期请人工核对）"
 git push origin HEAD:refs/heads/main --tags
 ```
+
+如需在 bump commit 上跳过 pre-commit hook（如纯版本号变更不需要重跑全量检查），可用 `SKIP_LINT=1 git commit -m "..."` —— 但仅限紧急情况，且后续必须补跑 `pnpm -r typecheck && pnpm -r lint`。
 
 ### 阶段 5: 等待 CI 发布完成
 
@@ -228,14 +249,28 @@ git push origin HEAD:refs/heads/main --tags
 2. CI 自动执行 `pnpm changeset publish`（通过 `NPM_TOKEN` secret 认证）
 3. CI 自动创建 GitHub Release（`softprops/action-gh-release`）
 
-**阻塞等待 release.yml 跑完**（release.yml 是 tag 触发，不在 branch 上，所以不能像 ci.yml 那样按 branch watch；用下面命令拿最近一次 run 并 watch）：
+**阻塞等待 release.yml 跑完**（release.yml 是 tag 触发，不在 branch 上，所以不能按 branch 过滤；用刚推的 tag 对应的 commit SHA 过滤）：
 
 ```bash
-RUN_ID=$(gh run list --workflow=release.yml --limit=1 --json databaseId -q '.[0].databaseId')
-gh run watch "$RUN_ID"
+# 拿到刚推送的 tag 对应的 commit SHA，用于精确匹配本次触发的 release run
+TAG_SHA=$(git -C /Users/zhushanwen/Code/xyz-pi-extensions-workspace/main rev-parse "$TAG" 2>/dev/null \
+  || echo "")
+# GitHub 对新触发的 run 有数秒传播延迟，短暂等待后查询
+sleep 5
+if [ -n "$TAG_SHA" ]; then
+  RUN_ID=$(gh run list --workflow=release.yml --commit "$TAG_SHA" --limit=1 --json databaseId -q '.[0].databaseId')
+fi
+# fallback：按 SHA 没匹配到时退回最近一次（有拿到旧 run 的风险，故打日志供人工核对）
+RUN_ID="${RUN_ID:-$(gh run list --workflow=release.yml --limit=1 --json databaseId -q '.[0].databaseId')}"
+echo "Watching release run: $RUN_ID (tag=$TAG, sha=${TAG_SHA:-unknown})"
+gh run watch "$RUN_ID" --exit-status
 ```
 
-`gh run watch` 阻塞直到该 run 结束。必须等它成功后再进阶段 6 —— 否则 `npm view` 会因 npm registry 最终一致性延迟拿到 404，误判为发布失败。
+**⚠️ 两处陷阱**：
+1. `gh run watch` 默认只要 run 结束就退出 0，**必须加 `--exit-status`** 才会在 release 失败时返回非 0。否则 NPM_TOKEN 权限缺失等 CI 失败会被误判为成功，进阶段 6 时 `npm view` 拿到 404，误以为是 registry 延迟而反复重试。
+2. `gh run list` 对刚触发的 run 有传播延迟（数秒）。推 tag 后立即查询可能返回**上一次** release run → watch 立即退出 → 误判完成。上面的 `sleep 5` + `--commit "$TAG_SHA"` 过滤就是为了避开这个窗口。
+
+必须等 release 成功后再进阶段 6 —— 否则 `npm view` 会因 npm registry 最终一致性延迟拿到 404，误判为发布失败。
 
 ⚠️ **新包首次发布**：`pnpm changeset publish` 配合根目录 `.npmrc` 的 `access=public`，能正确发布全新的 scoped 包（`@zhushanwen/*`），**无需手动 `npm publish`**。已验证案例：`@zhushanwen/pi-rename-session` 首次发布（0.2.0）完全由 changeset publish 完成。唯一前置条件是 `NPM_TOKEN` 对应的 npm 账号在 `@zhushanwen` scope 下有发布权限——这是 npm 账号层面的配置，与发布机制无关，权限缺失时 CI 会报 E403 Forbidden（而非 E403 "cannot publish over"）。
 
@@ -248,7 +283,8 @@ for f in extensions/*/package.json shared/*/package.json; do
   PKG_NAME=$(node -p "require('./$f').name" 2>/dev/null)
   PKG_VER=$(node -p "require('./$f').version" 2>/dev/null || echo "?")
   if [ -n "$PKG_NAME" ]; then
-    npm view "$PKG_NAME@$PKG_VER" version 2>/dev/null && \
+    # 重定向 stdout，只用退出码判断；版本号由下面的 echo 统一打印，避免 npm view 重复输出
+    npm view "$PKG_NAME@$PKG_VER" version >/dev/null 2>&1 && \
       echo "  ✅ $PKG_NAME@$PKG_VER" || echo "  ❌ MISSING: $PKG_NAME@$PKG_VER"
   fi
 done
