@@ -74,10 +74,10 @@ done
 **已发布的 extension**（`npm view` 返回版本号）：
 
 ```bash
-bash <dev-link-skill-dir>/link-npm.sh <name>
+bash /Users/zhushanwen/Code/xyz-pi-extensions-workspace/main/.agents/skills/dev-link/link-npm.sh <name>
 ```
 
-其中 `<dev-link-skill-dir>` 解析为 dev-link skill 所在目录。
+`dev-link` skill 随仓库分发，所在目录为 `<repo>/.agents/skills/dev-link`；在当前项目即解析为上面的绝对路径。
 
 **全新 extension**（`npm view` 404）：
 
@@ -132,6 +132,9 @@ gh pr merge <PR_NUM> --merge --delete-branch
 合并后 `ci.yml` 在 main 上再跑一次（触发：`push: branches:[main]`）。等它通过再 bump 版本，避免发布基于未绿的 main：
 
 ```bash
+# 阶段 2 的 gh pr merge 只更新远程 main，不更新本地 refs/remotes/origin/main。
+# 必须先 fetch，否则 rev-parse origin/main 拿到的是合并前的旧 SHA → 匹配到合并前的 CI run。
+git -C /Users/zhushanwen/Code/xyz-pi-extensions-workspace/main fetch origin main
 # 拿到合并后 main 的最新 commit SHA（用于精确过滤本次触发的 CI run）
 MAIN_SHA=$(git -C /Users/zhushanwen/Code/xyz-pi-extensions-workspace/main rev-parse origin/main)
 # GitHub 对新触发的 run 有数秒传播延迟，短暂等待后查询
@@ -252,23 +255,36 @@ git push origin HEAD:refs/heads/main --tags
 **阻塞等待 release.yml 跑完**（release.yml 是 tag 触发，不在 branch 上，所以不能按 branch 过滤；用刚推的 tag 对应的 commit SHA 过滤）：
 
 ```bash
+# ⚠️ 本块为独立 shell，$TAG 不跨块持久——必须从 package.json 重读版本号自行构造
+NEW_VER=$(node -p "require('/Users/zhushanwen/Code/xyz-pi-extensions-workspace/main/package.json').version")
+TAG="v$NEW_VER"
 # 拿到刚推送的 tag 对应的 commit SHA，用于精确匹配本次触发的 release run
 TAG_SHA=$(git -C /Users/zhushanwen/Code/xyz-pi-extensions-workspace/main rev-parse "$TAG" 2>/dev/null \
   || echo "")
-# GitHub 对新触发的 run 有数秒传播延迟，短暂等待后查询
-sleep 5
-if [ -n "$TAG_SHA" ]; then
-  RUN_ID=$(gh run list --workflow=release.yml --commit "$TAG_SHA" --limit=1 --json databaseId -q '.[0].databaseId')
+if [ -z "$TAG_SHA" ]; then
+  echo "❌ 无法解析 tag $TAG 的 commit SHA，请人工核对 tag 是否已推送"
+  exit 1
 fi
-# fallback：按 SHA 没匹配到时退回最近一次（有拿到旧 run 的风险，故打日志供人工核对）
-RUN_ID="${RUN_ID:-$(gh run list --workflow=release.yml --limit=1 --json databaseId -q '.[0].databaseId')}"
-echo "Watching release run: $RUN_ID (tag=$TAG, sha=${TAG_SHA:-unknown})"
+# 轮询等待本次 tag 触发的 release run 出现（GitHub API 有传播延迟，不 fallback 到无过滤 list——
+# 无过滤 list 会拿到上一次旧的 release run，误判完成）
+RUN_ID=""
+for i in $(seq 1 15); do
+  RUN_ID=$(gh run list --workflow=release.yml --commit "$TAG_SHA" --limit=1 --json databaseId -q '.[0].databaseId' 2>/dev/null)
+  [ -n "$RUN_ID" ] && break
+  echo "等待 release run 出现...（$((i*2))s）"
+  sleep 2
+done
+if [ -z "$RUN_ID" ]; then
+  echo "❌ 30 秒内未发现 tag $TAG 对应的 release run，请到 GitHub Actions 页面人工检查"
+  exit 1
+fi
+echo "Watching release run: $RUN_ID (tag=$TAG, sha=$TAG_SHA)"
 gh run watch "$RUN_ID" --exit-status
 ```
 
 **⚠️ 两处陷阱**：
 1. `gh run watch` 默认只要 run 结束就退出 0，**必须加 `--exit-status`** 才会在 release 失败时返回非 0。否则 NPM_TOKEN 权限缺失等 CI 失败会被误判为成功，进阶段 6 时 `npm view` 拿到 404，误以为是 registry 延迟而反复重试。
-2. `gh run list` 对刚触发的 run 有传播延迟（数秒）。推 tag 后立即查询可能返回**上一次** release run → watch 立即退出 → 误判完成。上面的 `sleep 5` + `--commit "$TAG_SHA"` 过滤就是为了避开这个窗口。
+2. `gh run list` 对刚触发的 run 有传播延迟（数秒）。推 tag 后立即查询可能返回**上一次** release run → watch 立即退出 → 误判完成。上面的轮询循环只接受 `--commit "$TAG_SHA"` 精确匹配的 run（最多等 30 秒），不做无过滤 fallback，从根上避免拿到旧 run。
 
 必须等 release 成功后再进阶段 6 —— 否则 `npm view` 会因 npm registry 最终一致性延迟拿到 404，误判为发布失败。
 
@@ -289,6 +305,8 @@ for f in extensions/*/package.json shared/*/package.json; do
   fi
 done
 ```
+
+⚠️ **registry 传播延迟**：刚发布完立即跑 `npm view` 可能因 npm registry 最终一致性拿到 404。如见 ❌，等待 30s 后重试本阶段脚本；持续 ❌ 才判定发布失败（届时应回阶段 5 确认 release run 是否真的成功）。
 
 也可通过 GitHub Actions 页面确认 release workflow 是否成功：
 ```bash
