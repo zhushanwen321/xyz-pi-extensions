@@ -201,7 +201,7 @@ git merge --ff-only origin/main 2>&1 || true
 
 等待 CI 完成后，进入阶段 6 验证。
 
-⚠️ **新包首次发布**：如果本次包含全新的 npm 包（之前从未发布过），需要确认 `NPM_TOKEN` 对应的 npm 账号在 `@zhushanwen` scope 下有发布权限。首次需要手动在 npm 网站创建包或用 `npm publish --access public`（需先 `npm login`）。
+⚠️ **新包首次发布**：`pnpm changeset publish` 配合根目录 `.npmrc` 的 `access=public`，能正确发布全新的 scoped 包（`@zhushanwen/*`），**无需手动 `npm publish`**。已验证案例：`@zhushanwen/pi-rename-session` 首次发布（0.2.0）完全由 changeset publish 完成。唯一前置条件是 `NPM_TOKEN` 对应的 npm 账号在 `@zhushanwen` scope 下有发布权限——这是 npm 账号层面的配置，与发布机制无关，权限缺失时 CI 会报 E403 Forbidden（而非 E403 "cannot publish over"）。
 
 ### 阶段 6: 交付物验证（项目特化）
 
@@ -209,8 +209,8 @@ git merge --ff-only origin/main 2>&1 || true
 
 ```bash
 for f in extensions/*/package.json shared/*/package.json; do
-  PKG_NAME=$(node -p "require('$f').name" 2>/dev/null)
-  PKG_VER=$(node -p "require('$f').version" 2>/dev/null || echo "?")
+  PKG_NAME=$(node -p "require('./$f').name" 2>/dev/null)
+  PKG_VER=$(node -p "require('./$f').version" 2>/dev/null || echo "?")
   if [ -n "$PKG_NAME" ]; then
     npm view "$PKG_NAME@$PKG_VER" version 2>/dev/null && \
       echo "  ✅ $PKG_NAME@$PKG_VER" || echo "  ❌ MISSING: $PKG_NAME@$PKG_VER"
