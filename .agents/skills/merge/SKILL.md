@@ -231,9 +231,19 @@ gh run list --workflow=release.yml --limit=1
 cd /Users/zhushanwen/Code/xyz-pi-extensions-workspace
 git worktree remove <feature-worktree>   # 删 worktree 目录
 git branch -d <branch-name>               # 删本地分支（远程分支阶段 2 已删）
-# 同步其他 worktree 的 main 引用
-cd main && git fetch origin && git merge --ff-only origin/main
 ```
+
+**同步 main worktree（仅 main，不碰其他 worktree）**：
+
+合并完成后，只在 `main` worktree 执行 fetch + ff-only merge，把远程 main 的最新状态拉到本地 main：
+
+```bash
+cd /Users/zhushanwen/Code/xyz-pi-extensions-workspace/main
+git fetch origin
+git merge --ff-only origin/main
+```
+
+**[MANDATORY] 禁止在其他 worktree 里执行 pull/fetch+merge。** 其他 worktree（如长期持有的 feat/*、fix/* 工作分支）各有自己的跟踪分支，在它们里面 pull main 会把无关的 main 提交混入工作分支，造成分支历史污染和潜在的合并冲突。main 的更新由各 worktree 在需要时（如 rebase onto main）主动拉取，merge skill 不代劳。
 
 **安全网：检查 dangling symlink**
 
