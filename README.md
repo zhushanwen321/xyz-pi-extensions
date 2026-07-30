@@ -1,5 +1,16 @@
 # xyz-pi-extensions
 
+> **⚠️ DEPRECATED — 本仓库已整合进 [xyz-agent](https://github.com/zhushanwen321/xyz-agent) 项目**
+>
+> 自 2026-07 起，全部 16 个 `@zhushanwen/pi-*` extension 包 + quota-providers 的源码已迁移至
+> [xyz-agent](https://github.com/zhushanwen321/xyz-agent) 仓库的 `extensions/` 目录。
+>
+> - **不再接受 PR**。issue 请到 xyz-agent 仓库提交。
+> - **npm 包继续发布**：`@zhushanwen/pi-*` 版本号延续，发布流程迁移至 xyz-agent 的 `npm-v*` tag CI。
+> - 开发文档见 xyz-agent 的 `docs/extensions/`。
+>
+> 本仓库保留为只读归档。
+
 [Pi](https://github.com/badlogic/pi-mono) coding agent 的扩展插件集合。pnpm monorepo。
 
 ## 自研扩展
