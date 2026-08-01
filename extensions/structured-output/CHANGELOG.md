@@ -1,5 +1,17 @@
 # @zhushanwen/pi-structured-output
 
+## 0.3.6
+
+### Patch Changes
+
+- **Authoritative schema validation (PI_WORKFLOW_SCHEMA)** — closes the LLM self-consistent bypass.
+
+  **Root cause**: in workflow mode the validator checked data against the schema the LLM passed as a parameter — the same LLM also produces the data, so it could rewrite the schema to fit its own output and pass any constraint (2026-08-01 incident: ds-flash changed `add_channels.items` from `{type:'object'}` to `{type:'string'}`, letting string arrays through while the workflow had declared an object schema).
+
+  **Fix**: `executeStructuredOutput` accepts an optional `authoritativeSchema`. The tool `execute` reads `PI_WORKFLOW_SCHEMA` (already injected by the workflow runner) and passes it in; when present, validation uses ONLY the authoritative schema and the LLM-passed schema is demoted to error echo. Without the env var (interactive mode) behavior is unchanged.
+
+# @zhushanwen/pi-structured-output
+
 ## 0.3.5
 
 ### Patch Changes

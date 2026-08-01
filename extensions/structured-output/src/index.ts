@@ -139,6 +139,12 @@ const CORRECT_USAGE_HINT =
 export async function executeStructuredOutput(params: {
 	schema: unknown;
 	data: unknown;
+	// 权威 schema（workflow 模式）：存在时用它校验 data，LLM 传入的 schema 不参与校验。
+	// [HISTORICAL] 2026-08-01 事故：ds-flash 调用 structured-output 时自行重写了 schema
+	// （把 add_channels.items 从 {type:'object'} 改成 {type:'string'}），Ajv 只校验
+	// 「LLM 自报 schema vs 自报 data」→ 自洽通过 → 格式漂移静默进盘，扩展层拦截失效。
+	// 修复：由扩展入口从 PI_WORKFLOW_SCHEMA 读取期望 schema 注入此处，成为唯一校验权威。
+	authoritativeSchema?: unknown;
 }): Promise<{
 	content: Array<{ type: "text"; text: string }>;
 	// data 可能是 primitive/array/object（根 schema 决定），故 details 为 unknown。
@@ -148,6 +154,45 @@ export async function executeStructuredOutput(params: {
 	// Normalize: some models pass schema/data as JSON strings instead of objects
 	const schema = tryParseJson(params.schema);
 	const data = tryParseJson(params.data);
+
+	// 权威模式（workflow）：用 PI_WORKFLOW_SCHEMA 声明的期望 schema 校验 data。
+	// LLM 传入的 schema 仅用于错误回显（告知期望形态），不参与校验——否则 LLM
+	// 可同时控制 schema 与 data 自洽绕过任何约束。日常模式无权威 schema 走下方原防御链。
+	const authoritative = params.authoritativeSchema !== undefined
+		? tryParseJson(params.authoritativeSchema)
+		: undefined;
+	if (authoritative !== undefined) {
+		let validate: ValidateFunction;
+		try {
+			if (isPlainObject(authoritative) || typeof authoritative === "boolean") {
+				validate = getOrCompileValidator(authoritative);
+			} else {
+				throw new Error(`authoritative schema must be a JSON Schema object or boolean, got ${typeof authoritative}`);
+			}
+		} catch (e) {
+			throw new Error(
+				`Invalid authoritative JSON Schema (from PI_WORKFLOW_SCHEMA): ${(e as Error).message}. `
+				+ `Received schema=${echo(schema)}, data=${echo(data)}`,
+			);
+		}
+		const valid = validate(data);
+		if (!valid) {
+			const errors = validate.errors
+				?.map((err) => `${err.instancePath} ${err.message}`)
+				.join("; ");
+			throw new Error(
+				`Schema validation failed (authoritative): ${errors}. `
+				+ `The authoritative schema (PI_WORKFLOW_SCHEMA) is: ${echo(authoritative)}. `
+				+ `Received schema=${echo(schema)}, data=${echo(data)}`,
+			);
+		}
+		return {
+			content: [
+				{ type: "text" as const, text: "Structured output recorded successfully." },
+			],
+			details: data,
+		};
+	}
 
 	// 1. 互换检测：schema 像数据（对象无 keyword）且 data 像 schema（对象有 keyword）。
 	// 这是最严重的静默腐败路径——若放行，ajv 会把"数据形态的 schema"编译成接受一切，
@@ -253,7 +298,12 @@ function createToolDefinition() {
 			_toolCallId: string,
 			params: { schema: unknown; data: unknown },
 		) {
-			return executeStructuredOutput(params);
+			// 权威 schema 每次调用从环境变量读取：workflow 子进程注入 PI_WORKFLOW_SCHEMA，
+			// 存在时接管校验（LLM 自报 schema 自洽绕过防护）；日常模式无该变量 → 行为不变。
+			return executeStructuredOutput({
+				...params,
+				authoritativeSchema: process.env[ENV_SCHEMA],
+			});
 		},
 	};
 }

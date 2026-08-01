@@ -527,4 +527,83 @@ describe("Tool execute (real call via executeStructuredOutput)", () => {
     const result = await executeStructuredOutput({ schema: true, data: { ok: 1 } });
     expect(result.details).toEqual({ ok: 1 });
   });
+
+  // ── 权威 schema 模式（workflow）──────────────────────────
+  // [HISTORICAL] 2026-08-01 事故回归测试：LLM 自报 schema 自洽绕过。
+  // 复现路径：权威 schema 要求 add_channels.items 为 object，LLM 传的 schema
+  // 把 items 改成 string（data 也跟着是字符串数组）→ 旧实现校验通过；
+  // 新实现用 authoritativeSchema 校验 → 必须拒绝。
+
+  it("authoritative mode: rejects data that only conforms to LLM-rewritten schema", async () => {
+    const authoritative = {
+      type: "object",
+      properties: {
+        channel_fixes: {
+          type: "array",
+          items: {
+            type: "object",
+            properties: {
+              signal_id: { type: "string" },
+              add_channels: { type: "array", items: { type: "object" } },
+              reason: { type: "string" },
+            },
+            required: ["signal_id", "add_channels", "reason"],
+          },
+        },
+      },
+      required: ["channel_fixes"],
+    };
+    // LLM 自改 schema（items: string）+ 自洽 data（字符串数组）
+    const llmSchema = {
+      type: "object",
+      properties: {
+        channel_fixes: {
+          type: "array",
+          items: {
+            type: "object",
+            properties: {
+              signal_id: { type: "string" },
+              add_channels: { type: "array", items: { type: "string" } },
+              reason: { type: "string" },
+            },
+            required: ["signal_id", "add_channels", "reason"],
+          },
+        },
+      },
+      required: ["channel_fixes"],
+    };
+    const llmData = {
+      channel_fixes: [
+        { signal_id: "commodity-001", add_channels: ["cost"], reason: "成本通道未识别" },
+      ],
+    };
+    await expect(
+      executeStructuredOutput({ schema: llmSchema, data: llmData, authoritativeSchema: authoritative }),
+    ).rejects.toThrow(/Schema validation failed \(authoritative\)/);
+  });
+
+  it("authoritative mode: accepts data conforming to authoritative schema", async () => {
+    const authoritative = {
+      type: "object",
+      properties: {
+        add_channels: { type: "array", items: { type: "object" } },
+      },
+      required: ["add_channels"],
+    };
+    const result = await executeStructuredOutput({
+      schema: { type: "object" }, // LLM 传什么已无所谓
+      data: { add_channels: [{ name: "cost", change: "up" }] },
+      authoritativeSchema: authoritative,
+    });
+    expect(result.details).toEqual({ add_channels: [{ name: "cost", change: "up" }] });
+  });
+
+  it("authoritative mode: no env var → falls back to passed-schema validation (unchanged)", async () => {
+    const result = await executeStructuredOutput({
+      schema: { type: "object", properties: { ok: { type: "boolean" } }, required: ["ok"] },
+      data: { ok: true },
+      authoritativeSchema: undefined,
+    });
+    expect(result.details).toEqual({ ok: true });
+  });
 });
